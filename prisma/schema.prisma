@@ -419,8 +419,9 @@ model VehicleYear {
   updatedAt DateTime @updatedAt
 
   // Relaciones
-  makes    VehicleMake[]
-  vehicles Vehicle[]
+  makes      VehicleMake[]
+  vehicles   Vehicle[]
+  metaValues MetaValue[]
 
   @@index([year])
   @@map("vehicle_years")
@@ -438,9 +439,10 @@ model VehicleMake {
   updatedAt DateTime @updatedAt
 
   // Relaciones
-  year     VehicleYear    @relation(fields: [yearId], references: [id], onDelete: Cascade)
-  models   VehicleModel[]
-  vehicles Vehicle[]
+  year       VehicleYear    @relation(fields: [yearId], references: [id], onDelete: Cascade)
+  models     VehicleModel[]
+  vehicles   Vehicle[]
+  metaValues MetaValue[]
 
   @@unique([yearId, slug])
   @@index([yearId])
@@ -459,9 +461,10 @@ model VehicleModel {
   updatedAt DateTime @updatedAt
 
   // Relaciones
-  make     VehicleMake   @relation(fields: [makeId], references: [id], onDelete: Cascade)
-  trims    VehicleTrim[]
-  vehicles Vehicle[]
+  make       VehicleMake   @relation(fields: [makeId], references: [id], onDelete: Cascade)
+  trims      VehicleTrim[]
+  vehicles   Vehicle[]
+  metaValues MetaValue[]
 
   @@unique([makeId, slug])
   @@index([makeId])
@@ -480,8 +483,9 @@ model VehicleTrim {
   updatedAt DateTime @updatedAt
 
   // Relaciones
-  model    VehicleModel @relation(fields: [modelId], references: [id], onDelete: Cascade)
-  vehicles Vehicle[]
+  model      VehicleModel @relation(fields: [modelId], references: [id], onDelete: Cascade)
+  vehicles   Vehicle[]
+  metaValues MetaValue[]
 
   @@unique([modelId, slug])
   @@index([modelId])
@@ -499,6 +503,9 @@ model User {
   name      String?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  // Relaciones con MetaValue
+  metaValues MetaValue[]
 
   @@map("users")
 }
@@ -677,8 +684,9 @@ model Buyer {
   updatedAt DateTime @updatedAt
 
   // Relaciones
-  dealsAsBuyer   Deal[] @relation("BuyerDeals")
-  dealsAsCoBuyer Deal[] @relation("CoBuyerDeals")
+  dealsAsBuyer   Deal[]      @relation("BuyerDeals")
+  dealsAsCoBuyer Deal[]      @relation("CoBuyerDeals")
+  metaValues     MetaValue[]
 
   @@index([email])
   @@index([lastName, firstName])
@@ -905,6 +913,9 @@ model Deal {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  // Relaciones con MetaValue
+  metaValues MetaValue[]
+
   @@index([buyerId])
   @@index([coBuyerId])
   @@index([vehicleId])
@@ -1039,6 +1050,9 @@ model Title {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  // Relaciones con MetaValue
+  metaValues MetaValue[]
+
   @@index([vehicleId])
   @@index([titleNumber])
   @@index([titleState])
@@ -1104,6 +1118,9 @@ model Media {
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  // Relaciones con MetaValue
+  metaValues MetaValue[]
 
   @@index([vehicleId])
   @@index([mediaType])
@@ -1185,6 +1202,7 @@ model Vehicle {
   deals         Deal[]
   titles        Title[] // Un vehículo puede tener múltiples títulos
   extraExpenses ExtraExpense[] // Gastos extras del vehículo
+  metaValues    MetaValue[]
 
   @@index([vin])
   @@index([stockNumber])
@@ -1220,7 +1238,83 @@ model ExtraExpense {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  // Relaciones con MetaValue
+  metaValues MetaValue[]
+
   @@index([vehicleId])
   @@index([receiptId])
   @@map("extra_expenses")
+}
+
+// ============================================
+// META VALUE - Metadatos flexibles para todos los modelos
+// ============================================
+model MetaValue {
+  id String @id @default(uuid())
+
+  // Clave-Valor
+  key   String
+  value String // Puede ser JSON para valores complejos
+
+  // Relaciones polimórficas con diferentes entidades
+  // User
+  userId String?
+  user   User?   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // Buyer
+  buyerId String?
+  buyer   Buyer?  @relation(fields: [buyerId], references: [id], onDelete: Cascade)
+
+  // Deal
+  dealId String?
+  deal   Deal?   @relation(fields: [dealId], references: [id], onDelete: Cascade)
+
+  // Title
+  titleId String?
+  title   Title?  @relation(fields: [titleId], references: [id], onDelete: Cascade)
+
+  // Media
+  mediaId String?
+  media   Media?  @relation(fields: [mediaId], references: [id], onDelete: Cascade)
+
+  // Vehicle
+  vehicleId String?
+  vehicle   Vehicle? @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+
+  // ExtraExpense
+  extraExpenseId String?
+  extraExpense   ExtraExpense? @relation(fields: [extraExpenseId], references: [id], onDelete: Cascade)
+
+  // VehicleYear
+  vehicleYearId String?
+  vehicleYear   VehicleYear? @relation(fields: [vehicleYearId], references: [id], onDelete: Cascade)
+
+  // VehicleMake
+  vehicleMakeId String?
+  vehicleMake   VehicleMake? @relation(fields: [vehicleMakeId], references: [id], onDelete: Cascade)
+
+  // VehicleModel
+  vehicleModelId String?
+  vehicleModel   VehicleModel? @relation(fields: [vehicleModelId], references: [id], onDelete: Cascade)
+
+  // VehicleTrim
+  vehicleTrimId String?
+  vehicleTrim   VehicleTrim? @relation(fields: [vehicleTrimId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+  @@index([buyerId])
+  @@index([dealId])
+  @@index([titleId])
+  @@index([mediaId])
+  @@index([vehicleId])
+  @@index([extraExpenseId])
+  @@index([vehicleYearId])
+  @@index([vehicleMakeId])
+  @@index([vehicleModelId])
+  @@index([vehicleTrimId])
+  @@index([key])
+  @@map("meta_values")
 }
