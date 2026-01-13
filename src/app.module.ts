@@ -1,4 +1,6 @@
 import { Module } from '@nestjs/common';
+import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
+import { APP_GUARD } from '@nestjs/core';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { PrismaModule } from './prisma.module';
@@ -11,10 +13,38 @@ import { ExtraExpenseModule } from './extra-expense/extra-expense.module';
 import { MediaModule } from './media/media.module';
 import { AuditModule } from './common/audit.module';
 
+/**
+ * App Module con seguridad RouteOne/DealerTrack
+ * - Rate limiting global
+ * - Audit logging
+ * - Input validation
+ */
 @Module({
   imports: [
+    // Rate Limiting - Protección DDoS requerida por RouteOne/DealerTrack
+    ThrottlerModule.forRoot([
+      {
+        name: 'short', // Límite corto para prevenir abuso
+        ttl: 1000, // 1 segundo
+        limit: 10, // 10 requests por segundo
+      },
+      {
+        name: 'medium', // Límite medio
+        ttl: 60000, // 1 minuto
+        limit: 100, // 100 requests por minuto
+      },
+      {
+        name: 'long', // Límite largo
+        ttl: 3600000, // 1 hora
+        limit: 1000, // 1000 requests por hora
+      },
+    ]),
+
+    // Módulos de infraestructura
     PrismaModule,
     AuditModule, // Global audit logging for RouteOne/DealerTrack compliance
+
+    // Módulos de negocio
     VehicleYearModule,
     VehicleMakeModule,
     VehicleModelModule,
@@ -24,6 +54,13 @@ import { AuditModule } from './common/audit.module';
     MediaModule,
   ],
   controllers: [AppController],
-  providers: [AppService],
+  providers: [
+    AppService,
+    // Rate limiting global guard
+    {
+      provide: APP_GUARD,
+      useClass: ThrottlerGuard,
+    },
+  ],
 })
 export class AppModule {}
