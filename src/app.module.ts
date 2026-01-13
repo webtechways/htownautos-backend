@@ -8,6 +8,7 @@ import { VehicleModelModule } from './vehicle-model/vehicle-model.module';
 import { VehicleTrimModule } from './vehicle-trim/vehicle-trim.module';
 import { NomenclatorsModule } from './nomenclators/nomenclators.module';
 import { ExtraExpenseModule } from './extra-expense/extra-expense.module';
+import { MediaModule } from './media/media.module';
 
 @Module({
   imports: [
@@ -18,6 +19,7 @@ import { ExtraExpenseModule } from './extra-expense/extra-expense.module';
     VehicleTrimModule,
     NomenclatorsModule,
     ExtraExpenseModule,
+    MediaModule,
   ],
   controllers: [AppController],
   providers: [AppService],
