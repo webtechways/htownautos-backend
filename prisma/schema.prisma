@@ -418,10 +418,12 @@ model VehicleYear {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  // Metadata
+  metaValue Json? // Metadata flexible en formato JSON
+
   // Relaciones
-  makes      VehicleMake[]
-  vehicles   Vehicle[]
-  metaValues MetaValue[]
+  makes    VehicleMake[]
+  vehicles Vehicle[]
 
   @@index([year])
   @@map("vehicle_years")
@@ -438,11 +440,13 @@ model VehicleMake {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  // Metadata
+  metaValue Json? // Metadata flexible en formato JSON
+
   // Relaciones
-  year       VehicleYear    @relation(fields: [yearId], references: [id], onDelete: Cascade)
-  models     VehicleModel[]
-  vehicles   Vehicle[]
-  metaValues MetaValue[]
+  year     VehicleYear    @relation(fields: [yearId], references: [id], onDelete: Cascade)
+  models   VehicleModel[]
+  vehicles Vehicle[]
 
   @@unique([yearId, slug])
   @@index([yearId])
@@ -460,11 +464,13 @@ model VehicleModel {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  // Metadata
+  metaValue Json? // Metadata flexible en formato JSON
+
   // Relaciones
-  make       VehicleMake   @relation(fields: [makeId], references: [id], onDelete: Cascade)
-  trims      VehicleTrim[]
-  vehicles   Vehicle[]
-  metaValues MetaValue[]
+  make     VehicleMake   @relation(fields: [makeId], references: [id], onDelete: Cascade)
+  trims    VehicleTrim[]
+  vehicles Vehicle[]
 
   @@unique([makeId, slug])
   @@index([makeId])
@@ -482,10 +488,12 @@ model VehicleTrim {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  // Metadata
+  metaValue Json? // Metadata flexible en formato JSON
+
   // Relaciones
-  model      VehicleModel @relation(fields: [modelId], references: [id], onDelete: Cascade)
-  vehicles   Vehicle[]
-  metaValues MetaValue[]
+  model    VehicleModel @relation(fields: [modelId], references: [id], onDelete: Cascade)
+  vehicles Vehicle[]
 
   @@unique([modelId, slug])
   @@index([modelId])
@@ -498,14 +506,12 @@ model VehicleTrim {
 // ============================================
 
 model User {
-  id        String   @id @default(uuid())
-  email     String   @unique
-  name      String?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  // Relaciones con MetaValue
-  metaValues MetaValue[]
+  id         String   @id @default(uuid())
+  email      String   @unique
+  name       String?
+  metaValue  Json?    // Metadata flexible en formato JSON
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
 
   @@map("users")
 }
@@ -683,10 +689,12 @@ model Buyer {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  // Metadata
+  metaValue Json? // Metadata flexible en formato JSON
+
   // Relaciones
-  dealsAsBuyer   Deal[]      @relation("BuyerDeals")
-  dealsAsCoBuyer Deal[]      @relation("CoBuyerDeals")
-  metaValues     MetaValue[]
+  dealsAsBuyer   Deal[] @relation("BuyerDeals")
+  dealsAsCoBuyer Deal[] @relation("CoBuyerDeals")
 
   @@index([email])
   @@index([lastName, firstName])
@@ -910,11 +918,11 @@ model Deal {
   userAgent           String?
   applicationLanguage String? // en, es
 
+  // Metadata
+  metaValue Json? // Metadata flexible en formato JSON
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
-
-  // Relaciones con MetaValue
-  metaValues MetaValue[]
 
   @@index([buyerId])
   @@index([coBuyerId])
@@ -1047,11 +1055,11 @@ model Title {
   form8300Required Boolean @default(false) // Si la transacción fue > $10,000 en efectivo
   form8300Filed    Boolean @default(false)
 
+  // Metadata
+  metaValue Json? // Metadata flexible en formato JSON
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
-
-  // Relaciones con MetaValue
-  metaValues MetaValue[]
 
   @@index([vehicleId])
   @@index([titleNumber])
@@ -1116,11 +1124,11 @@ model Media {
   // Relaciones con ExtraExpense (recibos)
   extraExpenseAsReceipt ExtraExpense[] @relation("ExtraExpenseReceipt")
 
+  // Metadata
+  metaValue Json? // Metadata flexible en formato JSON
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
-
-  // Relaciones con MetaValue
-  metaValues MetaValue[]
 
   @@index([vehicleId])
   @@index([mediaType])
@@ -1195,6 +1203,9 @@ model Vehicle {
   mainImage   Media?  @relation("VehicleMainImage", fields: [mainImageId], references: [id])
   gallery     Media[] @relation("VehicleGallery")
 
+  // Metadata
+  metaValue Json? // Metadata flexible en formato JSON
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -1202,7 +1213,6 @@ model Vehicle {
   deals         Deal[]
   titles        Title[] // Un vehículo puede tener múltiples títulos
   extraExpenses ExtraExpense[] // Gastos extras del vehículo
-  metaValues    MetaValue[]
 
   @@index([vin])
   @@index([stockNumber])
@@ -1235,86 +1245,13 @@ model ExtraExpense {
   receiptId String?
   receipt   Media?  @relation("ExtraExpenseReceipt", fields: [receiptId], references: [id])
 
+  // Metadata
+  metaValue Json? // Metadata flexible en formato JSON
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
-
-  // Relaciones con MetaValue
-  metaValues MetaValue[]
 
   @@index([vehicleId])
   @@index([receiptId])
   @@map("extra_expenses")
-}
-
-// ============================================
-// META VALUE - Metadatos flexibles para todos los modelos
-// ============================================
-model MetaValue {
-  id String @id @default(uuid())
-
-  // Clave-Valor
-  key   String
-  value String // Puede ser JSON para valores complejos
-
-  // Relaciones polimórficas con diferentes entidades
-  // User
-  userId String?
-  user   User?   @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  // Buyer
-  buyerId String?
-  buyer   Buyer?  @relation(fields: [buyerId], references: [id], onDelete: Cascade)
-
-  // Deal
-  dealId String?
-  deal   Deal?   @relation(fields: [dealId], references: [id], onDelete: Cascade)
-
-  // Title
-  titleId String?
-  title   Title?  @relation(fields: [titleId], references: [id], onDelete: Cascade)
-
-  // Media
-  mediaId String?
-  media   Media?  @relation(fields: [mediaId], references: [id], onDelete: Cascade)
-
-  // Vehicle
-  vehicleId String?
-  vehicle   Vehicle? @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
-
-  // ExtraExpense
-  extraExpenseId String?
-  extraExpense   ExtraExpense? @relation(fields: [extraExpenseId], references: [id], onDelete: Cascade)
-
-  // VehicleYear
-  vehicleYearId String?
-  vehicleYear   VehicleYear? @relation(fields: [vehicleYearId], references: [id], onDelete: Cascade)
-
-  // VehicleMake
-  vehicleMakeId String?
-  vehicleMake   VehicleMake? @relation(fields: [vehicleMakeId], references: [id], onDelete: Cascade)
-
-  // VehicleModel
-  vehicleModelId String?
-  vehicleModel   VehicleModel? @relation(fields: [vehicleModelId], references: [id], onDelete: Cascade)
-
-  // VehicleTrim
-  vehicleTrimId String?
-  vehicleTrim   VehicleTrim? @relation(fields: [vehicleTrimId], references: [id], onDelete: Cascade)
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  @@index([userId])
-  @@index([buyerId])
-  @@index([dealId])
-  @@index([titleId])
-  @@index([mediaId])
-  @@index([vehicleId])
-  @@index([extraExpenseId])
-  @@index([vehicleYearId])
-  @@index([vehicleMakeId])
-  @@index([vehicleModelId])
-  @@index([vehicleTrimId])
-  @@index([key])
-  @@map("meta_values")
 }
