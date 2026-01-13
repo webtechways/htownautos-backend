@@ -419,7 +419,8 @@ model VehicleYear {
   updatedAt DateTime @updatedAt
 
   // Relaciones
-  makes VehicleMake[]
+  makes    VehicleMake[]
+  vehicles Vehicle[]
 
   @@index([year])
   @@map("vehicle_years")
@@ -437,8 +438,9 @@ model VehicleMake {
   updatedAt DateTime @updatedAt
 
   // Relaciones
-  year   VehicleYear    @relation(fields: [yearId], references: [id], onDelete: Cascade)
-  models VehicleModel[]
+  year     VehicleYear    @relation(fields: [yearId], references: [id], onDelete: Cascade)
+  models   VehicleModel[]
+  vehicles Vehicle[]
 
   @@unique([yearId, slug])
   @@index([yearId])
@@ -457,8 +459,9 @@ model VehicleModel {
   updatedAt DateTime @updatedAt
 
   // Relaciones
-  make  VehicleMake   @relation(fields: [makeId], references: [id], onDelete: Cascade)
-  trims VehicleTrim[]
+  make     VehicleMake   @relation(fields: [makeId], references: [id], onDelete: Cascade)
+  trims    VehicleTrim[]
+  vehicles Vehicle[]
 
   @@unique([makeId, slug])
   @@index([makeId])
@@ -477,7 +480,8 @@ model VehicleTrim {
   updatedAt DateTime @updatedAt
 
   // Relaciones
-  model VehicleModel @relation(fields: [modelId], references: [id], onDelete: Cascade)
+  model    VehicleModel @relation(fields: [modelId], references: [id], onDelete: Cascade)
+  vehicles Vehicle[]
 
   @@unique([modelId, slug])
   @@index([modelId])
@@ -1118,11 +1122,16 @@ model Vehicle {
   vin         String  @unique
   stockNumber String? @unique
 
-  // Año, Marca, Modelo, Trim
-  year  Int
-  make  String
-  model String
-  trim  String?
+  // Relaciones con Año, Marca, Modelo, Trim (requeridos excepto trim)
+  yearId  String
+  makeId  String
+  modelId String
+  trimId  String?
+
+  year  VehicleYear  @relation(fields: [yearId], references: [id])
+  make  VehicleMake  @relation(fields: [makeId], references: [id])
+  model VehicleModel @relation(fields: [modelId], references: [id])
+  trim  VehicleTrim? @relation(fields: [trimId], references: [id])
 
   // Detalles del vehículo
   mileage       Int?
@@ -1179,10 +1188,14 @@ model Vehicle {
 
   @@index([vin])
   @@index([stockNumber])
-  @@index([year, make, model])
+  @@index([yearId, makeId, modelId])
   @@index([vehicleStatusId])
   @@index([mainImageId])
   @@index([sourceId])
+  @@index([yearId])
+  @@index([makeId])
+  @@index([modelId])
+  @@index([trimId])
   @@map("vehicles")
 }
 
