@@ -713,11 +713,11 @@ model Deal {
   // ============================================
   // RELACIONES PRINCIPALES (Obligatorias)
   // ============================================
-  buyerId   String
-  vehicleId String? // Referencia al vehículo del inventario
+  buyerId   String // Obligatorio - Todo deal debe tener un buyer
+  vehicleId String // Obligatorio - Todo deal debe tener un vehículo
 
-  buyer   Buyer    @relation("BuyerDeals", fields: [buyerId], references: [id])
-  vehicle Vehicle? @relation(fields: [vehicleId], references: [id])
+  buyer   Buyer   @relation("BuyerDeals", fields: [buyerId], references: [id])
+  vehicle Vehicle @relation(fields: [vehicleId], references: [id])
 
   // Co-Buyer (opcional)
   coBuyerId String?

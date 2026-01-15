@@ -25,6 +25,7 @@ import { UpdateExtraExpenseDto } from './dto/update-extra-expense.dto';
 import { QueryExtraExpenseDto } from './dto/query-extra-expense.dto';
 import { ExtraExpenseEntity } from './entities/extra-expense.entity';
 import { PaginatedResponseDto } from '../common/dto/paginated-response.dto';
+import { AuditLog } from '../common/decorators/audit-log.decorator';
 
 @ApiTags('Extra Expenses')
 @Controller('extra-expenses')
@@ -32,6 +33,13 @@ export class ExtraExpenseController {
   constructor(private readonly extraExpenseService: ExtraExpenseService) {}
 
   @Post()
+  @AuditLog({
+    action: 'create',
+    resource: 'extra-expense',
+    level: 'medium',
+    pii: false,
+    compliance: ['routeone', 'dealertrack', 'glba'],
+  })
   @ApiOperation({
     summary: 'Create a new extra expense',
     description:
@@ -79,6 +87,13 @@ export class ExtraExpenseController {
   }
 
   @Get()
+  @AuditLog({
+    action: 'read',
+    resource: 'extra-expense',
+    level: 'low',
+    pii: false,
+    compliance: ['routeone', 'dealertrack', 'glba'],
+  })
   @ApiOperation({
     summary: 'Get all extra expenses with pagination and filters',
     description:
@@ -124,6 +139,13 @@ export class ExtraExpenseController {
   }
 
   @Get('vehicle/:vehicleId/total')
+  @AuditLog({
+    action: 'read',
+    resource: 'extra-expense',
+    level: 'medium',
+    pii: false,
+    compliance: ['routeone', 'dealertrack', 'glba'],
+  })
   @ApiOperation({
     summary: 'Get total expenses for a vehicle',
     description: 'Calculates the sum of all extra expenses for a specific vehicle.',
@@ -157,6 +179,13 @@ export class ExtraExpenseController {
   }
 
   @Get(':id')
+  @AuditLog({
+    action: 'read',
+    resource: 'extra-expense',
+    level: 'low',
+    pii: false,
+    compliance: ['routeone', 'dealertrack', 'glba'],
+  })
   @ApiOperation({
     summary: 'Get an extra expense by ID',
     description: 'Retrieves a single extra expense by its UUID.',
@@ -180,6 +209,13 @@ export class ExtraExpenseController {
   }
 
   @Patch(':id')
+  @AuditLog({
+    action: 'update',
+    resource: 'extra-expense',
+    level: 'medium',
+    pii: false,
+    compliance: ['routeone', 'dealertrack', 'glba'],
+  })
   @ApiOperation({
     summary: 'Update an extra expense',
     description:
@@ -235,6 +271,13 @@ export class ExtraExpenseController {
 
   @Delete(':id')
   @HttpCode(HttpStatus.OK)
+  @AuditLog({
+    action: 'delete',
+    resource: 'extra-expense',
+    level: 'high',
+    pii: false,
+    compliance: ['routeone', 'dealertrack', 'glba'],
+  })
   @ApiOperation({
     summary: 'Delete an extra expense',
     description: 'Deletes an extra expense.',

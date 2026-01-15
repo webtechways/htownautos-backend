@@ -25,6 +25,7 @@ import { UpdateVehicleYearDto } from './dto/update-vehicle-year.dto';
 import { QueryVehicleYearDto } from './dto/query-vehicle-year.dto';
 import { VehicleYearEntity } from './entities/vehicle-year.entity';
 import { PaginatedResponseDto } from '../common/dto/paginated-response.dto';
+import { AuditLog } from '../common/decorators/audit-log.decorator';
 
 @ApiTags('Vehicle Years')
 @Controller('vehicle-years')
@@ -32,6 +33,13 @@ export class VehicleYearController {
   constructor(private readonly vehicleYearService: VehicleYearService) {}
 
   @Post()
+  @AuditLog({
+    action: 'create',
+    resource: 'vehicle-year',
+    level: 'medium',
+    pii: false,
+    compliance: ['routeone', 'dealertrack'],
+  })
   @ApiOperation({
     summary: 'Create a new vehicle year',
     description:
@@ -103,6 +111,13 @@ export class VehicleYearController {
   }
 
   @Get()
+  @AuditLog({
+    action: 'read',
+    resource: 'vehicle-year',
+    level: 'low',
+    pii: false,
+    compliance: ['routeone', 'dealertrack'],
+  })
   @ApiOperation({
     summary: 'Get all vehicle years with pagination and filters',
     description:
@@ -210,6 +225,13 @@ export class VehicleYearController {
   }
 
   @Get(':id')
+  @AuditLog({
+    action: 'read',
+    resource: 'vehicle-year',
+    level: 'low',
+    pii: false,
+    compliance: ['routeone', 'dealertrack'],
+  })
   @ApiOperation({
     summary: 'Get a vehicle year by ID',
     description: 'Retrieves a single vehicle year by its UUID.',
@@ -233,6 +255,13 @@ export class VehicleYearController {
   }
 
   @Patch(':id')
+  @AuditLog({
+    action: 'update',
+    resource: 'vehicle-year',
+    level: 'medium',
+    pii: false,
+    compliance: ['routeone', 'dealertrack'],
+  })
   @ApiOperation({
     summary: 'Update a vehicle year',
     description:
@@ -270,6 +299,13 @@ export class VehicleYearController {
 
   @Delete(':id')
   @HttpCode(HttpStatus.OK)
+  @AuditLog({
+    action: 'delete',
+    resource: 'vehicle-year',
+    level: 'high',
+    pii: false,
+    compliance: ['routeone', 'dealertrack'],
+  })
   @ApiOperation({
     summary: 'Delete a vehicle year',
     description:

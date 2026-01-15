@@ -25,6 +25,7 @@ import { UpdateNomenclatorDto } from './dto/update-nomenclator.dto';
 import { QueryNomenclatorDto } from './dto/query-nomenclator.dto';
 import { NomenclatorEntity } from './entities/nomenclator.entity';
 import { PaginatedResponseDto } from '../common/dto/paginated-response.dto';
+import { AuditLog } from '../common/decorators/audit-log.decorator';
 
 @ApiTags('Nomenclators')
 @Controller('nom')
@@ -32,6 +33,13 @@ export class NomenclatorsController {
   constructor(private readonly nomenclatorsService: NomenclatorsService) {}
 
   @Get()
+  @AuditLog({
+    action: 'read',
+    resource: 'nomenclator',
+    level: 'low',
+    pii: false,
+    compliance: ['routeone', 'dealertrack'],
+  })
   @ApiOperation({
     summary: 'Get all available nomenclator types',
     description: 'Returns a list of all available nomenclator types in the system.',
@@ -84,6 +92,13 @@ export class NomenclatorsController {
   }
 
   @Post(':type')
+  @AuditLog({
+    action: 'create',
+    resource: 'nomenclator',
+    level: 'medium',
+    pii: false,
+    compliance: ['routeone', 'dealertrack'],
+  })
   @ApiOperation({
     summary: 'Create a new nomenclator entry',
     description: 'Creates a new entry for the specified nomenclator type.',
@@ -182,6 +197,13 @@ export class NomenclatorsController {
   }
 
   @Get(':type')
+  @AuditLog({
+    action: 'read',
+    resource: 'nomenclator',
+    level: 'low',
+    pii: false,
+    compliance: ['routeone', 'dealertrack'],
+  })
   @ApiOperation({
     summary: 'Get all entries for a nomenclator type',
     description:
@@ -264,6 +286,13 @@ export class NomenclatorsController {
   }
 
   @Get(':type/:id')
+  @AuditLog({
+    action: 'read',
+    resource: 'nomenclator',
+    level: 'low',
+    pii: false,
+    compliance: ['routeone', 'dealertrack'],
+  })
   @ApiOperation({
     summary: 'Get a nomenclator entry by ID',
     description: 'Retrieves a single nomenclator entry by its UUID.',
@@ -299,6 +328,13 @@ export class NomenclatorsController {
   }
 
   @Get(':type/slug/:slug')
+  @AuditLog({
+    action: 'read',
+    resource: 'nomenclator',
+    level: 'low',
+    pii: false,
+    compliance: ['routeone', 'dealertrack'],
+  })
   @ApiOperation({
     summary: 'Get a nomenclator entry by slug',
     description: 'Retrieves a single nomenclator entry by its slug.',
@@ -334,6 +370,13 @@ export class NomenclatorsController {
   }
 
   @Patch(':type/:id')
+  @AuditLog({
+    action: 'update',
+    resource: 'nomenclator',
+    level: 'medium',
+    pii: false,
+    compliance: ['routeone', 'dealertrack'],
+  })
   @ApiOperation({
     summary: 'Update a nomenclator entry',
     description:
@@ -393,6 +436,13 @@ export class NomenclatorsController {
 
   @Delete(':type/:id')
   @HttpCode(HttpStatus.OK)
+  @AuditLog({
+    action: 'delete',
+    resource: 'nomenclator',
+    level: 'high',
+    pii: false,
+    compliance: ['routeone', 'dealertrack'],
+  })
   @ApiOperation({
     summary: 'Delete a nomenclator entry',
     description: 'Deletes a nomenclator entry. Set isActive to false instead if you want to keep the record.',

@@ -25,6 +25,7 @@ import { UpdateVehicleTrimDto } from './dto/update-vehicle-trim.dto';
 import { QueryVehicleTrimDto } from './dto/query-vehicle-trim.dto';
 import { VehicleTrimEntity } from './entities/vehicle-trim.entity';
 import { PaginatedResponseDto } from '../common/dto/paginated-response.dto';
+import { AuditLog } from '../common/decorators/audit-log.decorator';
 
 @ApiTags('Vehicle Trims')
 @Controller('vehicle-trims')
@@ -32,6 +33,13 @@ export class VehicleTrimController {
   constructor(private readonly vehicleTrimService: VehicleTrimService) {}
 
   @Post()
+  @AuditLog({
+    action: 'create',
+    resource: 'vehicle-trim',
+    level: 'medium',
+    pii: false,
+    compliance: ['routeone', 'dealertrack'],
+  })
   @ApiOperation({
     summary: 'Create a new vehicle trim',
     description:
@@ -119,6 +127,13 @@ export class VehicleTrimController {
   }
 
   @Get()
+  @AuditLog({
+    action: 'read',
+    resource: 'vehicle-trim',
+    level: 'low',
+    pii: false,
+    compliance: ['routeone', 'dealertrack'],
+  })
   @ApiOperation({
     summary: 'Get all vehicle trims with pagination and filters',
     description:
@@ -250,6 +265,13 @@ export class VehicleTrimController {
   }
 
   @Get(':id')
+  @AuditLog({
+    action: 'read',
+    resource: 'vehicle-trim',
+    level: 'low',
+    pii: false,
+    compliance: ['routeone', 'dealertrack'],
+  })
   @ApiOperation({
     summary: 'Get a vehicle trim by ID',
     description: 'Retrieves a single vehicle trim by its UUID.',
@@ -291,6 +313,13 @@ export class VehicleTrimController {
   }
 
   @Patch(':id')
+  @AuditLog({
+    action: 'update',
+    resource: 'vehicle-trim',
+    level: 'medium',
+    pii: false,
+    compliance: ['routeone', 'dealertrack'],
+  })
   @ApiOperation({
     summary: 'Update a vehicle trim',
     description:
@@ -350,6 +379,13 @@ export class VehicleTrimController {
 
   @Delete(':id')
   @HttpCode(HttpStatus.OK)
+  @AuditLog({
+    action: 'delete',
+    resource: 'vehicle-trim',
+    level: 'high',
+    pii: false,
+    compliance: ['routeone', 'dealertrack'],
+  })
   @ApiOperation({
     summary: 'Delete a vehicle trim',
     description: 'Deletes a vehicle trim. Set isActive to false instead if you want to keep the record.',

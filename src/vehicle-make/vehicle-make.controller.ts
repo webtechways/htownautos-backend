@@ -25,6 +25,7 @@ import { UpdateVehicleMakeDto } from './dto/update-vehicle-make.dto';
 import { QueryVehicleMakeDto } from './dto/query-vehicle-make.dto';
 import { VehicleMakeEntity } from './entities/vehicle-make.entity';
 import { PaginatedResponseDto } from '../common/dto/paginated-response.dto';
+import { AuditLog } from '../common/decorators/audit-log.decorator';
 
 @ApiTags('Vehicle Makes')
 @Controller('vehicle-makes')
@@ -32,6 +33,13 @@ export class VehicleMakeController {
   constructor(private readonly vehicleMakeService: VehicleMakeService) {}
 
   @Post()
+  @AuditLog({
+    action: 'create',
+    resource: 'vehicle-make',
+    level: 'medium',
+    pii: false,
+    compliance: ['routeone', 'dealertrack'],
+  })
   @ApiOperation({
     summary: 'Create a new vehicle make',
     description:
@@ -119,6 +127,13 @@ export class VehicleMakeController {
   }
 
   @Get()
+  @AuditLog({
+    action: 'read',
+    resource: 'vehicle-make',
+    level: 'low',
+    pii: false,
+    compliance: ['routeone', 'dealertrack'],
+  })
   @ApiOperation({
     summary: 'Get all vehicle makes with pagination and filters',
     description:
@@ -231,6 +246,13 @@ export class VehicleMakeController {
   }
 
   @Get(':id')
+  @AuditLog({
+    action: 'read',
+    resource: 'vehicle-make',
+    level: 'low',
+    pii: false,
+    compliance: ['routeone', 'dealertrack'],
+  })
   @ApiOperation({
     summary: 'Get a vehicle make by ID',
     description: 'Retrieves a single vehicle make by its UUID.',
@@ -272,6 +294,13 @@ export class VehicleMakeController {
   }
 
   @Patch(':id')
+  @AuditLog({
+    action: 'update',
+    resource: 'vehicle-make',
+    level: 'medium',
+    pii: false,
+    compliance: ['routeone', 'dealertrack'],
+  })
   @ApiOperation({
     summary: 'Update a vehicle make',
     description:
@@ -331,6 +360,13 @@ export class VehicleMakeController {
 
   @Delete(':id')
   @HttpCode(HttpStatus.OK)
+  @AuditLog({
+    action: 'delete',
+    resource: 'vehicle-make',
+    level: 'high',
+    pii: false,
+    compliance: ['routeone', 'dealertrack'],
+  })
   @ApiOperation({
     summary: 'Delete a vehicle make',
     description:

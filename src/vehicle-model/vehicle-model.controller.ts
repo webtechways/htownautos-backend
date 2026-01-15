@@ -25,6 +25,7 @@ import { UpdateVehicleModelDto } from './dto/update-vehicle-model.dto';
 import { QueryVehicleModelDto } from './dto/query-vehicle-model.dto';
 import { VehicleModelEntity } from './entities/vehicle-model.entity';
 import { PaginatedResponseDto } from '../common/dto/paginated-response.dto';
+import { AuditLog } from '../common/decorators/audit-log.decorator';
 
 @ApiTags('Vehicle Models')
 @Controller('vehicle-models')
@@ -32,6 +33,13 @@ export class VehicleModelController {
   constructor(private readonly vehicleModelService: VehicleModelService) {}
 
   @Post()
+  @AuditLog({
+    action: 'create',
+    resource: 'vehicle-model',
+    level: 'medium',
+    pii: false,
+    compliance: ['routeone', 'dealertrack'],
+  })
   @ApiOperation({
     summary: 'Create a new vehicle model',
     description:
@@ -119,6 +127,13 @@ export class VehicleModelController {
   }
 
   @Get()
+  @AuditLog({
+    action: 'read',
+    resource: 'vehicle-model',
+    level: 'low',
+    pii: false,
+    compliance: ['routeone', 'dealertrack'],
+  })
   @ApiOperation({
     summary: 'Get all vehicle models with pagination and filters',
     description:
@@ -240,6 +255,13 @@ export class VehicleModelController {
   }
 
   @Get(':id')
+  @AuditLog({
+    action: 'read',
+    resource: 'vehicle-model',
+    level: 'low',
+    pii: false,
+    compliance: ['routeone', 'dealertrack'],
+  })
   @ApiOperation({
     summary: 'Get a vehicle model by ID',
     description: 'Retrieves a single vehicle model by its UUID.',
@@ -281,6 +303,13 @@ export class VehicleModelController {
   }
 
   @Patch(':id')
+  @AuditLog({
+    action: 'update',
+    resource: 'vehicle-model',
+    level: 'medium',
+    pii: false,
+    compliance: ['routeone', 'dealertrack'],
+  })
   @ApiOperation({
     summary: 'Update a vehicle model',
     description:
@@ -340,6 +369,13 @@ export class VehicleModelController {
 
   @Delete(':id')
   @HttpCode(HttpStatus.OK)
+  @AuditLog({
+    action: 'delete',
+    resource: 'vehicle-model',
+    level: 'high',
+    pii: false,
+    compliance: ['routeone', 'dealertrack'],
+  })
   @ApiOperation({
     summary: 'Delete a vehicle model',
     description:
