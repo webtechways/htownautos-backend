@@ -1,0 +1,17 @@
+{
+  "vin": "1HGBH41JXMN109186",
+  "stockNumber": "TEST-001",
+  "yearId": "123e4567-e89b-12d3-a456-426614174000",
+  "makeId": "123e4567-e89b-12d3-a456-426614174001",
+  "modelId": "123e4567-e89b-12d3-a456-426614174002",
+  "mileage": 50000,
+  "vehicleTypeId": "",
+  "bodyTypeId": "",
+  "fuelTypeId": "",
+  "driveTypeId": "",
+  "transmissionTypeId": "",
+  "vehicleConditionId": "",
+  "vehicleStatusId": "",
+  "sourceId": "",
+  "mainImageId": ""
+}

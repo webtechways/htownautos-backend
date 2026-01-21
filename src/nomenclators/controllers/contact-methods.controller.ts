@@ -18,6 +18,7 @@ import { UpdateNomenclatorDto } from '../dto/update-nomenclator.dto';
 import { QueryNomenclatorDto } from '../dto/query-nomenclator.dto';
 import { NomenclatorEntity } from '../entities/nomenclator.entity';
 import { PaginatedResponseDto } from '../../common/dto/paginated-response.dto';
+import { AuditLog } from '../../common/decorators/audit-log.decorator';
 
 @ApiTags('Nomenclators - Contact Methods')
 @Controller('nom/contact-methods')
@@ -25,6 +26,7 @@ export class ContactMethodsController {
   constructor(private readonly nomenclatorsService: NomenclatorsService) {}
 
   @Post()
+  @AuditLog({ action: 'create', resource: 'contact-method', level: 'medium', pii: false })
   @ApiOperation({ summary: 'Create a new contact method' })
   @ApiResponse({ status: HttpStatus.CREATED, type: NomenclatorEntity })
   async create(
@@ -34,6 +36,7 @@ export class ContactMethodsController {
   }
 
   @Get()
+  @AuditLog({ action: 'read', resource: 'contact-method', level: 'low', pii: false })
   @ApiOperation({ summary: 'Get all contact methods' })
   @ApiResponse({ status: HttpStatus.OK, type: PaginatedResponseDto })
   async findAll(
@@ -43,6 +46,7 @@ export class ContactMethodsController {
   }
 
   @Get(':id')
+  @AuditLog({ action: 'read', resource: 'contact-method', level: 'low', pii: false })
   @ApiOperation({ summary: 'Get contact method by ID' })
   @ApiResponse({ status: HttpStatus.OK, type: NomenclatorEntity })
   async findOne(@Param('id') id: string): Promise<NomenclatorEntity> {
@@ -50,6 +54,7 @@ export class ContactMethodsController {
   }
 
   @Patch(':id')
+  @AuditLog({ action: 'update', resource: 'contact-method', level: 'medium', pii: false })
   @ApiOperation({ summary: 'Update a contact method' })
   @ApiResponse({ status: HttpStatus.OK, type: NomenclatorEntity })
   async update(
@@ -61,6 +66,7 @@ export class ContactMethodsController {
 
   @Delete(':id')
   @HttpCode(HttpStatus.OK)
+  @AuditLog({ action: 'delete', resource: 'contact-method', level: 'high', pii: false })
   @ApiOperation({ summary: 'Delete a contact method' })
   @ApiResponse({ status: HttpStatus.OK })
   async remove(@Param('id') id: string): Promise<{ message: string }> {

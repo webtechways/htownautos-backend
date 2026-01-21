@@ -45,7 +45,7 @@ async function bootstrap() {
   // CORS - Configuración segura
   // ===========================================
   app.enableCors({
-    origin: process.env.ALLOWED_ORIGINS?.split(',') || ['http://localhost:3000'],
+    origin: process.env.ALLOWED_ORIGINS?.split(',') || ['http://localhost:3000', 'http://localhost:3001'],
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: [
@@ -53,6 +53,8 @@ async function bootstrap() {
       'Authorization',
       'X-Requested-With',
       'X-API-Key',
+      'X-Id-Token',
+      'X-Tenant-Id',
     ],
     exposedHeaders: ['X-Total-Count', 'X-Page-Count'],
     maxAge: 3600, // Cache preflight 1 hora
@@ -142,6 +144,8 @@ async function bootstrap() {
     .addTag('Media', 'File upload and management with S3')
     .addTag('Extra Expenses', 'Vehicle-related expenses tracking')
     .addTag('Nomenclators', 'System nomenclators and catalogs')
+    .addTag('Meta', 'Flexible metadata system for all entities')
+    .addTag('Vehicles', 'Vehicle inventory management')
     // Auth será agregado después
     // .addBearerAuth()
     .build();

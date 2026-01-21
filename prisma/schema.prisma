@@ -502,25 +502,185 @@ model VehicleTrim {
 }
 
 // ============================================
-// MODELOS PRINCIPALES
+// MULTI-TENANCY & AUTH
 // ============================================
 
-model User {
-  id         String   @id @default(uuid())
-  email      String   @unique
-  name       String?
-  metaValue  Json?    // Metadata flexible en formato JSON
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+// ============================================
+// MULTI-TENANCY & AUTH
+// ============================================
 
+// Tenant - Organización/Dealership
+model Tenant {
+  id   String @id @default(uuid())
+  name String // Nombre del dealership
+  slug String @unique // URL-friendly identifier
+
+  // Información del negocio
+  businessName String? // Nombre legal del negocio
+  taxId        String? // Tax ID / EIN
+  phone        String?
+  email        String?
+  website      String?
+
+  // Dirección
+  address String?
+  city    String?
+  state   String?
+  zipCode String?
+  country String  @default("USA")
+
+  // Configuración
+  settings Json? // Configuración específica del tenant
+  logo     String? // URL del logo
+
+  // Estado
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relaciones
+  users         TenantUser[]
+  roles         Role[] // Custom roles for this tenant
+  buyers        Buyer[]
+  vehicles      Vehicle[]
+  deals         Deal[]
+  extraExpenses ExtraExpense[]
+  media         Media[]
+  titles        Title[]
+  metas         Meta[]
+  auditLogs     AuditLog[]
+
+  @@index([slug])
+  @@index([isActive])
+  @@map("tenants")
+}
+
+// User - Usuario del sistema con auth de Cognito
+model User {
+  id          String  @id @default(uuid())
+  // TenantId eliminado -> Usuario global
+  cognitoSub  String  @unique // Cognito User Sub (unique identifier from Cognito)
+  email       String  @unique // Email único globalmente
+  name        String?
+  firstName   String?
+  lastName    String?
+  phoneNumber String?
+  avatar      String? // URL del avatar
+
+  // Estado
+  isActive       Boolean   @default(true)
+  emailVerified  Boolean   @default(false)
+  lastLoginAt    DateTime?
+  lastActivityAt DateTime?
+
+  // Metadata
+  metaValue Json? // Metadata flexible en formato JSON
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relaciones
+  tenants TenantUser[]
+
+  @@index([cognitoSub])
+  @@index([email])
+  @@index([isActive])
   @@map("users")
 }
+
+// Role - Roles dinámicos (Globales o por Tenant)
+model Role {
+  id          String  @id @default(uuid())
+  name        String
+  slug        String // admin, sales_manager, etc.
+  description String?
+  isSystem    Boolean @default(false) // Roles inmutables (ej. superadmin)
+
+  // Si tenantId es null, es un rol global/sistema disponible para todos
+  // Si tiene tenantId, es un rol personalizado para ese tenant
+  tenantId String?
+  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relaciones
+  permissions RolePermission[]
+  users       TenantUser[]
+
+  @@unique([tenantId, slug]) // Slug único por tenant (o global si tenantId es null)
+  @@map("roles")
+}
+
+// Permission - Permisos granulares
+model Permission {
+  id          String  @id @default(uuid())
+  action      String // create, read, update, delete, manage
+  resource    String // vehicle, deal, user, analytics
+  slug        String  @unique // vehicle:create, deal:view_sensitive
+  description String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relaciones
+  roles RolePermission[]
+
+  @@map("permissions")
+}
+
+// Tabla intermedia Role <-> Permission
+model RolePermission {
+  roleId       String
+  permissionId String
+
+  role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, permissionId])
+  @@map("role_permissions")
+}
+
+// Relación N:M entre Users y Tenants con Rol asignado
+model TenantUser {
+  id       String @id @default(uuid())
+  tenantId String
+  userId   String
+
+  // RBAC Link
+  roleId String
+  role   Role   @relation(fields: [roleId], references: [id])
+
+  permissions Json? // Permisos específicos/overrides para este usuario en este tenant
+
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relaciones
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, userId])
+  @@index([tenantId])
+  @@index([userId])
+  @@index([roleId])
+  @@map("tenant_users")
+}
+
+// ============================================
+// MODELOS PRINCIPALES
+// ============================================
 
 // ============================================
 // BUYER - Solo datos personales básicos del comprador
 // ============================================
 model Buyer {
   id String @id @default(uuid())
+
+  // Multi-tenancy
+  tenantId String?
+  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   // Información Personal Básica
   firstName   String
@@ -697,6 +857,7 @@ model Buyer {
   dealsAsCoBuyer Deal[]  @relation("CoBuyerDeals")
   media          Media[] @relation("BuyerMedia")
 
+  @@index([tenantId])
   @@index([email])
   @@index([lastName, firstName])
   @@index([ssn])
@@ -709,6 +870,10 @@ model Buyer {
 // ============================================
 model Deal {
   id String @id @default(uuid())
+
+  // Multi-tenancy
+  tenantId String?
+  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   // ============================================
   // RELACIONES PRINCIPALES (Obligatorias)
@@ -925,6 +1090,7 @@ model Deal {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  @@index([tenantId])
   @@index([buyerId])
   @@index([coBuyerId])
   @@index([vehicleId])
@@ -943,6 +1109,10 @@ model Deal {
 // ============================================
 model Title {
   id String @id @default(uuid())
+
+  // Multi-tenancy
+  tenantId String?
+  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   // Relación con el vehículo (un título pertenece a un vehículo)
   vehicleId String
@@ -1062,6 +1232,7 @@ model Title {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  @@index([tenantId])
   @@index([vehicleId])
   @@index([titleNumber])
   @@index([titleState])
@@ -1081,6 +1252,10 @@ model Title {
 // ============================================
 model Media {
   id String @id @default(uuid())
+
+  // Multi-tenancy
+  tenantId String?
+  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   // Información del archivo
   filename String // Nombre original del archivo
@@ -1135,6 +1310,7 @@ model Media {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  @@index([tenantId])
   @@index([vehicleId])
   @@index([buyerId])
   @@index([mediaType])
@@ -1148,6 +1324,10 @@ model Media {
 // ============================================
 model Vehicle {
   id String @id @default(uuid())
+
+  // Multi-tenancy
+  tenantId String?
+  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   // VIN y Stock
   vin         String  @unique
@@ -1220,6 +1400,7 @@ model Vehicle {
   titles        Title[] // Un vehículo puede tener múltiples títulos
   extraExpenses ExtraExpense[] // Gastos extras del vehículo
 
+  @@index([tenantId])
   @@index([vin])
   @@index([stockNumber])
   @@index([yearId, makeId, modelId])
@@ -1239,6 +1420,10 @@ model Vehicle {
 model ExtraExpense {
   id String @id @default(uuid())
 
+  // Multi-tenancy
+  tenantId String?
+  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
   /// Relación con el vehículo
   vehicleId String
   vehicle   Vehicle @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
@@ -1257,9 +1442,55 @@ model ExtraExpense {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  @@index([tenantId])
   @@index([vehicleId])
   @@index([receiptId])
   @@map("extra_expenses")
+}
+
+// ============================================
+// META - Metadata flexible para cualquier entidad del sistema
+// Relación polimórfica con múltiples tablas
+// ============================================
+model Meta {
+  id String @id @default(uuid())
+
+  // Multi-tenancy
+  tenantId String?
+  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  // Relación polimórfica
+  entityType String // 'user', 'vehicle', 'buyer', 'deal', 'title', 'media', 'vehicleYear', 'vehicleMake', 'vehicleModel', 'vehicleTrim', 'extraExpense'
+  entityId   String // ID de la entidad
+
+  // Usuario que creó/modificó el meta (opcional) - sin relación directa
+  userId String?
+
+  // Información del meta
+  key         String // Clave del metadata (ej: 'custom_field_1', 'api_sync_status', 'carfax_report_id')
+  value       String // Valor del metadata como string
+  valueType   String  @default("string") // string, number, boolean, json, date
+  description String? // Descripción opcional del campo
+
+  // Control de visibilidad
+  isPublic  Boolean @default(false) // Si es visible públicamente
+  isSystem  Boolean @default(false) // Si es un meta del sistema (no editable por usuarios)
+  isActive  Boolean @default(true) // Si está activo
+  isDeleted Boolean @default(false) // Soft delete
+
+  // Timestamps
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Índices compuestos para búsquedas eficientes
+  @@unique([entityType, entityId, key]) // Un entityType+entityId no puede tener la misma key duplicada
+  @@index([tenantId])
+  @@index([entityType, entityId])
+  @@index([userId])
+  @@index([key])
+  @@index([isActive])
+  @@index([isSystem])
+  @@map("metas")
 }
 
 // ============================================
@@ -1269,7 +1500,11 @@ model ExtraExpense {
 model AuditLog {
   id String @id @default(uuid())
 
-  // Usuario que realizó la acción
+  // Multi-tenancy
+  tenantId String?
+  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  // Usuario que realizó la acción - sin relación directa
   userId    String?
   userEmail String
 
@@ -1306,6 +1541,7 @@ model AuditLog {
   // Timestamp
   createdAt DateTime @default(now())
 
+  @@index([tenantId])
   @@index([userId])
   @@index([userEmail])
   @@index([action])

@@ -5,6 +5,7 @@ import { PrismaClient } from '@prisma/client';
 import { seedVehicleYears } from './vehicle-years.seed';
 import { seedVehicleHierarchy } from './vehicle-hierarchy.seed';
 import { seedNomenclators } from './nomenclators.seed';
+import { seedRBAC } from './rbac.seed';
 
 // Create a PostgreSQL connection pool
 const pool = new Pool({
@@ -23,6 +24,9 @@ async function main() {
   try {
     // Seed nomenclators first
     await seedNomenclators(prisma);
+
+    // Seed RBAC
+    await seedRBAC(prisma);
 
     console.log('\n');
 

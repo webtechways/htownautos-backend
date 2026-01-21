@@ -139,6 +139,12 @@ export class MediaEntity implements Media {
   })
   metaValue: any;
 
+  @ApiPropertyOptional({
+    description: 'Tenant UUID',
+    example: '123e4567-e89b-12d3-a456-426614174003',
+  })
+  tenantId: string | null;
+
   @ApiProperty({
     description: 'Creation timestamp',
     example: '2024-01-12T10:30:00.000Z',

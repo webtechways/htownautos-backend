@@ -18,6 +18,7 @@ import { UpdateNomenclatorDto } from '../dto/update-nomenclator.dto';
 import { QueryNomenclatorDto } from '../dto/query-nomenclator.dto';
 import { NomenclatorEntity } from '../entities/nomenclator.entity';
 import { PaginatedResponseDto } from '../../common/dto/paginated-response.dto';
+import { AuditLog } from '../../common/decorators/audit-log.decorator';
 
 @ApiTags('Nomenclators - Occupations')
 @Controller('nom/occupations')
@@ -25,6 +26,7 @@ export class OccupationsController {
   constructor(private readonly nomenclatorsService: NomenclatorsService) {}
 
   @Post()
+  @AuditLog({ action: 'create', resource: 'occupation', level: 'medium', pii: true })
   @ApiOperation({ summary: 'Create a new occupation' })
   @ApiResponse({ status: HttpStatus.CREATED, type: NomenclatorEntity })
   async create(
@@ -34,6 +36,7 @@ export class OccupationsController {
   }
 
   @Get()
+  @AuditLog({ action: 'read', resource: 'occupation', level: 'low', pii: false })
   @ApiOperation({ summary: 'Get all occupations' })
   @ApiResponse({ status: HttpStatus.OK, type: PaginatedResponseDto })
   async findAll(
@@ -43,6 +46,7 @@ export class OccupationsController {
   }
 
   @Get(':id')
+  @AuditLog({ action: 'read', resource: 'occupation', level: 'low', pii: false })
   @ApiOperation({ summary: 'Get occupation by ID' })
   @ApiResponse({ status: HttpStatus.OK, type: NomenclatorEntity })
   async findOne(@Param('id') id: string): Promise<NomenclatorEntity> {
@@ -50,6 +54,7 @@ export class OccupationsController {
   }
 
   @Patch(':id')
+  @AuditLog({ action: 'update', resource: 'occupation', level: 'medium', pii: true })
   @ApiOperation({ summary: 'Update a occupation' })
   @ApiResponse({ status: HttpStatus.OK, type: NomenclatorEntity })
   async update(
@@ -61,6 +66,7 @@ export class OccupationsController {
 
   @Delete(':id')
   @HttpCode(HttpStatus.OK)
+  @AuditLog({ action: 'delete', resource: 'occupation', level: 'high', pii: true })
   @ApiOperation({ summary: 'Delete a occupation' })
   @ApiResponse({ status: HttpStatus.OK })
   async remove(@Param('id') id: string): Promise<{ message: string }> {

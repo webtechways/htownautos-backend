@@ -18,6 +18,7 @@ import { UpdateNomenclatorDto } from '../dto/update-nomenclator.dto';
 import { QueryNomenclatorDto } from '../dto/query-nomenclator.dto';
 import { NomenclatorEntity } from '../entities/nomenclator.entity';
 import { PaginatedResponseDto } from '../../common/dto/paginated-response.dto';
+import { AuditLog } from '../../common/decorators/audit-log.decorator';
 
 @ApiTags('Nomenclators - Vehicle Types')
 @Controller('nom/vehicle-types')
@@ -25,6 +26,7 @@ export class VehicleTypesController {
   constructor(private readonly nomenclatorsService: NomenclatorsService) {}
 
   @Post()
+  @AuditLog({ action: 'create', resource: 'vehicle-type', level: 'medium', pii: false })
   @ApiOperation({ summary: 'Create a new vehicle type' })
   @ApiResponse({ status: HttpStatus.CREATED, type: NomenclatorEntity })
   async create(
@@ -34,6 +36,7 @@ export class VehicleTypesController {
   }
 
   @Get()
+  @AuditLog({ action: 'read', resource: 'vehicle-type', level: 'low', pii: false })
   @ApiOperation({ summary: 'Get all vehicle types' })
   @ApiResponse({ status: HttpStatus.OK, type: PaginatedResponseDto })
   async findAll(
@@ -43,6 +46,7 @@ export class VehicleTypesController {
   }
 
   @Get(':id')
+  @AuditLog({ action: 'read', resource: 'vehicle-type', level: 'low', pii: false })
   @ApiOperation({ summary: 'Get vehicle type by ID' })
   @ApiResponse({ status: HttpStatus.OK, type: NomenclatorEntity })
   async findOne(@Param('id') id: string): Promise<NomenclatorEntity> {
@@ -50,6 +54,7 @@ export class VehicleTypesController {
   }
 
   @Patch(':id')
+  @AuditLog({ action: 'update', resource: 'vehicle-type', level: 'medium', pii: false })
   @ApiOperation({ summary: 'Update a vehicle type' })
   @ApiResponse({ status: HttpStatus.OK, type: NomenclatorEntity })
   async update(
@@ -61,6 +66,7 @@ export class VehicleTypesController {
 
   @Delete(':id')
   @HttpCode(HttpStatus.OK)
+  @AuditLog({ action: 'delete', resource: 'vehicle-type', level: 'high', pii: false })
   @ApiOperation({ summary: 'Delete a vehicle type' })
   @ApiResponse({ status: HttpStatus.OK })
   async remove(@Param('id') id: string): Promise<{ message: string }> {

@@ -18,6 +18,7 @@ import { UpdateNomenclatorDto } from '../dto/update-nomenclator.dto';
 import { QueryNomenclatorDto } from '../dto/query-nomenclator.dto';
 import { NomenclatorEntity } from '../entities/nomenclator.entity';
 import { PaginatedResponseDto } from '../../common/dto/paginated-response.dto';
+import { AuditLog } from '../../common/decorators/audit-log.decorator';
 
 @ApiTags('Nomenclators - Vehicle Sources')
 @Controller('nom/vehicle-sources')
@@ -25,6 +26,7 @@ export class VehicleSourcesController {
   constructor(private readonly nomenclatorsService: NomenclatorsService) {}
 
   @Post()
+  @AuditLog({ action: 'create', resource: 'vehicle-source', level: 'medium', pii: false })
   @ApiOperation({ summary: 'Create a new vehicle source' })
   @ApiResponse({ status: HttpStatus.CREATED, type: NomenclatorEntity })
   async create(
@@ -34,6 +36,7 @@ export class VehicleSourcesController {
   }
 
   @Get()
+  @AuditLog({ action: 'read', resource: 'vehicle-source', level: 'low', pii: false })
   @ApiOperation({ summary: 'Get all vehicle sources' })
   @ApiResponse({ status: HttpStatus.OK, type: PaginatedResponseDto })
   async findAll(
@@ -43,6 +46,7 @@ export class VehicleSourcesController {
   }
 
   @Get(':id')
+  @AuditLog({ action: 'read', resource: 'vehicle-source', level: 'low', pii: false })
   @ApiOperation({ summary: 'Get vehicle source by ID' })
   @ApiResponse({ status: HttpStatus.OK, type: NomenclatorEntity })
   async findOne(@Param('id') id: string): Promise<NomenclatorEntity> {
@@ -50,6 +54,7 @@ export class VehicleSourcesController {
   }
 
   @Patch(':id')
+  @AuditLog({ action: 'update', resource: 'vehicle-source', level: 'medium', pii: false })
   @ApiOperation({ summary: 'Update a vehicle source' })
   @ApiResponse({ status: HttpStatus.OK, type: NomenclatorEntity })
   async update(
@@ -61,6 +66,7 @@ export class VehicleSourcesController {
 
   @Delete(':id')
   @HttpCode(HttpStatus.OK)
+  @AuditLog({ action: 'delete', resource: 'vehicle-source', level: 'high', pii: false })
   @ApiOperation({ summary: 'Delete a vehicle source' })
   @ApiResponse({ status: HttpStatus.OK })
   async remove(@Param('id') id: string): Promise<{ message: string }> {

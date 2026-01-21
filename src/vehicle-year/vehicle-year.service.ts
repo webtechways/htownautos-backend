@@ -3,6 +3,7 @@ import {
   NotFoundException,
   ConflictException,
   BadRequestException,
+  Request,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma.service';
 import { CreateVehicleYearDto } from './dto/create-vehicle-year.dto';
@@ -16,7 +17,7 @@ import { VehicleYearEntity } from './entities/vehicle-year.entity';
 
 @Injectable()
 export class VehicleYearService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(private readonly prisma: PrismaService) { }
 
   async create(
     createVehicleYearDto: CreateVehicleYearDto,

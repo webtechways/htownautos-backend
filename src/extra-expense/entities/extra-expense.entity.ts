@@ -50,6 +50,12 @@ export class ExtraExpenseEntity implements Omit<ExtraExpense, 'price'> {
   })
   metaValue: any;
 
+  @ApiPropertyOptional({
+    description: 'Tenant UUID',
+    example: '123e4567-e89b-12d3-a456-426614174003',
+  })
+  tenantId: string | null;
+
   constructor(partial: Partial<ExtraExpenseEntity> & { price?: any }) {
     Object.assign(this, partial);
     if (partial.price !== undefined) {

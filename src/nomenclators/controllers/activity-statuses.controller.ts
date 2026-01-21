@@ -18,6 +18,7 @@ import { UpdateNomenclatorDto } from '../dto/update-nomenclator.dto';
 import { QueryNomenclatorDto } from '../dto/query-nomenclator.dto';
 import { NomenclatorEntity } from '../entities/nomenclator.entity';
 import { PaginatedResponseDto } from '../../common/dto/paginated-response.dto';
+import { AuditLog } from '../../common/decorators/audit-log.decorator';
 
 @ApiTags('Nomenclators - Activity Statuses')
 @Controller('nom/activity-statuses')
@@ -25,6 +26,7 @@ export class ActivityStatusesController {
   constructor(private readonly nomenclatorsService: NomenclatorsService) {}
 
   @Post()
+  @AuditLog({ action: 'create', resource: 'activity-status', level: 'medium', pii: false })
   @ApiOperation({ summary: 'Create a new activity statuse' })
   @ApiResponse({ status: HttpStatus.CREATED, type: NomenclatorEntity })
   async create(
@@ -34,6 +36,7 @@ export class ActivityStatusesController {
   }
 
   @Get()
+  @AuditLog({ action: 'read', resource: 'activity-status', level: 'low', pii: false })
   @ApiOperation({ summary: 'Get all activity statuses' })
   @ApiResponse({ status: HttpStatus.OK, type: PaginatedResponseDto })
   async findAll(
@@ -43,6 +46,7 @@ export class ActivityStatusesController {
   }
 
   @Get(':id')
+  @AuditLog({ action: 'read', resource: 'activity-status', level: 'low', pii: false })
   @ApiOperation({ summary: 'Get activity statuse by ID' })
   @ApiResponse({ status: HttpStatus.OK, type: NomenclatorEntity })
   async findOne(@Param('id') id: string): Promise<NomenclatorEntity> {
@@ -50,6 +54,7 @@ export class ActivityStatusesController {
   }
 
   @Patch(':id')
+  @AuditLog({ action: 'update', resource: 'activity-status', level: 'medium', pii: false })
   @ApiOperation({ summary: 'Update a activity statuse' })
   @ApiResponse({ status: HttpStatus.OK, type: NomenclatorEntity })
   async update(
@@ -61,6 +66,7 @@ export class ActivityStatusesController {
 
   @Delete(':id')
   @HttpCode(HttpStatus.OK)
+  @AuditLog({ action: 'delete', resource: 'activity-status', level: 'high', pii: false })
   @ApiOperation({ summary: 'Delete a activity statuse' })
   @ApiResponse({ status: HttpStatus.OK })
   async remove(@Param('id') id: string): Promise<{ message: string }> {

@@ -11,7 +11,11 @@ import { VehicleTrimModule } from './vehicle-trim/vehicle-trim.module';
 import { NomenclatorsModule } from './nomenclators/nomenclators.module';
 import { ExtraExpenseModule } from './extra-expense/extra-expense.module';
 import { MediaModule } from './media/media.module';
+import { VehicleModule } from './vehicle/vehicle.module';
 import { AuditModule } from './common/audit.module';
+import { MetaModule } from './meta/meta.module';
+import { AuthModule } from './auth/auth.module';
+import { RolesModule } from './roles/roles.module';
 
 /**
  * App Module con seguridad RouteOne/DealerTrack
@@ -49,9 +53,14 @@ import { AuditModule } from './common/audit.module';
     VehicleMakeModule,
     VehicleModelModule,
     VehicleTrimModule,
+    VehicleModule,
     NomenclatorsModule,
     ExtraExpenseModule,
     MediaModule,
+    MetaModule,
+    MetaModule,
+    AuthModule,
+    RolesModule,
   ],
   controllers: [AppController],
   providers: [
@@ -63,4 +72,4 @@ import { AuditModule } from './common/audit.module';
     },
   ],
 })
-export class AppModule {}
+export class AppModule { }

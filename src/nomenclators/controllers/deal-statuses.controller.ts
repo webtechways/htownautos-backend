@@ -18,6 +18,7 @@ import { UpdateNomenclatorDto } from '../dto/update-nomenclator.dto';
 import { QueryNomenclatorDto } from '../dto/query-nomenclator.dto';
 import { NomenclatorEntity } from '../entities/nomenclator.entity';
 import { PaginatedResponseDto } from '../../common/dto/paginated-response.dto';
+import { AuditLog } from '../../common/decorators/audit-log.decorator';
 
 @ApiTags('Nomenclators - Deal Statuses')
 @Controller('nom/deal-statuses')
@@ -25,6 +26,7 @@ export class DealStatusesController {
   constructor(private readonly nomenclatorsService: NomenclatorsService) {}
 
   @Post()
+  @AuditLog({ action: 'create', resource: 'deal-status', level: 'medium', pii: false })
   @ApiOperation({ summary: 'Create a new deal statuse' })
   @ApiResponse({ status: HttpStatus.CREATED, type: NomenclatorEntity })
   async create(
@@ -34,6 +36,7 @@ export class DealStatusesController {
   }
 
   @Get()
+  @AuditLog({ action: 'read', resource: 'deal-status', level: 'low', pii: false })
   @ApiOperation({ summary: 'Get all deal statuses' })
   @ApiResponse({ status: HttpStatus.OK, type: PaginatedResponseDto })
   async findAll(
@@ -43,6 +46,7 @@ export class DealStatusesController {
   }
 
   @Get(':id')
+  @AuditLog({ action: 'read', resource: 'deal-status', level: 'low', pii: false })
   @ApiOperation({ summary: 'Get deal statuse by ID' })
   @ApiResponse({ status: HttpStatus.OK, type: NomenclatorEntity })
   async findOne(@Param('id') id: string): Promise<NomenclatorEntity> {
@@ -50,6 +54,7 @@ export class DealStatusesController {
   }
 
   @Patch(':id')
+  @AuditLog({ action: 'update', resource: 'deal-status', level: 'medium', pii: false })
   @ApiOperation({ summary: 'Update a deal statuse' })
   @ApiResponse({ status: HttpStatus.OK, type: NomenclatorEntity })
   async update(
@@ -61,6 +66,7 @@ export class DealStatusesController {
 
   @Delete(':id')
   @HttpCode(HttpStatus.OK)
+  @AuditLog({ action: 'delete', resource: 'deal-status', level: 'high', pii: false })
   @ApiOperation({ summary: 'Delete a deal statuse' })
   @ApiResponse({ status: HttpStatus.OK })
   async remove(@Param('id') id: string): Promise<{ message: string }> {

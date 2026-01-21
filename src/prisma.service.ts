@@ -37,6 +37,46 @@ export class PrismaService implements OnModuleInit, OnModuleDestroy {
     return this.prisma.vehicleTrim;
   }
 
+  get vehicle() {
+    return this.prisma.vehicle;
+  }
+
+  get meta() {
+    return this.prisma.meta;
+  }
+
+  get user() {
+    return this.prisma.user;
+  }
+
+  get tenant() {
+    return this.prisma.tenant;
+  }
+
+  get tenantUser() {
+    return this.prisma.tenantUser;
+  }
+
+  get role() {
+    return this.prisma.role;
+  }
+
+  get permission() {
+    return this.prisma.permission;
+  }
+
+  get rolePermission() {
+    return this.prisma.rolePermission;
+  }
+
+  get auditLog() {
+    return this.prisma.auditLog;
+  }
+
+  get $transaction() {
+    return this.prisma.$transaction.bind(this.prisma);
+  }
+
   // Allow dynamic access to Prisma models
   getModel(modelName: string) {
     return this.prisma[modelName];

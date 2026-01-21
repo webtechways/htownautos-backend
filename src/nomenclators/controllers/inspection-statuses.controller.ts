@@ -18,6 +18,7 @@ import { UpdateNomenclatorDto } from '../dto/update-nomenclator.dto';
 import { QueryNomenclatorDto } from '../dto/query-nomenclator.dto';
 import { NomenclatorEntity } from '../entities/nomenclator.entity';
 import { PaginatedResponseDto } from '../../common/dto/paginated-response.dto';
+import { AuditLog } from '../../common/decorators/audit-log.decorator';
 
 @ApiTags('Nomenclators - Inspection Statuses')
 @Controller('nom/inspection-statuses')
@@ -25,6 +26,7 @@ export class InspectionStatusesController {
   constructor(private readonly nomenclatorsService: NomenclatorsService) {}
 
   @Post()
+  @AuditLog({ action: 'create', resource: 'inspection-status', level: 'medium', pii: false })
   @ApiOperation({ summary: 'Create a new inspection statuse' })
   @ApiResponse({ status: HttpStatus.CREATED, type: NomenclatorEntity })
   async create(
@@ -34,6 +36,7 @@ export class InspectionStatusesController {
   }
 
   @Get()
+  @AuditLog({ action: 'read', resource: 'inspection-status', level: 'low', pii: false })
   @ApiOperation({ summary: 'Get all inspection statuses' })
   @ApiResponse({ status: HttpStatus.OK, type: PaginatedResponseDto })
   async findAll(
@@ -43,6 +46,7 @@ export class InspectionStatusesController {
   }
 
   @Get(':id')
+  @AuditLog({ action: 'read', resource: 'inspection-status', level: 'low', pii: false })
   @ApiOperation({ summary: 'Get inspection statuse by ID' })
   @ApiResponse({ status: HttpStatus.OK, type: NomenclatorEntity })
   async findOne(@Param('id') id: string): Promise<NomenclatorEntity> {
@@ -50,6 +54,7 @@ export class InspectionStatusesController {
   }
 
   @Patch(':id')
+  @AuditLog({ action: 'update', resource: 'inspection-status', level: 'medium', pii: false })
   @ApiOperation({ summary: 'Update a inspection statuse' })
   @ApiResponse({ status: HttpStatus.OK, type: NomenclatorEntity })
   async update(
@@ -61,6 +66,7 @@ export class InspectionStatusesController {
 
   @Delete(':id')
   @HttpCode(HttpStatus.OK)
+  @AuditLog({ action: 'delete', resource: 'inspection-status', level: 'high', pii: false })
   @ApiOperation({ summary: 'Delete a inspection statuse' })
   @ApiResponse({ status: HttpStatus.OK })
   async remove(@Param('id') id: string): Promise<{ message: string }> {

@@ -18,6 +18,7 @@ import { UpdateNomenclatorDto } from '../dto/update-nomenclator.dto';
 import { QueryNomenclatorDto } from '../dto/query-nomenclator.dto';
 import { NomenclatorEntity } from '../entities/nomenclator.entity';
 import { PaginatedResponseDto } from '../../common/dto/paginated-response.dto';
+import { AuditLog } from '../../common/decorators/audit-log.decorator';
 
 @ApiTags('Nomenclators - ID States')
 @Controller('nom/id-states')
@@ -25,6 +26,7 @@ export class IdStatesController {
   constructor(private readonly nomenclatorsService: NomenclatorsService) {}
 
   @Post()
+  @AuditLog({ action: 'create', resource: 'id-state', level: 'medium', pii: false })
   @ApiOperation({ summary: 'Create a new id state' })
   @ApiResponse({ status: HttpStatus.CREATED, type: NomenclatorEntity })
   async create(
@@ -34,6 +36,7 @@ export class IdStatesController {
   }
 
   @Get()
+  @AuditLog({ action: 'read', resource: 'id-state', level: 'low', pii: false })
   @ApiOperation({ summary: 'Get all id states' })
   @ApiResponse({ status: HttpStatus.OK, type: PaginatedResponseDto })
   async findAll(
@@ -43,6 +46,7 @@ export class IdStatesController {
   }
 
   @Get(':id')
+  @AuditLog({ action: 'read', resource: 'id-state', level: 'low', pii: false })
   @ApiOperation({ summary: 'Get id state by ID' })
   @ApiResponse({ status: HttpStatus.OK, type: NomenclatorEntity })
   async findOne(@Param('id') id: string): Promise<NomenclatorEntity> {
@@ -50,6 +54,7 @@ export class IdStatesController {
   }
 
   @Patch(':id')
+  @AuditLog({ action: 'update', resource: 'id-state', level: 'medium', pii: false })
   @ApiOperation({ summary: 'Update a id state' })
   @ApiResponse({ status: HttpStatus.OK, type: NomenclatorEntity })
   async update(
@@ -61,6 +66,7 @@ export class IdStatesController {
 
   @Delete(':id')
   @HttpCode(HttpStatus.OK)
+  @AuditLog({ action: 'delete', resource: 'id-state', level: 'high', pii: false })
   @ApiOperation({ summary: 'Delete a id state' })
   @ApiResponse({ status: HttpStatus.OK })
   async remove(@Param('id') id: string): Promise<{ message: string }> {

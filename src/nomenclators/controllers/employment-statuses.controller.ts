@@ -18,6 +18,7 @@ import { UpdateNomenclatorDto } from '../dto/update-nomenclator.dto';
 import { QueryNomenclatorDto } from '../dto/query-nomenclator.dto';
 import { NomenclatorEntity } from '../entities/nomenclator.entity';
 import { PaginatedResponseDto } from '../../common/dto/paginated-response.dto';
+import { AuditLog } from '../../common/decorators/audit-log.decorator';
 
 @ApiTags('Nomenclators - Employment Statuses')
 @Controller('nom/employment-statuses')
@@ -25,6 +26,7 @@ export class EmploymentStatusesController {
   constructor(private readonly nomenclatorsService: NomenclatorsService) {}
 
   @Post()
+  @AuditLog({ action: 'create', resource: 'employment-status', level: 'medium', pii: true })
   @ApiOperation({ summary: 'Create a new employment statuse' })
   @ApiResponse({ status: HttpStatus.CREATED, type: NomenclatorEntity })
   async create(
@@ -34,6 +36,7 @@ export class EmploymentStatusesController {
   }
 
   @Get()
+  @AuditLog({ action: 'read', resource: 'employment-status', level: 'low', pii: false })
   @ApiOperation({ summary: 'Get all employment statuses' })
   @ApiResponse({ status: HttpStatus.OK, type: PaginatedResponseDto })
   async findAll(
@@ -43,6 +46,7 @@ export class EmploymentStatusesController {
   }
 
   @Get(':id')
+  @AuditLog({ action: 'read', resource: 'employment-status', level: 'low', pii: false })
   @ApiOperation({ summary: 'Get employment statuse by ID' })
   @ApiResponse({ status: HttpStatus.OK, type: NomenclatorEntity })
   async findOne(@Param('id') id: string): Promise<NomenclatorEntity> {
@@ -50,6 +54,7 @@ export class EmploymentStatusesController {
   }
 
   @Patch(':id')
+  @AuditLog({ action: 'update', resource: 'employment-status', level: 'medium', pii: true })
   @ApiOperation({ summary: 'Update a employment statuse' })
   @ApiResponse({ status: HttpStatus.OK, type: NomenclatorEntity })
   async update(
@@ -61,6 +66,7 @@ export class EmploymentStatusesController {
 
   @Delete(':id')
   @HttpCode(HttpStatus.OK)
+  @AuditLog({ action: 'delete', resource: 'employment-status', level: 'high', pii: true })
   @ApiOperation({ summary: 'Delete a employment statuse' })
   @ApiResponse({ status: HttpStatus.OK })
   async remove(@Param('id') id: string): Promise<{ message: string }> {
