@@ -6,6 +6,8 @@ import {
   IsNumber,
   Min,
   IsOptional,
+  IsArray,
+  IsObject,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 
@@ -38,10 +40,20 @@ export class CreateExtraExpenseDto {
   price: number;
 
   @ApiPropertyOptional({
-    description: 'Receipt file UUID (optional)',
-    example: '123e4567-e89b-12d3-a456-426614174001',
+    description: 'Array of receipt media UUIDs',
+    example: ['123e4567-e89b-12d3-a456-426614174001'],
+    type: [String],
   })
   @IsOptional()
-  @IsUUID()
-  receiptId?: string;
+  @IsArray()
+  @IsUUID('4', { each: true })
+  receiptIds?: string[];
+
+  @ApiPropertyOptional({
+    description: 'Additional metadata (e.g. line items)',
+    example: { items: [{ description: 'Oil change', price: 45 }] },
+  })
+  @IsOptional()
+  @IsObject()
+  metaValue?: Record<string, any>;
 }

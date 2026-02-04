@@ -25,9 +25,44 @@ export class VehicleService {
   ) {}
 
   /**
+   * Generate a unique stock number with HTW prefix
+   */
+  private async generateStockNumber(): Promise<string> {
+    const prefix = 'HTW';
+
+    // Get the highest stock number with HTW prefix
+    const lastVehicle = await this.prisma.vehicle.findFirst({
+      where: {
+        stockNumber: {
+          startsWith: prefix,
+        },
+      },
+      orderBy: {
+        stockNumber: 'desc',
+      },
+      select: {
+        stockNumber: true,
+      },
+    });
+
+    let nextNumber = 1;
+    if (lastVehicle?.stockNumber) {
+      const numPart = lastVehicle.stockNumber.replace(prefix, '');
+      const parsed = parseInt(numPart, 10);
+      if (!isNaN(parsed)) {
+        nextNumber = parsed + 1;
+      }
+    }
+
+    // Pad with zeros to 6 digits (e.g., HTW000001)
+    return `${prefix}${nextNumber.toString().padStart(6, '0')}`;
+  }
+
+  /**
    * Create a new vehicle
    * Validates VIN uniqueness and related entities existence
    * Creates associated metas if provided
+   * Stock number is auto-generated with HTW prefix if not provided
    */
   async create(createVehicleDto: CreateVehicleDto) {
     // Check if VIN already exists
@@ -41,27 +76,37 @@ export class VehicleService {
       );
     }
 
-    // Check if stock number already exists (if provided)
-    if (createVehicleDto.stockNumber) {
+    // Handle stock number: use provided (with HTW prefix) or generate new one
+    let stockNumber = createVehicleDto.stockNumber?.trim() || null;
+    if (stockNumber) {
+      // Always ensure HTW prefix
+      if (!stockNumber.startsWith('HTW')) {
+        stockNumber = `HTW${stockNumber}`;
+      }
+
+      // Check if provided stock number already exists
       const existingStock = await this.prisma.vehicle.findUnique({
-        where: { stockNumber: createVehicleDto.stockNumber },
+        where: { stockNumber },
       });
 
       if (existingStock) {
         throw new ConflictException(
-          `Vehicle with stock number ${createVehicleDto.stockNumber} already exists`,
+          `Vehicle with stock number ${stockNumber} already exists`,
         );
       }
+    } else {
+      // Auto-generate stock number with HTW prefix
+      stockNumber = await this.generateStockNumber();
     }
 
     // Validate year, make, model exist
     await this.validateRelatedEntities(createVehicleDto);
 
     // Extract metas from DTO
-    const { metas, ...vehicleData } = createVehicleDto;
+    const { metas, stockNumber: _, ...vehicleData } = createVehicleDto;
 
     // Convert metaValue to JSON if it's a string
-    const data: any = { ...vehicleData };
+    const data: any = { ...vehicleData, stockNumber };
     if (typeof data.metaValue === 'string') {
       try {
         data.metaValue = JSON.parse(data.metaValue);
@@ -69,6 +114,9 @@ export class VehicleService {
         throw new BadRequestException('Invalid JSON in metaValue');
       }
     }
+
+    // Sync legacy ↔ new pricing fields
+    this.syncPricingFields(data);
 
     // Create vehicle
     const vehicle = await this.prisma.vehicle.create({
@@ -100,6 +148,14 @@ export class VehicleService {
   async findAll(query: QueryVehicleDto) {
     const { page = 1, limit = 10, search, ...filters } = query;
     const skip = (page - 1) * limit;
+
+    // Swap min/max if min > max
+    if (filters.minMileage && filters.maxMileage && filters.minMileage > filters.maxMileage) {
+      [filters.minMileage, filters.maxMileage] = [filters.maxMileage, filters.minMileage];
+    }
+    if (filters.minPrice && filters.maxPrice && filters.minPrice > filters.maxPrice) {
+      [filters.minPrice, filters.maxPrice] = [filters.maxPrice, filters.minPrice];
+    }
 
     // Build where clause
     const where: Prisma.VehicleWhereInput = {
@@ -140,6 +196,7 @@ export class VehicleService {
           ? { vehicleStatusId: filters.vehicleStatusId }
           : {},
         filters.sourceId ? { sourceId: filters.sourceId } : {},
+        filters.titleBrandId ? { titleBrandId: filters.titleBrandId } : {},
 
         // Mileage range
         filters.minMileage || filters.maxMileage
@@ -151,13 +208,24 @@ export class VehicleService {
             }
           : {},
 
-        // Price range (using salePrice)
+        // Price range (check askingPrice first, fallback to salePrice)
         filters.minPrice || filters.maxPrice
           ? {
-              salePrice: {
-                ...(filters.minPrice && { gte: filters.minPrice }),
-                ...(filters.maxPrice && { lte: filters.maxPrice }),
-              },
+              OR: [
+                {
+                  askingPrice: {
+                    ...(filters.minPrice && { gte: filters.minPrice }),
+                    ...(filters.maxPrice && { lte: filters.maxPrice }),
+                  },
+                },
+                {
+                  askingPrice: null,
+                  salePrice: {
+                    ...(filters.minPrice && { gte: filters.minPrice }),
+                    ...(filters.maxPrice && { lte: filters.maxPrice }),
+                  },
+                },
+              ],
             }
           : {},
 
@@ -252,6 +320,8 @@ export class VehicleService {
 
   /**
    * Update a vehicle
+   * Note: stockNumber, yearId, makeId, modelId, engine, cylinders, doors,
+   * passengers, fuelTypeId, transmissionTypeId, driveTypeId are immutable after creation
    */
   async update(id: string, updateVehicleDto: UpdateVehicleDto) {
     // Check if vehicle exists
@@ -270,21 +340,24 @@ export class VehicleService {
       }
     }
 
-    // If stock number is being updated, check uniqueness
-    if (updateVehicleDto.stockNumber) {
-      const existingStock = await this.prisma.vehicle.findUnique({
-        where: { stockNumber: updateVehicleDto.stockNumber },
-      });
-
-      if (existingStock && existingStock.id !== id) {
-        throw new ConflictException(
-          `Vehicle with stock number ${updateVehicleDto.stockNumber} already exists`,
-        );
-      }
-    }
+    // Remove immutable fields from update data
+    const {
+      stockNumber: _sn,
+      yearId: _y,
+      makeId: _mk,
+      modelId: _md,
+      engine: _e,
+      cylinders: _c,
+      doors: _d,
+      passengers: _p,
+      fuelTypeId: _ft,
+      transmissionTypeId: _tt,
+      driveTypeId: _dt,
+      ...updateData
+    } = updateVehicleDto;
 
     // Convert metaValue to JSON if it's a string
-    const data: any = { ...updateVehicleDto };
+    const data: any = { ...updateData };
     if (typeof data.metaValue === 'string') {
       try {
         data.metaValue = JSON.parse(data.metaValue);
@@ -292,6 +365,9 @@ export class VehicleService {
         throw new BadRequestException('Invalid JSON in metaValue');
       }
     }
+
+    // Sync legacy ↔ new pricing fields
+    this.syncPricingFields(data);
 
     return this.prisma.vehicle.update({
       where: { id },
@@ -334,7 +410,7 @@ export class VehicleService {
     ] = await Promise.all([
       this.prisma.vehicle.count(),
       this.prisma.vehicle.aggregate({
-        _sum: { salePrice: true },
+        _sum: { askingPrice: true, salePrice: true },
       }),
       this.prisma.vehicle.aggregate({
         _avg: { mileage: true },
@@ -358,12 +434,40 @@ export class VehicleService {
 
     return {
       totalVehicles,
-      totalValue: totalValue._sum.salePrice || 0,
+      totalValue: totalValue._sum.askingPrice || totalValue._sum.salePrice || 0,
       avgMileage: avgMileage._avg.mileage || 0,
       byStatus,
       topMakes: byMake,
       recentVehicles,
     };
+  }
+
+  /**
+   * Sync legacy pricing fields with new fields for backward compatibility
+   * vehicleCost ↔ costPrice, msrp ↔ listPrice, askingPrice ↔ salePrice
+   */
+  private syncPricingFields(data: any) {
+    // New → legacy
+    if (data.vehicleCost !== undefined && data.costPrice === undefined) {
+      data.costPrice = data.vehicleCost;
+    }
+    if (data.msrp !== undefined && data.listPrice === undefined) {
+      data.listPrice = data.msrp;
+    }
+    if (data.askingPrice !== undefined && data.salePrice === undefined) {
+      data.salePrice = data.askingPrice;
+    }
+
+    // Legacy → new
+    if (data.costPrice !== undefined && data.vehicleCost === undefined) {
+      data.vehicleCost = data.costPrice;
+    }
+    if (data.listPrice !== undefined && data.msrp === undefined) {
+      data.msrp = data.listPrice;
+    }
+    if (data.salePrice !== undefined && data.askingPrice === undefined) {
+      data.askingPrice = data.salePrice;
+    }
   }
 
   /**
@@ -430,6 +534,9 @@ export class VehicleService {
       vehicleCondition: true,
       vehicleStatus: true,
       source: true,
+      titleBrand: true,
+      mileageUnit: true,
+      vehicleEngine: true,
       mainImage: true,
     };
   }

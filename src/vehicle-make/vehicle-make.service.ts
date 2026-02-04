@@ -1,10 +1,12 @@
 import {
   Injectable,
+  Logger,
   NotFoundException,
   ConflictException,
   BadRequestException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma.service';
+import { MarketCheckService } from '../marketcheck/marketcheck.service';
 import { CreateVehicleMakeDto } from './dto/create-vehicle-make.dto';
 import { UpdateVehicleMakeDto } from './dto/update-vehicle-make.dto';
 import { QueryVehicleMakeDto } from './dto/query-vehicle-make.dto';
@@ -13,7 +15,12 @@ import { PaginatedResponseDto } from '../common/dto/paginated-response.dto';
 
 @Injectable()
 export class VehicleMakeService {
-  constructor(private readonly prisma: PrismaService) { }
+  private readonly logger = new Logger(VehicleMakeService.name);
+
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly marketCheckService: MarketCheckService,
+  ) { }
 
   private slugify(text: string): string {
     return text
@@ -94,7 +101,7 @@ export class VehicleMakeService {
       where.yearId = vehicleYear.id;
     }
 
-    const [data, total] = await Promise.all([
+    let [data, total] = await Promise.all([
       this.prisma.vehicleMake.findMany({
         where,
         skip,
@@ -110,6 +117,39 @@ export class VehicleMakeService {
       }),
       this.prisma.vehicleMake.count({ where }),
     ]);
+
+    // Cache-through: if no makes found and year filter is set, backfill from MarketCheck
+    if (total === 0 && year !== undefined) {
+      try {
+        const makeNames = await this.marketCheckService.getMakes(year.toString());
+        const vehicleYear = await this.prisma.vehicleYear.findUnique({ where: { year } });
+        if (vehicleYear && makeNames.length > 0) {
+          for (const name of makeNames) {
+            const slug = this.slugify(name);
+            try {
+              await this.prisma.vehicleMake.create({
+                data: { yearId: vehicleYear.id, name, slug, isActive: true },
+              });
+            } catch {
+              // Skip duplicates
+            }
+          }
+          // Re-query after backfill
+          [data, total] = await Promise.all([
+            this.prisma.vehicleMake.findMany({
+              where,
+              skip,
+              take: limit,
+              orderBy: { name: 'asc' },
+              include: { year: { select: { year: true } } },
+            }),
+            this.prisma.vehicleMake.count({ where }),
+          ]);
+        }
+      } catch (error) {
+        this.logger.error(`MarketCheck backfill failed for makes (year=${year}): ${error}`);
+      }
+    }
 
     const totalPages = Math.ceil(total / limit);
 

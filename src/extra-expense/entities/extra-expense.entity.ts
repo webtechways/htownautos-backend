@@ -1,59 +1,32 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { ExtraExpense } from '@prisma/client';
+import { ExtraExpense, Media } from '@prisma/client';
 
 export class ExtraExpenseEntity implements Omit<ExtraExpense, 'price'> {
-  @ApiProperty({
-    description: 'Extra expense UUID',
-    example: '123e4567-e89b-12d3-a456-426614174000',
-  })
+  @ApiProperty({ example: '123e4567-e89b-12d3-a456-426614174000' })
   id: string;
 
-  @ApiProperty({
-    description: 'Vehicle UUID (foreign key)',
-    example: '123e4567-e89b-12d3-a456-426614174001',
-  })
+  @ApiProperty({ example: '123e4567-e89b-12d3-a456-426614174001' })
   vehicleId: string;
 
-  @ApiProperty({
-    description: 'Expense description',
-    example: 'New tires',
-  })
+  @ApiProperty({ example: 'New tires' })
   description: string;
 
-  @ApiProperty({
-    description: 'Price amount',
-    example: 450.00,
-    type: Number,
-  })
+  @ApiProperty({ example: 450.0, type: Number })
   price: number;
 
-  @ApiPropertyOptional({
-    description: 'Receipt file UUID',
-    example: '123e4567-e89b-12d3-a456-426614174002',
-  })
-  receiptId: string | null;
+  @ApiPropertyOptional({ description: 'Receipt images', type: 'array' })
+  receipts?: Media[];
 
-  @ApiProperty({
-    description: 'Creation timestamp',
-    example: '2024-01-12T10:30:00.000Z',
-  })
+  @ApiProperty({ example: '2024-01-12T10:30:00.000Z' })
   createdAt: Date;
 
-  @ApiProperty({
-    description: 'Last update timestamp',
-    example: '2024-01-12T10:30:00.000Z',
-  })
+  @ApiProperty({ example: '2024-01-12T10:30:00.000Z' })
   updatedAt: Date;
 
-  @ApiPropertyOptional({
-    description: 'Metadata in JSON format',
-  })
+  @ApiPropertyOptional()
   metaValue: any;
 
-  @ApiPropertyOptional({
-    description: 'Tenant UUID',
-    example: '123e4567-e89b-12d3-a456-426614174003',
-  })
+  @ApiPropertyOptional({ example: '123e4567-e89b-12d3-a456-426614174003' })
   tenantId: string | null;
 
   constructor(partial: Partial<ExtraExpenseEntity> & { price?: any }) {

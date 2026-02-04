@@ -198,6 +198,7 @@ export class VehicleController {
     level: 'medium',
     pii: false,
     compliance: ['RouteOne', 'DealerTrack'],
+    trackChanges: true,
   })
   update(@Param('id') id: string, @Body() updateVehicleDto: UpdateVehicleDto) {
     return this.vehicleService.update(id, updateVehicleDto);
@@ -232,6 +233,7 @@ export class VehicleController {
     level: 'high',
     pii: false,
     compliance: ['RouteOne', 'DealerTrack', 'GLBA'],
+    trackChanges: true,
   })
   remove(@Param('id') id: string) {
     return this.vehicleService.remove(id);

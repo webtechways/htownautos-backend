@@ -12,7 +12,10 @@ import {
   ValidationPipe,
   UseInterceptors,
   UploadedFile,
-  BadRequestException,
+  ParseFilePipe,
+  MaxFileSizeValidator,
+  FileTypeValidator,
+  ParseUUIDPipe,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { AuditLog } from '../common/decorators/audit-log.decorator';
@@ -29,6 +32,8 @@ import { MediaService } from './media.service';
 import { CreateMediaDto } from './dto/create-media.dto';
 import { UpdateMediaDto } from './dto/update-media.dto';
 import { QueryMediaDto } from './dto/query-media.dto';
+import { PresignMediaDto } from './dto/presign-media.dto';
+import { ConfirmMediaDto } from './dto/confirm-media.dto';
 import { MediaEntity } from './entities/media.entity';
 import { PaginatedResponseDto } from '../common/dto/paginated-response.dto';
 
@@ -42,7 +47,7 @@ export class MediaController {
     action: 'create',
     resource: 'media',
     level: 'medium',
-    pii: true, // Puede contener documentos con PII (licencias, recibos)
+    pii: false,
     compliance: ['dealertrack', 'glba'],
   })
   @ApiOperation({
@@ -240,14 +245,58 @@ export class MediaController {
   })
   @UseInterceptors(FileInterceptor('file'))
   async upload(
-    @UploadedFile() file: Express.Multer.File,
+    @UploadedFile(
+      new ParseFilePipe({
+        validators: [
+          new MaxFileSizeValidator({ maxSize: 10 * 1024 * 1024 }), // 10 MB
+          new FileTypeValidator({
+            fileType: /^(image\/(jpeg|png|webp|gif)|application\/pdf|video\/(mp4|quicktime))$/,
+          }),
+        ],
+      }),
+    )
+    file: Express.Multer.File,
     @Body() createMediaDto: CreateMediaDto,
   ): Promise<MediaEntity> {
-    if (!file) {
-      throw new BadRequestException('No file provided');
-    }
-
     return this.mediaService.uploadAndCreate(file, createMediaDto);
+  }
+
+  @Post('presign')
+  @ApiOperation({
+    summary: 'Generate a presigned PUT URL for direct client-to-S3 upload',
+    description:
+      'Returns a presigned URL the client uses to PUT the file directly to S3. ' +
+      'After uploading, call POST /media/confirm with the returned key to create the DB record.',
+  })
+  @ApiResponse({ status: HttpStatus.CREATED, description: 'Presigned URL generated' })
+  @ApiResponse({ status: HttpStatus.NOT_FOUND, description: 'Vehicle or Buyer not found' })
+  async presign(
+    @Body(ValidationPipe) dto: PresignMediaDto,
+  ): Promise<{ uploadUrl: string; key: string; publicUrl: string }> {
+    return this.mediaService.presign(dto);
+  }
+
+  @Post('confirm')
+  @AuditLog({
+    action: 'create',
+    resource: 'media',
+    level: 'medium',
+    pii: false,
+    compliance: ['dealertrack', 'glba'],
+  })
+  @ApiOperation({
+    summary: 'Confirm a presigned upload and create the media record',
+    description:
+      'Verifies the file exists in S3 via HeadObject, validates size/type, then creates the media DB record. ' +
+      'Call this after the client has successfully PUT the file using the presigned URL.',
+  })
+  @ApiResponse({ status: HttpStatus.CREATED, description: 'Media record created', type: MediaEntity })
+  @ApiResponse({ status: HttpStatus.BAD_REQUEST, description: 'File not found in S3 or exceeds size limit' })
+  @ApiResponse({ status: HttpStatus.NOT_FOUND, description: 'Vehicle or Buyer not found' })
+  async confirm(
+    @Body(ValidationPipe) dto: ConfirmMediaDto,
+  ): Promise<MediaEntity> {
+    return this.mediaService.confirmUpload(dto);
   }
 
   @Get()
@@ -452,7 +501,7 @@ export class MediaController {
       },
     },
   })
-  async findOne(@Param('id') id: string): Promise<MediaEntity> {
+  async findOne(@Param('id', ParseUUIDPipe) id: string): Promise<MediaEntity> {
     return this.mediaService.findOne(id);
   }
 
@@ -570,7 +619,7 @@ export class MediaController {
     },
   })
   async getSignedUrl(
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @Query('expiresIn') expiresIn?: number,
   ): Promise<{ url: string }> {
     return this.mediaService.getSignedUrl(id, expiresIn);
@@ -581,8 +630,9 @@ export class MediaController {
     action: 'update',
     resource: 'media',
     level: 'medium',
-    pii: true,
+    pii: false,
     compliance: ['dealertrack', 'glba'],
+    trackChanges: true,
   })
   @ApiOperation({
     summary: 'Update a media record',
@@ -675,7 +725,7 @@ export class MediaController {
     },
   })
   async update(
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @Body(ValidationPipe) updateMediaDto: UpdateMediaDto,
   ): Promise<MediaEntity> {
     return this.mediaService.update(id, updateMediaDto);
@@ -686,9 +736,10 @@ export class MediaController {
   @AuditLog({
     action: 'delete',
     resource: 'media',
-    level: 'high', // Eliminación permanente
-    pii: true,
+    level: 'high',
+    pii: false,
     compliance: ['dealertrack', 'glba'],
+    trackChanges: true,
   })
   @ApiOperation({
     summary: 'Delete a media file',
@@ -752,7 +803,7 @@ export class MediaController {
       },
     },
   })
-  async remove(@Param('id') id: string): Promise<{ message: string }> {
+  async remove(@Param('id', ParseUUIDPipe) id: string): Promise<{ message: string }> {
     return this.mediaService.remove(id);
   }
 }

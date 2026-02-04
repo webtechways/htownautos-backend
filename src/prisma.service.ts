@@ -41,6 +41,10 @@ export class PrismaService implements OnModuleInit, OnModuleDestroy {
     return this.prisma.vehicle;
   }
 
+  get vehicleEngine() {
+    return this.prisma.vehicleEngine;
+  }
+
   get meta() {
     return this.prisma.meta;
   }
@@ -73,8 +77,53 @@ export class PrismaService implements OnModuleInit, OnModuleDestroy {
     return this.prisma.auditLog;
   }
 
+  get deal() {
+    return this.prisma.deal;
+  }
+
+  get buyer() {
+    return this.prisma.buyer;
+  }
+
+  get extraExpense() {
+    return this.prisma.extraExpense;
+  }
+
+  get media() {
+    return this.prisma.media;
+  }
+
+  get title() {
+    return this.prisma.title;
+  }
+
+  // Parts inventory
+  get part() {
+    return this.prisma.part;
+  }
+
+  get partCondition() {
+    return this.prisma.partCondition;
+  }
+
+  get partStatus() {
+    return this.prisma.partStatus;
+  }
+
+  get partCategory() {
+    return this.prisma.partCategory;
+  }
+
+  get uploadSession() {
+    return this.prisma.uploadSession;
+  }
+
   get $transaction() {
     return this.prisma.$transaction.bind(this.prisma);
+  }
+
+  get $queryRaw() {
+    return this.prisma.$queryRaw.bind(this.prisma);
   }
 
   // Allow dynamic access to Prisma models

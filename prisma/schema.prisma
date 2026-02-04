@@ -43,15 +43,21 @@ model MileageStatus {
 // Estado del Vehículo (In Inventory, Sold, Pending, etc.)
 model VehicleStatus {
   id        String   @id @default(uuid())
-  slug      String   @unique
+  slug      String
   title     String
   isActive  Boolean  @default(true)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  // Multi-tenancy (null = global, tenantId = custom for tenant)
+  tenantId String?
+  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
   // Relaciones
   vehicles Vehicle[]
 
+  @@unique([tenantId, slug])
+  @@index([tenantId])
   @@map("vehicle_statuses")
 }
 
@@ -125,9 +131,29 @@ model BodyType {
   updatedAt DateTime @updatedAt
 
   // Relaciones
-  vehicles Vehicle[]
+  vehicles     Vehicle[]
+  bodySubtypes BodySubtype[]
 
   @@map("body_types")
+}
+
+// Subtipo de Carrocería (relacionado con BodyType)
+model BodySubtype {
+  id         String   @id @default(uuid())
+  slug       String   @unique
+  title      String
+  isActive   Boolean  @default(true)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  // Relación con BodyType
+  bodyTypeId String
+  bodyType   BodyType @relation(fields: [bodyTypeId], references: [id])
+
+  // Relaciones
+  vehicles Vehicle[]
+
+  @@map("body_subtypes")
 }
 
 // Tipo de Combustible (Gasoline, Diesel, Electric, etc.)
@@ -175,8 +201,8 @@ model TransmissionType {
   @@map("transmission_types")
 }
 
-// Origen del Vehículo (Auction, Trade-In, Private Party, Dealer, etc.)
-model VehicleSource {
+// Marca del Título (Clean, Salvage, Rebuilt, Junk, Flood, Lemon, etc.)
+model TitleBrand {
   id        String   @id @default(uuid())
   slug      String   @unique
   title     String
@@ -187,6 +213,42 @@ model VehicleSource {
   // Relaciones
   vehicles Vehicle[]
 
+  @@map("title_brands")
+}
+
+// Unidad de Millaje (Miles, Kilometers)
+model MileageUnit {
+  id        String   @id @default(uuid())
+  slug      String   @unique
+  title     String
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relaciones
+  vehicles Vehicle[]
+
+  @@map("mileage_units")
+}
+
+// Origen del Vehículo (Auction, Trade-In, Private Party, Dealer, etc.)
+model VehicleSource {
+  id        String   @id @default(uuid())
+  slug      String
+  title     String
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Multi-tenancy (null = global, tenantId = custom for tenant)
+  tenantId String?
+  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  // Relaciones
+  vehicles Vehicle[]
+
+  @@unique([tenantId, slug])
+  @@index([tenantId])
   @@map("vehicle_sources")
 }
 
@@ -205,48 +267,63 @@ model InspectionStatus {
 // Tipo de Actividad (Note, Task, Call, Email, etc.)
 model ActivityType {
   id        String   @id @default(uuid())
-  slug      String   @unique
+  slug      String
   title     String
   isActive  Boolean  @default(true)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  // Multi-tenancy (null = global, tenantId = custom for tenant)
+  tenantId String?
+  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  // Relaciones
+  activities Activity[]
+
+  @@unique([tenantId, slug])
+  @@index([tenantId])
   @@map("activity_types")
 }
 
 // Estado de Actividad (Created, Completed, Cancelled, etc.)
 model ActivityStatus {
   id        String   @id @default(uuid())
-  slug      String   @unique
+  slug      String
   title     String
   isActive  Boolean  @default(true)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  // Multi-tenancy (null = global, tenantId = custom for tenant)
+  tenantId String?
+  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  // Relaciones
+  activities Activity[]
+
+  @@unique([tenantId, slug])
+  @@index([tenantId])
   @@map("activity_statuses")
-}
-
-// Rol de Usuario (Admin, Manager, Salesperson, etc.)
-model UserRole {
-  id        String   @id @default(uuid())
-  slug      String   @unique
-  title     String
-  isActive  Boolean  @default(true)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  @@map("user_roles")
 }
 
 // Fuente de Lead (Lead Source - Social Media & Marketplaces)
 model LeadSource {
   id        String   @id @default(uuid())
-  slug      String   @unique
+  slug      String
   title     String
   isActive  Boolean  @default(true)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  // Multi-tenancy (null = global, tenantId = custom for tenant)
+  tenantId String?
+  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  // Relaciones
+  leads Lead[]
+
+  @@unique([tenantId, slug])
+  @@index([tenantId])
   @@map("lead_sources")
 }
 
@@ -379,15 +456,21 @@ model Occupation {
 // Estado del Deal (Deal Status)
 model DealStatus {
   id        String   @id @default(uuid())
-  slug      String   @unique // draft, pending, approved, funded, delivered, cancelled
+  slug      String // draft, pending, approved, funded, delivered, cancelled
   title     String
   isActive  Boolean  @default(true)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  // Multi-tenancy (null = global, tenantId = custom for tenant)
+  tenantId String?
+  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
   // Relaciones
   deals Deal[]
 
+  @@unique([tenantId, slug])
+  @@index([tenantId])
   @@map("deal_statuses")
 }
 
@@ -424,6 +507,7 @@ model VehicleYear {
   // Relaciones
   makes    VehicleMake[]
   vehicles Vehicle[]
+  parts    Part[]
 
   @@index([year])
   @@map("vehicle_years")
@@ -447,6 +531,7 @@ model VehicleMake {
   year     VehicleYear    @relation(fields: [yearId], references: [id], onDelete: Cascade)
   models   VehicleModel[]
   vehicles Vehicle[]
+  parts    Part[]
 
   @@unique([yearId, slug])
   @@index([yearId])
@@ -471,6 +556,7 @@ model VehicleModel {
   make     VehicleMake   @relation(fields: [makeId], references: [id], onDelete: Cascade)
   trims    VehicleTrim[]
   vehicles Vehicle[]
+  parts    Part[]
 
   @@unique([makeId, slug])
   @@index([makeId])
@@ -494,6 +580,7 @@ model VehicleTrim {
   // Relaciones
   model    VehicleModel @relation(fields: [modelId], references: [id], onDelete: Cascade)
   vehicles Vehicle[]
+  parts    Part[]
 
   @@unique([modelId, slug])
   @@index([modelId])
@@ -501,9 +588,19 @@ model VehicleTrim {
   @@map("vehicle_trims")
 }
 
-// ============================================
-// MULTI-TENANCY & AUTH
-// ============================================
+// Motor / Engine Type (nomenclador global)
+model VehicleEngine {
+  id        String   @id @default(uuid())
+  title     String
+  slug      String   @unique
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  vehicles Vehicle[]
+
+  @@map("vehicle_engines")
+}
 
 // ============================================
 // MULTI-TENANCY & AUTH
@@ -549,6 +646,26 @@ model Tenant {
   titles        Title[]
   metas         Meta[]
   auditLogs     AuditLog[]
+
+  // Nomencladores personalizables por tenant
+  vehicleStatuses  VehicleStatus[]
+  vehicleSources   VehicleSource[]
+  activityTypes    ActivityType[]
+  activityStatuses ActivityStatus[]
+  leadSources      LeadSource[]
+  dealStatuses     DealStatus[]
+
+  // Nuevos modelos
+  activities         Activity[]
+  leads              Lead[]
+  notifications      Notification[]
+  tenantIntegrations TenantIntegration[]
+
+  // Parts inventory
+  partConditions PartCondition[]
+  partStatuses   PartStatus[]
+  partCategories PartCategory[]
+  parts          Part[]
 
   @@index([slug])
   @@index([isActive])
@@ -653,6 +770,13 @@ model TenantUser {
 
   permissions Json? // Permisos específicos/overrides para este usuario en este tenant
 
+  // Invitation status
+  status           String    @default("pending") // pending, active, suspended
+  invitationCode   String?   @unique // Secret code for invitation verification
+  invitationSentAt DateTime? // When the invitation was sent
+  invitedBy        String? // User ID who sent the invitation
+  acceptedAt       DateTime? // When the user accepted the invitation
+
   isActive  Boolean  @default(true)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -665,6 +789,9 @@ model TenantUser {
   @@index([tenantId])
   @@index([userId])
   @@index([roleId])
+  @@index([status])
+  @@index([invitationCode])
+  @@index([invitedBy])
   @@map("tenant_users")
 }
 
@@ -853,9 +980,10 @@ model Buyer {
   metaValue Json? // Metadata flexible en formato JSON
 
   // Relaciones
-  dealsAsBuyer   Deal[]  @relation("BuyerDeals")
-  dealsAsCoBuyer Deal[]  @relation("CoBuyerDeals")
-  media          Media[] @relation("BuyerMedia")
+  dealsAsBuyer   Deal[]     @relation("BuyerDeals")
+  dealsAsCoBuyer Deal[]     @relation("CoBuyerDeals")
+  media          Media[]    @relation("BuyerMedia")
+  activities     Activity[]
 
   @@index([tenantId])
   @@index([email])
@@ -1090,6 +1218,9 @@ model Deal {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  // Relaciones
+  activities Activity[]
+
   @@index([tenantId])
   @@index([buyerId])
   @@index([coBuyerId])
@@ -1119,13 +1250,13 @@ model Title {
   vehicle   Vehicle @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
 
   // Información del Título
-  titleNumber String  @unique // Número del título
-  titleState  String // Estado que emitió el título (CA, TX, FL, etc.)
+  titleNumber String? // Número del título (ROS / Title)
+  titleState  String? // Estado que emitió el título (CA, TX, FL, etc.)
   titleType   String? // Original, Duplicate, Salvage, Rebuilt, etc.
 
   // Estado del título
-  titleStatusId String
-  titleStatus   TitleStatus @relation(fields: [titleStatusId], references: [id])
+  titleStatusId String?
+  titleStatus   TitleStatus? @relation(fields: [titleStatusId], references: [id])
 
   // Brand del título (Clean, Salvage, Junk, Rebuilt, etc.)
   brandStatusId String?
@@ -1180,6 +1311,16 @@ model Title {
   transferDate      DateTime?
   transferredFrom   String? // Nombre del vendedor anterior
   transferredTo     String? // Nombre del nuevo comprador
+
+  // Title Application Number
+  titleAppNumber String?
+
+  // Front/Back images of the title
+  frontImageId String?
+  frontImage   Media?  @relation("TitleFrontImage", fields: [frontImageId], references: [id])
+
+  backImageId String?
+  backImage   Media?  @relation("TitleBackImage", fields: [backImageId], references: [id])
 
   // Documentos relacionados - Relación con Media
   fileId String? // Archivo del título escaneado
@@ -1240,6 +1381,8 @@ model Title {
   @@index([brandStatusId])
   @@index([hasLien])
   @@index([isPendingTransfer])
+  @@index([frontImageId])
+  @@index([backImageId])
   @@index([fileId])
   @@index([lienReleaseFileId])
   @@index([billOfSaleFileId])
@@ -1296,13 +1439,20 @@ model Media {
   buyer   Buyer?  @relation("BuyerMedia", fields: [buyerId], references: [id], onDelete: Cascade)
 
   // Relaciones con Title (documentos del título)
+  titleAsFrontImage            Title[] @relation("TitleFrontImage")
+  titleAsBackImage             Title[] @relation("TitleBackImage")
   titleAsFile                  Title[] @relation("TitleFile")
   titleAsLienReleaseFile       Title[] @relation("TitleLienReleaseFile")
   titleAsBillOfSaleFile        Title[] @relation("TitleBillOfSaleFile")
   titleAsOdometerStatementFile Title[] @relation("TitleOdometerStatementFile")
 
   // Relaciones con ExtraExpense (recibos)
-  extraExpenseAsReceipt ExtraExpense[] @relation("ExtraExpenseReceipt")
+  extraExpenseReceipts ExtraExpense[] @relation("ExtraExpenseReceipts")
+
+  // Relaciones con Part
+  partId       String?
+  part         Part?   @relation("PartMedia", fields: [partId], references: [id], onDelete: Cascade)
+  partAsMain   Part?   @relation("PartMainImage")
 
   // Metadata
   metaValue Json? // Metadata flexible en formato JSON
@@ -1313,6 +1463,7 @@ model Media {
   @@index([tenantId])
   @@index([vehicleId])
   @@index([buyerId])
+  @@index([partId])
   @@index([mediaType])
   @@index([category])
   @@index([isActive])
@@ -1346,35 +1497,69 @@ model Vehicle {
 
   // Detalles del vehículo
   mileage       Int?
+  mileageUnitId String?
   exteriorColor String?
   interiorColor String?
 
   // Tipos y condiciones (usando nomencladores)
   vehicleTypeId      String?
   bodyTypeId         String?
+  bodySubtypeId      String?
   fuelTypeId         String?
   driveTypeId        String?
   transmissionTypeId String?
   vehicleConditionId String?
   vehicleStatusId    String?
   sourceId           String?
+  titleBrandId       String?
 
   // Relaciones con nomencladores
+  mileageUnit      MileageUnit?      @relation(fields: [mileageUnitId], references: [id])
   vehicleType      VehicleType?      @relation(fields: [vehicleTypeId], references: [id])
   bodyType         BodyType?         @relation(fields: [bodyTypeId], references: [id])
+  bodySubtype      BodySubtype?      @relation(fields: [bodySubtypeId], references: [id])
   fuelType         FuelType?         @relation(fields: [fuelTypeId], references: [id])
   driveType        DriveType?        @relation(fields: [driveTypeId], references: [id])
   transmissionType TransmissionType? @relation(fields: [transmissionTypeId], references: [id])
   vehicleCondition VehicleCondition? @relation(fields: [vehicleConditionId], references: [id])
   vehicleStatus    VehicleStatus?    @relation(fields: [vehicleStatusId], references: [id])
+  titleBrand       TitleBrand?       @relation(fields: [titleBrandId], references: [id])
   source           VehicleSource?    @relation(fields: [sourceId], references: [id])
 
-  // Precios
-  costPrice Decimal? @db.Decimal(10, 2) // Costo del vehículo
-  listPrice Decimal? @db.Decimal(10, 2) // Precio de lista
-  salePrice Decimal? @db.Decimal(10, 2) // Precio de venta actual
+  // Precios (legacy - kept for backward compat)
+  costPrice Decimal? @db.Decimal(10, 2)
+  listPrice Decimal? @db.Decimal(10, 2)
+  salePrice Decimal? @db.Decimal(10, 2)
+
+  // Cost Info
+  vehicleCost  Decimal?  @db.Decimal(10, 2)
+  purchaseDate DateTime?
+
+  // Retail Pricing
+  askingPrice           Decimal?  @db.Decimal(10, 2)
+  advertisingPrice      Decimal?  @db.Decimal(10, 2)
+  specialPrice          Decimal?  @db.Decimal(10, 2)
+  specialPriceStartDate DateTime?
+  specialPriceEndDate   DateTime?
+  msrp                  Decimal?  @db.Decimal(10, 2)
+  minDownType           String?   // "percent" | "fixed"
+  minDownPercent        Decimal?  @db.Decimal(5, 2)
+  minDownAmount         Decimal?  @db.Decimal(10, 2)
+  minDepositType        String?   // "percent" | "fixed"
+  minDepositPercent     Decimal?  @db.Decimal(5, 2)
+  minDepositAmount      Decimal?  @db.Decimal(10, 2)
+
+  // Wholesale Pricing
+  wholesalePrice      Decimal? @db.Decimal(10, 2)
+  floorPrice          Decimal? @db.Decimal(10, 2)
+  buyNowPrice         Decimal? @db.Decimal(10, 2)
+  startBid            Decimal? @db.Decimal(10, 2)
+  startBidEqualsFloor Boolean  @default(false)
+  bidIncrement        Decimal? @db.Decimal(10, 2)
 
   // Motor y especificaciones
+  engineId   String?
+  vehicleEngine VehicleEngine? @relation(fields: [engineId], references: [id])
   engine     String?
   cylinders  Int?
   doors      Int?
@@ -1396,9 +1581,12 @@ model Vehicle {
   updatedAt DateTime @updatedAt
 
   // Relaciones
-  deals         Deal[]
-  titles        Title[] // Un vehículo puede tener múltiples títulos
-  extraExpenses ExtraExpense[] // Gastos extras del vehículo
+  deals           Deal[]
+  titles          Title[] // Un vehículo puede tener múltiples títulos
+  extraExpenses   ExtraExpense[] // Gastos extras del vehículo
+  activities      Activity[]
+  leadsInterested Lead[]         @relation("LeadInterestedVehicle")
+  partsExtracted  Part[]         @relation("PartSourceVehicle") // Partes extraídas de este vehículo
 
   @@index([tenantId])
   @@index([vin])
@@ -1432,9 +1620,8 @@ model ExtraExpense {
   description String
   price       Decimal @db.Decimal(10, 2)
 
-  // Recibo escaneado - Relación con Media
-  receiptId String?
-  receipt   Media?  @relation("ExtraExpenseReceipt", fields: [receiptId], references: [id])
+  // Recibos escaneados - Relación many-to-many con Media
+  receipts Media[] @relation("ExtraExpenseReceipts")
 
   // Metadata
   metaValue Json? // Metadata flexible en formato JSON
@@ -1444,7 +1631,6 @@ model ExtraExpense {
 
   @@index([tenantId])
   @@index([vehicleId])
-  @@index([receiptId])
   @@map("extra_expenses")
 }
 
@@ -1555,4 +1741,480 @@ model AuditLog {
   @@index([createdAt])
   @@index([ipAddress])
   @@map("audit_logs")
+}
+
+// ============================================
+// ACTIVITY - Notas, tareas, llamadas, emails
+// ============================================
+model Activity {
+  id String @id @default(uuid())
+
+  // Multi-tenancy
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  // Tipo y estado de actividad
+  activityTypeId   String
+  activityType     ActivityType   @relation(fields: [activityTypeId], references: [id])
+  activityStatusId String
+  activityStatus   ActivityStatus @relation(fields: [activityStatusId], references: [id])
+
+  // Contenido
+  subject     String? // Asunto de la actividad
+  description String? // Descripción o contenido de la nota/tarea
+  notes       String? // Notas adicionales
+
+  // Relación polimórfica - la actividad puede estar asociada a diferentes entidades
+  entityType String? // 'buyer', 'deal', 'vehicle', 'lead'
+  entityId   String? // ID de la entidad asociada
+
+  // Relaciones directas (opcionales, para queries más eficientes)
+  buyerId   String?
+  buyer     Buyer?   @relation(fields: [buyerId], references: [id], onDelete: SetNull)
+  dealId    String?
+  deal      Deal?    @relation(fields: [dealId], references: [id], onDelete: SetNull)
+  vehicleId String?
+  vehicle   Vehicle? @relation(fields: [vehicleId], references: [id], onDelete: SetNull)
+  leadId    String?
+  lead      Lead?    @relation(fields: [leadId], references: [id], onDelete: SetNull)
+  partId    String?
+  part      Part?    @relation("PartActivities", fields: [partId], references: [id], onDelete: SetNull)
+
+  // Asignación
+  assignedToId String? // Usuario asignado (TenantUser ID)
+  createdById  String? // Usuario que creó la actividad
+
+  // Fechas
+  dueDate       DateTime? // Fecha límite para tareas
+  reminderDate  DateTime? // Recordatorio
+  completedAt   DateTime? // Fecha de completado
+  completedById String? // Usuario que completó
+
+  // Para llamadas
+  callDuration  Int? // Duración en segundos
+  callDirection String? // inbound, outbound
+  phoneNumber   String? // Número de teléfono
+
+  // Para emails
+  emailFrom    String?
+  emailTo      String?
+  emailSubject String?
+
+  // Prioridad
+  priority String @default("normal") // low, normal, high, urgent
+
+  // Metadata
+  metaValue Json?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([tenantId])
+  @@index([activityTypeId])
+  @@index([activityStatusId])
+  @@index([entityType, entityId])
+  @@index([buyerId])
+  @@index([dealId])
+  @@index([vehicleId])
+  @@index([leadId])
+  @@index([partId])
+  @@index([assignedToId])
+  @@index([createdById])
+  @@index([dueDate])
+  @@index([priority])
+  @@map("activities")
+}
+
+// ============================================
+// LEAD - Prospecto/Oportunidad de venta
+// ============================================
+model Lead {
+  id String @id @default(uuid())
+
+  // Multi-tenancy
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  // Información de contacto
+  firstName String
+  lastName  String
+  email     String?
+  phone     String?
+  phoneAlt  String?
+
+  // Fuente del lead
+  leadSourceId String?
+  leadSource   LeadSource? @relation(fields: [leadSourceId], references: [id])
+
+  // Estado del lead (pipeline stage)
+  stage String @default("new") // new, contacted, qualified, proposal, negotiation, won, lost
+
+  // Vehículo de interés
+  interestedVehicleId String?
+  interestedVehicle   Vehicle? @relation("LeadInterestedVehicle", fields: [interestedVehicleId], references: [id], onDelete: SetNull)
+
+  // Preferencias del cliente
+  preferredYear     Int?
+  preferredMake     String?
+  preferredModel    String?
+  preferredPriceMin Decimal? @db.Decimal(10, 2)
+  preferredPriceMax Decimal? @db.Decimal(10, 2)
+  preferredBodyType String?
+  preferredFuelType String?
+
+  // Información financiera
+  budget             Decimal? @db.Decimal(10, 2)
+  downPaymentAmount  Decimal? @db.Decimal(10, 2)
+  hasTradeIn         Boolean  @default(false)
+  tradeInDescription String?
+  creditScore        Int?
+
+  // Asignación
+  assignedToId String? // Vendedor asignado (TenantUser ID)
+
+  // Conversión
+  convertedToBuyerId String? // Si se convierte en buyer
+  convertedToDealId  String? // Si se convierte en deal
+  convertedAt        DateTime?
+
+  // Motivo de pérdida
+  lostReason String?
+  lostAt     DateTime?
+
+  // Notas
+  notes         String?
+  internalNotes String?
+
+  // Fechas de seguimiento
+  nextFollowUpDate DateTime?
+  lastContactedAt  DateTime?
+
+  // Metadata
+  source    String? // website, walk-in, phone, referral, social
+  ipAddress String?
+  userAgent String?
+  metaValue Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relaciones
+  activities Activity[]
+
+  @@index([tenantId])
+  @@index([leadSourceId])
+  @@index([stage])
+  @@index([assignedToId])
+  @@index([interestedVehicleId])
+  @@index([email])
+  @@index([phone])
+  @@index([lastName, firstName])
+  @@index([nextFollowUpDate])
+  @@index([createdAt])
+  @@map("leads")
+}
+
+// ============================================
+// NOTIFICATION - Notificaciones del sistema
+// ============================================
+model Notification {
+  id String @id @default(uuid())
+
+  // Multi-tenancy
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  // Destinatario
+  userId String // Usuario destinatario (User ID)
+
+  // Contenido
+  title   String
+  message String
+  type    String // info, success, warning, error, reminder, task, lead, deal
+
+  // Referencia a entidad relacionada
+  entityType String? // 'lead', 'deal', 'activity', 'buyer', 'vehicle'
+  entityId   String?
+
+  // URL de acción
+  actionUrl String?
+
+  // Estado
+  isRead   Boolean   @default(false)
+  readAt   DateTime?
+  priority String    @default("normal") // low, normal, high, urgent
+
+  // Canales de envío
+  sentViaEmail Boolean @default(false)
+  sentViaPush  Boolean @default(false)
+  sentViaSms   Boolean @default(false)
+
+  // Metadata
+  metaValue Json?
+  createdAt DateTime @default(now())
+
+  @@index([tenantId])
+  @@index([userId])
+  @@index([type])
+  @@index([isRead])
+  @@index([priority])
+  @@index([createdAt])
+  @@map("notifications")
+}
+
+// ============================================
+// TENANT INTEGRATION - Integraciones externas por tenant
+// ============================================
+model TenantIntegration {
+  id String @id @default(uuid())
+
+  // Multi-tenancy
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  // Información de la integración
+  provider    String // dealertrack, routeone, cudl, carfax, autocheck, etc.
+  name        String // Nombre descriptivo
+  description String?
+
+  // Credenciales (encriptadas)
+  credentials Json? // { apiKey, apiSecret, username, password, etc. }
+
+  // Configuración
+  config   Json? // Configuración específica del provider
+  settings Json? // Preferencias del tenant para esta integración
+
+  // URLs
+  baseUrl     String?
+  webhookUrl  String?
+  callbackUrl String?
+
+  // Estado
+  isActive     Boolean   @default(true)
+  isConfigured Boolean   @default(false)
+  lastSyncAt   DateTime?
+  lastErrorAt  DateTime?
+  lastErrorMsg String?
+
+  // Límites y uso
+  rateLimit     Int? // Límite de requests por hora
+  requestsToday Int  @default(0)
+  requestsMonth Int  @default(0)
+
+  // Metadata
+  metaValue Json?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([tenantId, provider])
+  @@index([tenantId])
+  @@index([provider])
+  @@index([isActive])
+  @@map("tenant_integrations")
+}
+
+// ============================================
+// PARTS INVENTORY - Inventario de partes de autos
+// ============================================
+
+// Condición de la Parte (New, Used, Rebuilt, Refurbished, etc.)
+model PartCondition {
+  id        String   @id @default(uuid())
+  slug      String
+  title     String
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Multi-tenancy (null = global, tenantId = custom for tenant)
+  tenantId String?
+  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  // Relaciones
+  parts Part[]
+
+  @@unique([tenantId, slug])
+  @@index([tenantId])
+  @@map("part_conditions")
+}
+
+// Estado de la Parte (In Stock, Sold, Reserved, On Hold, Damaged, etc.)
+model PartStatus {
+  id        String   @id @default(uuid())
+  slug      String
+  title     String
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Multi-tenancy (null = global, tenantId = custom for tenant)
+  tenantId String?
+  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  // Relaciones
+  parts Part[]
+
+  @@unique([tenantId, slug])
+  @@index([tenantId])
+  @@map("part_statuses")
+}
+
+// Categoría de la Parte (Engine, Transmission, Body, Interior, Electrical, etc.)
+model PartCategory {
+  id          String   @id @default(uuid())
+  slug        String
+  title       String
+  description String?
+  parentId    String? // Para subcategorías
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Multi-tenancy (null = global, tenantId = custom for tenant)
+  tenantId String?
+  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  // Relaciones
+  parent   PartCategory?  @relation("PartCategoryHierarchy", fields: [parentId], references: [id], onDelete: SetNull)
+  children PartCategory[] @relation("PartCategoryHierarchy")
+  parts    Part[]
+
+  @@unique([tenantId, slug])
+  @@index([tenantId])
+  @@index([parentId])
+  @@map("part_categories")
+}
+
+// Parte de Auto - Inventario principal
+model Part {
+  id String @id @default(uuid())
+
+  // Multi-tenancy
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  // Información básica
+  name        String // Nombre de la parte
+  partNumber  String? // Número de parte (OEM o aftermarket)
+  sku         String? // SKU interno
+  description String? // Descripción detallada
+  notes       String? // Notas internas
+
+  // Categoría
+  categoryId String?
+  category   PartCategory? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+
+  // Condición y Estado
+  conditionId String
+  condition   PartCondition @relation(fields: [conditionId], references: [id])
+  statusId    String
+  status      PartStatus    @relation(fields: [statusId], references: [id])
+
+  // Precios
+  cost  Decimal? @db.Decimal(10, 2) // Costo de adquisición
+  price Decimal  @db.Decimal(10, 2) // Precio de venta
+
+  // Inventario
+  quantity         Int     @default(1) // Cantidad en stock
+  minQuantity      Int     @default(0) // Cantidad mínima para alerta
+  location         String? // Ubicación en almacén (estante, bin, etc.)
+  warehouseSection String? // Sección del almacén
+
+  // Compatibilidad del vehículo (de qué vehículo viene o para qué vehículos es compatible)
+  yearId  String?
+  year    VehicleYear? @relation(fields: [yearId], references: [id], onDelete: SetNull)
+  makeId  String?
+  make    VehicleMake? @relation(fields: [makeId], references: [id], onDelete: SetNull)
+  modelId String?
+  model   VehicleModel? @relation(fields: [modelId], references: [id], onDelete: SetNull)
+  trimId  String?
+  trim    VehicleTrim? @relation(fields: [trimId], references: [id], onDelete: SetNull)
+
+  // Información del vehículo de origen (si es parte usada)
+  sourceVin    String? // VIN del vehículo de donde se extrajo
+  sourceMiles  Int? // Millaje del vehículo de origen
+  sourceVehicleId String? // Referencia al vehículo de origen si está en el sistema
+  sourceVehicle   Vehicle? @relation("PartSourceVehicle", fields: [sourceVehicleId], references: [id], onDelete: SetNull)
+
+  // Imágenes
+  mainImageId String? @unique // ID de imagen principal
+  mainImage   Media?  @relation("PartMainImage", fields: [mainImageId], references: [id], onDelete: SetNull)
+
+  // Dimensiones y peso (para envío)
+  weight Decimal? @db.Decimal(8, 2) // Peso en libras
+  length Decimal? @db.Decimal(8, 2) // Largo en pulgadas
+  width  Decimal? @db.Decimal(8, 2) // Ancho en pulgadas
+  height Decimal? @db.Decimal(8, 2) // Alto en pulgadas
+
+  // Garantía
+  warrantyDays Int? // Días de garantía
+  warrantyNotes String? // Notas de garantía
+
+  // Proveedor/Origen
+  supplier     String? // Nombre del proveedor
+  supplierPartNumber String? // Número de parte del proveedor
+  purchaseDate DateTime? // Fecha de compra/adquisición
+  purchaseOrderNumber String? // Número de orden de compra
+
+  // Información adicional
+  brand        String? // Marca de la parte (OEM, Aftermarket brand)
+  manufacturer String? // Fabricante
+  countryOfOrigin String? // País de origen
+  isOem        Boolean @default(false) // Es parte OEM original
+  isAftermarket Boolean @default(false) // Es parte aftermarket
+
+  // Venta
+  soldAt       DateTime? // Fecha de venta
+  soldToId     String? // Buyer ID si se vendió
+  soldPrice    Decimal? @db.Decimal(10, 2) // Precio de venta final
+  soldDealId   String? // Deal ID si fue parte de un deal
+
+  // Metadata
+  metaValue Json?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relaciones adicionales
+  media      Media[]    @relation("PartMedia") // Galería de imágenes
+  activities Activity[] @relation("PartActivities") // Actividades relacionadas
+
+  @@index([tenantId])
+  @@index([partNumber])
+  @@index([sku])
+  @@index([categoryId])
+  @@index([conditionId])
+  @@index([statusId])
+  @@index([yearId, makeId, modelId])
+  @@index([sourceVin])
+  @@index([sourceVehicleId])
+  @@index([name])
+  @@index([price])
+  @@index([quantity])
+  @@index([createdAt])
+  @@map("parts")
+}
+
+model UploadSession {
+  id        String   @id @default(uuid())
+  token     String   @unique
+  expiresAt DateTime
+  used      Boolean  @default(false)
+  closed    Boolean  @default(false)
+
+  // Context
+  entityType String // "vehicle", "expense", "buyer", "part"
+  entityId   String
+  mediaType  String  @default("image")
+  category   String?
+  isPublic   Boolean @default(true)
+
+  // Owner
+  userId   String
+  tenantId String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([token])
+  @@index([expiresAt])
+  @@map("upload_sessions")
 }

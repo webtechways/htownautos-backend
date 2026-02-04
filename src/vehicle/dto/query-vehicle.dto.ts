@@ -131,12 +131,20 @@ export class QueryVehicleDto {
   sourceId?: string;
 
   @ApiPropertyOptional({
+    description: 'Filter by title brand ID',
+  })
+  @IsOptional()
+  @IsUUID()
+  titleBrandId?: string;
+
+  @ApiPropertyOptional({
     description: 'Minimum mileage',
     example: 0,
   })
   @IsOptional()
   @IsInt()
   @Min(0)
+  @Max(2147483647)
   @Type(() => Number)
   minMileage?: number;
 
@@ -147,6 +155,7 @@ export class QueryVehicleDto {
   @IsOptional()
   @IsInt()
   @Min(0)
+  @Max(2147483647)
   @Type(() => Number)
   maxMileage?: number;
 
@@ -155,6 +164,8 @@ export class QueryVehicleDto {
     example: 10000,
   })
   @IsOptional()
+  @Min(0)
+  @Max(2147483647)
   @Type(() => Number)
   minPrice?: number;
 
@@ -163,6 +174,8 @@ export class QueryVehicleDto {
     example: 50000,
   })
   @IsOptional()
+  @Min(0)
+  @Max(2147483647)
   @Type(() => Number)
   maxPrice?: number;
 

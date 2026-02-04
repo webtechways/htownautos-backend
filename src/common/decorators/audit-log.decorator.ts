@@ -8,6 +8,7 @@ export interface AuditLogMetadata {
   level: 'low' | 'medium' | 'high' | 'critical'; // Nivel de sensibilidad
   pii: boolean; // Personally Identifiable Information
   compliance?: string[]; // ['routeone', 'dealertrack', 'glba', 'ofac']
+  trackChanges?: boolean; // When true, fetch old record and compute field-level diff
 }
 
 /**

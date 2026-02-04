@@ -1,10 +1,12 @@
 import {
   Injectable,
+  Logger,
   NotFoundException,
   ConflictException,
   BadRequestException,
   Request,
 } from '@nestjs/common';
+import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '../prisma.service';
 import { CreateVehicleYearDto } from './dto/create-vehicle-year.dto';
 import { UpdateVehicleYearDto } from './dto/update-vehicle-year.dto';
@@ -17,7 +19,30 @@ import { VehicleYearEntity } from './entities/vehicle-year.entity';
 
 @Injectable()
 export class VehicleYearService {
+  private readonly logger = new Logger(VehicleYearService.name);
+
   constructor(private readonly prisma: PrismaService) { }
+
+  /**
+   * Runs every January 1st at 00:05 — adds next year to the DB
+   */
+  @Cron('5 0 1 1 *')
+  async handleNewYearCron() {
+    const nextYear = new Date().getFullYear() + 1;
+    this.logger.log(`[Cron] Ensuring year ${nextYear} exists in DB`);
+    await this.ensureYearExists(nextYear);
+  }
+
+  async ensureYearExists(year: number): Promise<void> {
+    try {
+      await this.prisma.vehicleYear.create({
+        data: { year, isActive: true },
+      });
+      this.logger.log(`Year ${year} added to DB`);
+    } catch {
+      // Already exists
+    }
+  }
 
   async create(
     createVehicleYearDto: CreateVehicleYearDto,
@@ -76,6 +101,10 @@ export class VehicleYearService {
 
     // Calculate skip
     const skip = (page - 1) * limit;
+
+    // Ensure next year always exists
+    const nextYear = new Date().getFullYear() + 1;
+    await this.ensureYearExists(nextYear);
 
     // Execute queries in parallel
     const [data, total] = await Promise.all([

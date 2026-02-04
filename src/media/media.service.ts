@@ -1,14 +1,19 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma.service';
-import { S3Service, UploadResult } from './s3.service';
+import { S3Service, UploadResult, PresignResult } from './s3.service';
 import { CreateMediaDto } from './dto/create-media.dto';
 import { UpdateMediaDto } from './dto/update-media.dto';
 import { QueryMediaDto } from './dto/query-media.dto';
+import { PresignMediaDto } from './dto/presign-media.dto';
+import { ConfirmMediaDto } from './dto/confirm-media.dto';
 import { MediaEntity } from './entities/media.entity';
 import { PaginatedResponseDto } from '../common/dto/paginated-response.dto';
 
 @Injectable()
 export class MediaService {
+  private readonly logger = new Logger(MediaService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly s3Service: S3Service,
@@ -18,33 +23,29 @@ export class MediaService {
     file: Express.Multer.File,
     createMediaDto: CreateMediaDto,
   ): Promise<MediaEntity> {
-    if (!file) {
-      throw new BadRequestException('No file provided');
-    }
-
     // Verify vehicleId exists if provided
     if (createMediaDto.vehicleId) {
-      const vehicleExists = await this.prisma.getModel('vehicle').findUnique({
+      const exists = await this.prisma.vehicle.findUnique({
         where: { id: createMediaDto.vehicleId },
+        select: { id: true },
       });
-
-      if (!vehicleExists) {
+      if (!exists) {
         throw new NotFoundException(`Vehicle with ID ${createMediaDto.vehicleId} not found`);
       }
     }
 
     // Verify buyerId exists if provided
     if (createMediaDto.buyerId) {
-      const buyerExists = await this.prisma.getModel('buyer').findUnique({
+      const exists = await this.prisma.buyer.findUnique({
         where: { id: createMediaDto.buyerId },
+        select: { id: true },
       });
-
-      if (!buyerExists) {
+      if (!exists) {
         throw new NotFoundException(`Buyer with ID ${createMediaDto.buyerId} not found`);
       }
     }
 
-    // IMPORTANT: If buyerId is provided, ALWAYS set isPublic to false (buyer media is private)
+    // If buyerId is provided, ALWAYS set isPublic to false (buyer media is private)
     const isPrivate = !!createMediaDto.buyerId || !(createMediaDto.isPublic ?? true);
 
     // Determine folder based on association
@@ -55,33 +56,161 @@ export class MediaService {
       folder = `vehicles/${createMediaDto.vehicleId}`;
     }
 
-    // Upload file to S3 with appropriate ACL
+    // Upload file to S3
     const uploadResult: UploadResult = await this.s3Service.uploadFile(file, folder, isPrivate);
 
-    // Create media record in database
-    const media = await this.prisma.getModel('media').create({
-      data: {
-        filename: file.originalname,
-        url: uploadResult.url,
-        path: uploadResult.key,
-        mimeType: uploadResult.mimeType,
-        size: uploadResult.size,
-        mediaType: createMediaDto.mediaType,
-        category: createMediaDto.category,
-        title: createMediaDto.title,
-        description: createMediaDto.description,
-        alt: createMediaDto.alt,
-        storageProvider: 's3',
-        storageBucket: uploadResult.bucket,
-        storageKey: uploadResult.key,
-        isPublic: !isPrivate, // Set based on privacy determination
-        isActive: true,
-        ...(createMediaDto.vehicleId && { vehicleId: createMediaDto.vehicleId }),
-        ...(createMediaDto.buyerId && { buyerId: createMediaDto.buyerId }),
-      },
-    });
+    // Create media record — clean up S3 if DB write fails
+    try {
+      const media = await this.prisma.media.create({
+        data: {
+          filename: file.originalname,
+          url: uploadResult.url,
+          path: uploadResult.key,
+          mimeType: uploadResult.mimeType,
+          size: uploadResult.size,
+          mediaType: createMediaDto.mediaType,
+          category: createMediaDto.category,
+          title: createMediaDto.title,
+          description: createMediaDto.description,
+          alt: createMediaDto.alt,
+          storageProvider: 's3',
+          storageBucket: uploadResult.bucket,
+          storageKey: uploadResult.key,
+          isPublic: !isPrivate,
+          isActive: true,
+          ...(createMediaDto.vehicleId && { vehicleId: createMediaDto.vehicleId }),
+          ...(createMediaDto.buyerId && { buyerId: createMediaDto.buyerId }),
+        },
+      });
 
-    return new MediaEntity(media);
+      return new MediaEntity(media);
+    } catch (error) {
+      // DB create failed — remove orphaned S3 file
+      this.logger.warn(`DB create failed, cleaning up S3 key: ${uploadResult.key}`);
+      try {
+        await this.s3Service.deleteFile(uploadResult.key);
+      } catch (cleanupErr) {
+        this.logger.error(`Failed to clean up orphaned S3 file: ${uploadResult.key}`, cleanupErr);
+      }
+      throw error;
+    }
+  }
+
+  /** Step 1: Generate presigned PUT URL for direct client-to-S3 upload */
+  async presign(dto: PresignMediaDto): Promise<PresignResult> {
+    if (dto.vehicleId) {
+      const exists = await this.prisma.vehicle.findUnique({
+        where: { id: dto.vehicleId },
+        select: { id: true },
+      });
+      if (!exists) {
+        throw new NotFoundException(`Vehicle with ID ${dto.vehicleId} not found`);
+      }
+    }
+
+    if (dto.buyerId) {
+      const exists = await this.prisma.buyer.findUnique({
+        where: { id: dto.buyerId },
+        select: { id: true },
+      });
+      if (!exists) {
+        throw new NotFoundException(`Buyer with ID ${dto.buyerId} not found`);
+      }
+    }
+
+    const isPrivate = !!dto.buyerId || !(dto.isPublic ?? true);
+
+    let folder = 'uploads';
+    if (dto.buyerId) {
+      folder = `buyers/${dto.buyerId}`;
+    } else if (dto.vehicleId) {
+      folder = `vehicles/${dto.vehicleId}`;
+    }
+
+    const fileExtension = dto.filename.split('.').pop() || 'bin';
+
+    return this.s3Service.generatePresignedPutUrl(
+      folder,
+      fileExtension,
+      dto.contentType,
+      isPrivate,
+    );
+  }
+
+  /** Step 2: Confirm upload — verify file in S3, create DB record */
+  async confirmUpload(dto: ConfirmMediaDto): Promise<MediaEntity> {
+    // Verify file exists in S3
+    const head = await this.s3Service.headObject(dto.key);
+    if (!head.exists) {
+      throw new BadRequestException('File not found in S3. Upload may have failed.');
+    }
+
+    // Validate size matches (tolerance: S3 ContentLength must be ≤ 10MB)
+    const maxSize = 10 * 1024 * 1024;
+    if (head.contentLength > maxSize) {
+      this.logger.warn(`File exceeds max size, deleting: ${dto.key} (${head.contentLength} bytes)`);
+      await this.s3Service.deleteFile(dto.key);
+      throw new BadRequestException(`File exceeds maximum size of 10MB`);
+    }
+
+    // Validate vehicleId/buyerId exist
+    if (dto.vehicleId) {
+      const exists = await this.prisma.vehicle.findUnique({
+        where: { id: dto.vehicleId },
+        select: { id: true },
+      });
+      if (!exists) {
+        throw new NotFoundException(`Vehicle with ID ${dto.vehicleId} not found`);
+      }
+    }
+
+    if (dto.buyerId) {
+      const exists = await this.prisma.buyer.findUnique({
+        where: { id: dto.buyerId },
+        select: { id: true },
+      });
+      if (!exists) {
+        throw new NotFoundException(`Buyer with ID ${dto.buyerId} not found`);
+      }
+    }
+
+    const isPrivate = !!dto.buyerId || !(dto.isPublic ?? true);
+    const publicUrl = this.s3Service.buildPublicUrl(dto.key);
+
+    // Create media record — clean up S3 if DB write fails
+    try {
+      const media = await this.prisma.media.create({
+        data: {
+          filename: dto.filename,
+          url: publicUrl,
+          path: dto.key,
+          mimeType: dto.contentType,
+          size: head.contentLength,
+          mediaType: dto.mediaType,
+          category: dto.category,
+          title: dto.title,
+          description: dto.description,
+          alt: dto.alt,
+          storageProvider: 's3',
+          storageBucket: process.env.AWS_S3_BUCKET || '',
+          storageKey: dto.key,
+          isPublic: !isPrivate,
+          isActive: true,
+          ...(dto.vehicleId && { vehicleId: dto.vehicleId }),
+          ...(dto.buyerId && { buyerId: dto.buyerId }),
+        },
+      });
+
+      return new MediaEntity(media);
+    } catch (error) {
+      this.logger.warn(`DB create failed, cleaning up S3 key: ${dto.key}`);
+      try {
+        await this.s3Service.deleteFile(dto.key);
+      } catch (cleanupErr) {
+        this.logger.error(`Failed to clean up orphaned S3 file: ${dto.key}`, cleanupErr);
+      }
+      throw error;
+    }
   }
 
   async findAll(query: QueryMediaDto): Promise<PaginatedResponseDto<MediaEntity>> {
@@ -89,58 +218,48 @@ export class MediaService {
 
     const skip = (page - 1) * limit;
 
-    const where: any = {};
+    const where: Prisma.MediaWhereInput = {};
 
     if (vehicleId !== undefined) {
-      const vehicleExists = await this.prisma.getModel('vehicle').findUnique({
+      const exists = await this.prisma.vehicle.findUnique({
         where: { id: vehicleId },
+        select: { id: true },
       });
-
-      if (!vehicleExists) {
+      if (!exists) {
         throw new NotFoundException(`Vehicle with ID ${vehicleId} not found`);
       }
-
       where.vehicleId = vehicleId;
     }
 
     if (buyerId !== undefined) {
-      const buyerExists = await this.prisma.getModel('buyer').findUnique({
+      const exists = await this.prisma.buyer.findUnique({
         where: { id: buyerId },
+        select: { id: true },
       });
-
-      if (!buyerExists) {
+      if (!exists) {
         throw new NotFoundException(`Buyer with ID ${buyerId} not found`);
       }
-
       where.buyerId = buyerId;
     }
 
-    if (mediaType !== undefined) {
-      where.mediaType = mediaType;
-    }
-
-    if (category !== undefined) {
-      where.category = category;
-    }
-
-    if (isActive !== undefined) {
-      where.isActive = isActive;
-    }
+    if (mediaType !== undefined) where.mediaType = mediaType;
+    if (category !== undefined) where.category = category;
+    if (isActive !== undefined) where.isActive = isActive;
 
     const [data, total] = await Promise.all([
-      this.prisma.getModel('media').findMany({
+      this.prisma.media.findMany({
         where,
         skip,
         take: limit,
         orderBy: { createdAt: 'desc' },
       }),
-      this.prisma.getModel('media').count({ where }),
+      this.prisma.media.count({ where }),
     ]);
 
     const totalPages = Math.ceil(total / limit);
 
     return {
-      data: data.map((item: any) => new MediaEntity(item)),
+      data: data.map((item) => new MediaEntity(item)),
       meta: {
         page,
         limit,
@@ -153,7 +272,7 @@ export class MediaService {
   }
 
   async findOne(id: string): Promise<MediaEntity> {
-    const media = await this.prisma.getModel('media').findUnique({
+    const media = await this.prisma.media.findUnique({
       where: { id },
     });
 
@@ -165,7 +284,7 @@ export class MediaService {
   }
 
   async update(id: string, updateMediaDto: UpdateMediaDto): Promise<MediaEntity> {
-    const existingMedia = await this.prisma.getModel('media').findUnique({
+    const existingMedia = await this.prisma.media.findUnique({
       where: { id },
     });
 
@@ -175,31 +294,31 @@ export class MediaService {
 
     // If vehicleId is being changed, verify it exists
     if (updateMediaDto.vehicleId && updateMediaDto.vehicleId !== existingMedia.vehicleId) {
-      const vehicleExists = await this.prisma.getModel('vehicle').findUnique({
+      const exists = await this.prisma.vehicle.findUnique({
         where: { id: updateMediaDto.vehicleId },
+        select: { id: true },
       });
-
-      if (!vehicleExists) {
+      if (!exists) {
         throw new NotFoundException(`Vehicle with ID ${updateMediaDto.vehicleId} not found`);
       }
     }
 
     // If buyerId is being changed, verify it exists
     if (updateMediaDto.buyerId && updateMediaDto.buyerId !== existingMedia.buyerId) {
-      const buyerExists = await this.prisma.getModel('buyer').findUnique({
+      const exists = await this.prisma.buyer.findUnique({
         where: { id: updateMediaDto.buyerId },
+        select: { id: true },
       });
-
-      if (!buyerExists) {
+      if (!exists) {
         throw new NotFoundException(`Buyer with ID ${updateMediaDto.buyerId} not found`);
       }
     }
 
-    // IMPORTANT: If buyerId is provided or exists, media must be private
+    // If buyerId is provided or exists, media must be private
     const forcePrivate = updateMediaDto.buyerId || existingMedia.buyerId;
     const finalIsPublic = forcePrivate ? false : (updateMediaDto.isPublic ?? existingMedia.isPublic);
 
-    const updated = await this.prisma.getModel('media').update({
+    const updated = await this.prisma.media.update({
       where: { id },
       data: {
         ...(updateMediaDto.title !== undefined && { title: updateMediaDto.title }),
@@ -216,7 +335,7 @@ export class MediaService {
   }
 
   async remove(id: string): Promise<{ message: string }> {
-    const existingMedia = await this.prisma.getModel('media').findUnique({
+    const existingMedia = await this.prisma.media.findUnique({
       where: { id },
     });
 
@@ -229,12 +348,11 @@ export class MediaService {
       try {
         await this.s3Service.deleteFile(existingMedia.storageKey);
       } catch (error) {
-        // Log error but continue with database deletion
-        console.error('Error deleting file from S3:', error);
+        this.logger.error(`Error deleting file from S3: ${existingMedia.storageKey}`, error);
       }
     }
 
-    await this.prisma.getModel('media').delete({
+    await this.prisma.media.delete({
       where: { id },
     });
 

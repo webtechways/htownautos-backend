@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { ScheduleModule } from '@nestjs/schedule';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 import { APP_GUARD } from '@nestjs/core';
 import { AppController } from './app.controller';
@@ -16,6 +17,12 @@ import { AuditModule } from './common/audit.module';
 import { MetaModule } from './meta/meta.module';
 import { AuthModule } from './auth/auth.module';
 import { RolesModule } from './roles/roles.module';
+import { TenantModule } from './tenant/tenant.module';
+import { PartsModule } from './parts/parts.module';
+import { AuditLogModule } from './audit-log/audit-log.module';
+import { TitleModule } from './title/title.module';
+import { MarketCheckModule } from './marketcheck/marketcheck.module';
+import { UploadSessionModule } from './upload-session/upload-session.module';
 
 /**
  * App Module con seguridad RouteOne/DealerTrack
@@ -30,19 +37,22 @@ import { RolesModule } from './roles/roles.module';
       {
         name: 'short', // Límite corto para prevenir abuso
         ttl: 1000, // 1 segundo
-        limit: 10, // 10 requests por segundo
+        limit: 300, // 300 requests por segundo
       },
       {
         name: 'medium', // Límite medio
         ttl: 60000, // 1 minuto
-        limit: 100, // 100 requests por minuto
+        limit: 300, // 300 requests por minuto
       },
       {
         name: 'long', // Límite largo
         ttl: 3600000, // 1 hora
-        limit: 1000, // 1000 requests por hora
+        limit: 5000, // 5000 requests por hora
       },
     ]),
+
+    // Cron jobs
+    ScheduleModule.forRoot(),
 
     // Módulos de infraestructura
     PrismaModule,
@@ -58,9 +68,14 @@ import { RolesModule } from './roles/roles.module';
     ExtraExpenseModule,
     MediaModule,
     MetaModule,
-    MetaModule,
     AuthModule,
     RolesModule,
+    TenantModule,
+    PartsModule,
+    TitleModule,
+    AuditLogModule,
+    MarketCheckModule,
+    UploadSessionModule,
   ],
   controllers: [AppController],
   providers: [

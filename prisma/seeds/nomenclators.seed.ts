@@ -44,14 +44,19 @@ export async function seedNomenclators(prisma: PrismaClient) {
     { slug: 'reserved', title: 'Reserved' },
     { slug: 'in-transit', title: 'In Transit' },
     { slug: 'wholesale', title: 'Wholesale' },
+    { slug: 'lease', title: 'Lease' },
   ];
 
   for (const item of vehicleStatuses) {
-    await prisma.vehicleStatus.upsert({
-      where: { slug: item.slug },
-      update: {},
-      create: { ...item, isActive: true },
+    // Use composite unique key (tenantId_slug) for global nomenclators (tenantId = null)
+    const existing = await prisma.vehicleStatus.findFirst({
+      where: { slug: item.slug, tenantId: null },
     });
+    if (!existing) {
+      await prisma.vehicleStatus.create({
+        data: { ...item, isActive: true, tenantId: null },
+      });
+    }
   }
   console.log(`✅ Seeded ${vehicleStatuses.length} vehicle statuses`);
 
@@ -134,15 +139,24 @@ export async function seedNomenclators(prisma: PrismaClient) {
 
   // Body Types
   const bodyTypes = [
-    { slug: 'sedan', title: 'Sedan' },
-    { slug: 'coupe', title: 'Coupe' },
-    { slug: 'hatchback', title: 'Hatchback' },
+    { slug: 'car-van', title: 'Car Van' },
+    { slug: 'cargo-van', title: 'Cargo Van' },
+    { slug: 'chassis-cab', title: 'Chassis Cab' },
+    { slug: 'combi', title: 'Combi' },
+    { slug: 'commercial-wagon', title: 'Commercial Wagon' },
     { slug: 'convertible', title: 'Convertible' },
-    { slug: 'suv', title: 'SUV' },
-    { slug: 'crossover', title: 'Crossover' },
-    { slug: 'pickup-truck', title: 'Pickup Truck' },
-    { slug: 'van', title: 'Van' },
+    { slug: 'coupe', title: 'Coupe' },
+    { slug: 'cutaway', title: 'Cutaway' },
+    { slug: 'hatchback', title: 'Hatchback' },
+    { slug: 'micro-car', title: 'Micro Car' },
+    { slug: 'mini-mpv', title: 'Mini Mpv' },
     { slug: 'minivan', title: 'Minivan' },
+    { slug: 'passenger-van', title: 'Passenger Van' },
+    { slug: 'pickup', title: 'Pickup' },
+    { slug: 'suv', title: 'SUV' },
+    { slug: 'sedan', title: 'Sedan' },
+    { slug: 'targa', title: 'Targa' },
+    { slug: 'van', title: 'Van' },
     { slug: 'wagon', title: 'Wagon' },
   ];
 
@@ -157,13 +171,32 @@ export async function seedNomenclators(prisma: PrismaClient) {
 
   // Fuel Types
   const fuelTypes = [
-    { slug: 'gasoline', title: 'Gasoline' },
+    { slug: 'biodiesel', title: 'Biodiesel' },
+    { slug: 'compressed-natural-gas', title: 'Compressed Natural Gas' },
+    { slug: 'compressed-natural-gas-lpg', title: 'Compressed Natural Gas / Lpg' },
+    { slug: 'compressed-natural-gas-unleaded', title: 'Compressed Natural Gas / Unleaded' },
     { slug: 'diesel', title: 'Diesel' },
+    { slug: 'e85', title: 'E85' },
+    { slug: 'e85-premium-unleaded', title: 'E85 / Premium Unleaded' },
+    { slug: 'e85-unleaded', title: 'E85 / Unleaded' },
     { slug: 'electric', title: 'Electric' },
-    { slug: 'hybrid', title: 'Hybrid' },
-    { slug: 'plug-in-hybrid', title: 'Plug-in Hybrid' },
-    { slug: 'flex-fuel', title: 'Flex Fuel (E85)' },
-    { slug: 'cng', title: 'CNG (Compressed Natural Gas)' },
+    { slug: 'electric-e85', title: 'Electric / E85' },
+    { slug: 'electric-hydrogen', title: 'Electric / Hydrogen' },
+    { slug: 'electric-premium-unleaded', title: 'Electric / Premium Unleaded' },
+    { slug: 'electric-unleaded', title: 'Electric / Unleaded' },
+    { slug: 'hydrogen', title: 'Hydrogen' },
+    { slug: 'lpg-natural-gas', title: 'Lpg / Natural Gas' },
+    { slug: 'm85-unleaded', title: 'M85 / Unleaded' },
+    { slug: 'methanol-unleaded', title: 'Methanol / Unleaded' },
+    { slug: 'premium-unleaded', title: 'Premium Unleaded' },
+    { slug: 'premium-unleaded-e85', title: 'Premium Unleaded / E85' },
+    { slug: 'premium-unleaded-natural-gas', title: 'Premium Unleaded / Natural Gas' },
+    { slug: 'premium-unleaded-unleaded', title: 'Premium Unleaded / Unleaded' },
+    { slug: 'unleaded', title: 'Unleaded' },
+    { slug: 'unleaded-e85', title: 'Unleaded / E85' },
+    { slug: 'unleaded-electric', title: 'Unleaded / Electric' },
+    { slug: 'unleaded-natural-gas', title: 'Unleaded / Natural Gas' },
+    { slug: 'unleaded-premium-unleaded', title: 'Unleaded / Premium Unleaded' },
   ];
 
   for (const item of fuelTypes) {
@@ -221,11 +254,15 @@ export async function seedNomenclators(prisma: PrismaClient) {
   ];
 
   for (const item of vehicleSources) {
-    await prisma.vehicleSource.upsert({
-      where: { slug: item.slug },
-      update: {},
-      create: { ...item, isActive: true },
+    // Use composite unique key (tenantId_slug) for global nomenclators (tenantId = null)
+    const existing = await prisma.vehicleSource.findFirst({
+      where: { slug: item.slug, tenantId: null },
     });
+    if (!existing) {
+      await prisma.vehicleSource.create({
+        data: { ...item, isActive: true, tenantId: null },
+      });
+    }
   }
   console.log(`✅ Seeded ${vehicleSources.length} vehicle sources`);
 
@@ -257,11 +294,15 @@ export async function seedNomenclators(prisma: PrismaClient) {
   ];
 
   for (const item of activityTypes) {
-    await prisma.activityType.upsert({
-      where: { slug: item.slug },
-      update: {},
-      create: { ...item, isActive: true },
+    // Use composite unique key (tenantId_slug) for global nomenclators (tenantId = null)
+    const existing = await prisma.activityType.findFirst({
+      where: { slug: item.slug, tenantId: null },
     });
+    if (!existing) {
+      await prisma.activityType.create({
+        data: { ...item, isActive: true, tenantId: null },
+      });
+    }
   }
   console.log(`✅ Seeded ${activityTypes.length} activity types`);
 
@@ -275,31 +316,17 @@ export async function seedNomenclators(prisma: PrismaClient) {
   ];
 
   for (const item of activityStatuses) {
-    await prisma.activityStatus.upsert({
-      where: { slug: item.slug },
-      update: {},
-      create: { ...item, isActive: true },
+    // Use composite unique key (tenantId_slug) for global nomenclators (tenantId = null)
+    const existing = await prisma.activityStatus.findFirst({
+      where: { slug: item.slug, tenantId: null },
     });
+    if (!existing) {
+      await prisma.activityStatus.create({
+        data: { ...item, isActive: true, tenantId: null },
+      });
+    }
   }
   console.log(`✅ Seeded ${activityStatuses.length} activity statuses`);
-
-  // User Roles
-  const userRoles = [
-    { slug: 'admin', title: 'Administrator' },
-    { slug: 'manager', title: 'Manager' },
-    { slug: 'salesperson', title: 'Salesperson' },
-    { slug: 'finance-manager', title: 'Finance Manager' },
-    { slug: 'receptionist', title: 'Receptionist' },
-  ];
-
-  for (const item of userRoles) {
-    await prisma.userRole.upsert({
-      where: { slug: item.slug },
-      update: {},
-      create: { ...item, isActive: true },
-    });
-  }
-  console.log(`✅ Seeded ${userRoles.length} user roles`);
 
   // Lead Sources
   const leadSources = [
@@ -316,11 +343,15 @@ export async function seedNomenclators(prisma: PrismaClient) {
   ];
 
   for (const item of leadSources) {
-    await prisma.leadSource.upsert({
-      where: { slug: item.slug },
-      update: {},
-      create: { ...item, isActive: true },
+    // Use composite unique key (tenantId_slug) for global nomenclators (tenantId = null)
+    const existing = await prisma.leadSource.findFirst({
+      where: { slug: item.slug, tenantId: null },
     });
+    if (!existing) {
+      await prisma.leadSource.create({
+        data: { ...item, isActive: true, tenantId: null },
+      });
+    }
   }
   console.log(`✅ Seeded ${leadSources.length} lead sources`);
 
@@ -548,11 +579,15 @@ export async function seedNomenclators(prisma: PrismaClient) {
   ];
 
   for (const item of dealStatuses) {
-    await prisma.dealStatus.upsert({
-      where: { slug: item.slug },
-      update: {},
-      create: { ...item, isActive: true },
+    // Use composite unique key (tenantId_slug) for global nomenclators (tenantId = null)
+    const existing = await prisma.dealStatus.findFirst({
+      where: { slug: item.slug, tenantId: null },
     });
+    if (!existing) {
+      await prisma.dealStatus.create({
+        data: { ...item, isActive: true, tenantId: null },
+      });
+    }
   }
   console.log(`✅ Seeded ${dealStatuses.length} deal statuses`);
 
@@ -571,6 +606,149 @@ export async function seedNomenclators(prisma: PrismaClient) {
     });
   }
   console.log(`✅ Seeded ${financeTypes.length} finance types`);
+
+  // ========================================
+  // PARTS INVENTORY NOMENCLATORS
+  // ========================================
+
+  // Part Conditions
+  const partConditions = [
+    { slug: 'new', title: 'New' },
+    { slug: 'used', title: 'Used' },
+    { slug: 'rebuilt', title: 'Rebuilt' },
+    { slug: 'refurbished', title: 'Refurbished' },
+    { slug: 'remanufactured', title: 'Remanufactured' },
+    { slug: 'core', title: 'Core (For Rebuild)' },
+  ];
+
+  for (const item of partConditions) {
+    const existing = await prisma.partCondition.findFirst({
+      where: { slug: item.slug, tenantId: null },
+    });
+    if (!existing) {
+      await prisma.partCondition.create({
+        data: { ...item, isActive: true, tenantId: null },
+      });
+    }
+  }
+  console.log(`✅ Seeded ${partConditions.length} part conditions`);
+
+  // Part Statuses
+  const partStatuses = [
+    { slug: 'in-stock', title: 'In Stock' },
+    { slug: 'sold', title: 'Sold' },
+    { slug: 'reserved', title: 'Reserved' },
+    { slug: 'on-hold', title: 'On Hold' },
+    { slug: 'damaged', title: 'Damaged' },
+    { slug: 'returned', title: 'Returned' },
+    { slug: 'pending-inspection', title: 'Pending Inspection' },
+  ];
+
+  for (const item of partStatuses) {
+    const existing = await prisma.partStatus.findFirst({
+      where: { slug: item.slug, tenantId: null },
+    });
+    if (!existing) {
+      await prisma.partStatus.create({
+        data: { ...item, isActive: true, tenantId: null },
+      });
+    }
+  }
+  console.log(`✅ Seeded ${partStatuses.length} part statuses`);
+
+  // Part Categories (with hierarchy)
+  const partCategories = [
+    // Main categories
+    { slug: 'engine', title: 'Engine', description: 'Engine and related components' },
+    { slug: 'transmission', title: 'Transmission', description: 'Transmission and drivetrain parts' },
+    { slug: 'body', title: 'Body', description: 'Body panels and exterior parts' },
+    { slug: 'interior', title: 'Interior', description: 'Interior components and trim' },
+    { slug: 'electrical', title: 'Electrical', description: 'Electrical components and wiring' },
+    { slug: 'suspension', title: 'Suspension', description: 'Suspension and steering components' },
+    { slug: 'brakes', title: 'Brakes', description: 'Brake system components' },
+    { slug: 'exhaust', title: 'Exhaust', description: 'Exhaust system components' },
+    { slug: 'cooling', title: 'Cooling', description: 'Cooling system components' },
+    { slug: 'fuel-system', title: 'Fuel System', description: 'Fuel delivery components' },
+    { slug: 'hvac', title: 'HVAC', description: 'Heating and air conditioning' },
+    { slug: 'wheels-tires', title: 'Wheels & Tires', description: 'Wheels, rims, and tires' },
+    { slug: 'lighting', title: 'Lighting', description: 'Lights and bulbs' },
+    { slug: 'glass', title: 'Glass', description: 'Windshield and windows' },
+    { slug: 'accessories', title: 'Accessories', description: 'Aftermarket accessories' },
+  ];
+
+  for (const item of partCategories) {
+    const existing = await prisma.partCategory.findFirst({
+      where: { slug: item.slug, tenantId: null },
+    });
+    if (!existing) {
+      await prisma.partCategory.create({
+        data: { ...item, isActive: true, tenantId: null },
+      });
+    }
+  }
+  console.log(`✅ Seeded ${partCategories.length} part categories`);
+
+  // Title Brands
+  const titleBrands = [
+    { slug: 'clean', title: 'Clean' },
+    { slug: 'salvage', title: 'Salvage' },
+    { slug: 'rebuilt', title: 'Rebuilt' },
+    { slug: 'junk', title: 'Junk' },
+    { slug: 'totaled', title: 'Totaled' },
+    { slug: 'lemon', title: 'Lemon' },
+    { slug: 'flood', title: 'Flood' },
+    { slug: 'water-damage', title: 'Water Damage' },
+    { slug: 'storm-damage', title: 'Storm Damage' },
+    { slug: 'crash-test-vehicle', title: 'Crash Test Vehicle' },
+    { slug: 'tmu', title: 'TMU' },
+    { slug: 'police', title: 'Police' },
+    { slug: 'taxi', title: 'Taxi' },
+    { slug: 'vandalism', title: 'Vandalism' },
+    { slug: 'stripped', title: 'Stripped' },
+    { slug: 'collision', title: 'Collision' },
+    { slug: 'grey-market', title: 'Grey Market' },
+    { slug: 'recycled', title: 'Recycled' },
+    { slug: 'commercial-vehicle', title: 'Commercial Vehicle' },
+    { slug: 'municipal-vehicle', title: 'Municipal Vehicle' },
+    { slug: 'fire-damage', title: 'Fire Damage' },
+    { slug: 'hail-damage', title: 'Hail Damage' },
+    { slug: 'theft-recovery', title: 'Theft Recovery' },
+    { slug: 'repossessed', title: 'Repossessed' },
+    { slug: 'bonded', title: 'Bonded' },
+    { slug: 'export-only', title: 'Export Only' },
+    { slug: 'parts-only', title: 'Parts Only' },
+    { slug: 'non-repairable', title: 'Non-Repairable' },
+    { slug: 'reconstructed', title: 'Reconstructed' },
+    { slug: 'revived', title: 'Revived' },
+    { slug: 'dismantled', title: 'Dismantled' },
+    { slug: 'rental', title: 'Rental' },
+    { slug: 'lease-return', title: 'Lease Return' },
+    { slug: 'government', title: 'Government' },
+  ];
+
+  for (const item of titleBrands) {
+    await prisma.titleBrand.upsert({
+      where: { slug: item.slug },
+      update: {},
+      create: { ...item, isActive: true },
+    });
+  }
+  console.log(`✅ Seeded ${titleBrands.length} title brands`);
+
+  // Mileage Units
+  const mileageUnits = [
+    { slug: 'miles', title: 'Miles' },
+    { slug: 'kilometers', title: 'Kilometers' },
+  ];
+
+  for (const item of mileageUnits) {
+    await prisma.mileageUnit.upsert({
+      where: { slug: item.slug },
+      update: {},
+      create: { ...item, isActive: true },
+    });
+  }
+  console.log(`✅ Seeded ${mileageUnits.length} mileage units`);
 
   console.log('✅ Nomenclators seeding completed!\n');
 }

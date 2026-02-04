@@ -4,7 +4,9 @@ import {
   IsUUID,
   IsOptional,
   IsInt,
+  IsBoolean,
   Min,
+  Max,
   MaxLength,
   Matches,
   IsArray,
@@ -107,6 +109,11 @@ export class CreateVehicleDto {
   @Type(() => Number)
   mileage?: number;
 
+  @ApiPropertyOptional({ description: 'Mileage unit ID (foreign key)' })
+  @IsOptional()
+  @IsUUID()
+  mileageUnitId?: string;
+
   @ApiPropertyOptional({
     description: 'Exterior color',
     example: 'Black',
@@ -190,6 +197,14 @@ export class CreateVehicleDto {
   sourceId?: string;
 
   @ApiPropertyOptional({
+    description: 'Title brand ID (nomenclator)',
+  })
+  @IsOptional()
+  @IsUUID('4', { message: 'titleBrandId must be a valid UUID' })
+  @Transform(({ value }) => value === '' || value === null ? undefined : value)
+  titleBrandId?: string;
+
+  @ApiPropertyOptional({
     description: 'Cost price (what we paid for it)',
     example: 15000.5,
   })
@@ -213,6 +228,115 @@ export class CreateVehicleDto {
   @Type(() => Number)
   salePrice?: number;
 
+  // Cost Info
+  @ApiPropertyOptional({ description: 'Vehicle cost (what was paid)' })
+  @IsOptional()
+  @Type(() => Number)
+  vehicleCost?: number;
+
+  @ApiPropertyOptional({ description: 'Purchase date' })
+  @IsOptional()
+  @Type(() => Date)
+  purchaseDate?: Date;
+
+  // Retail Pricing
+  @ApiPropertyOptional({ description: 'Asking price (main retail price)' })
+  @IsOptional()
+  @Type(() => Number)
+  askingPrice?: number;
+
+  @ApiPropertyOptional({ description: 'Advertising price' })
+  @IsOptional()
+  @Type(() => Number)
+  advertisingPrice?: number;
+
+  @ApiPropertyOptional({ description: 'Special price' })
+  @IsOptional()
+  @Type(() => Number)
+  specialPrice?: number;
+
+  @ApiPropertyOptional({ description: 'Special price start date' })
+  @IsOptional()
+  @Type(() => Date)
+  specialPriceStartDate?: Date;
+
+  @ApiPropertyOptional({ description: 'Special price end date' })
+  @IsOptional()
+  @Type(() => Date)
+  specialPriceEndDate?: Date;
+
+  @ApiPropertyOptional({ description: 'MSRP' })
+  @IsOptional()
+  @Type(() => Number)
+  msrp?: number;
+
+  @ApiPropertyOptional({ description: 'Min down type: percent or fixed' })
+  @IsOptional()
+  @IsString()
+  minDownType?: string;
+
+  @ApiPropertyOptional({ description: 'Min down percent' })
+  @IsOptional()
+  @Type(() => Number)
+  minDownPercent?: number;
+
+  @ApiPropertyOptional({ description: 'Min down amount' })
+  @IsOptional()
+  @Type(() => Number)
+  minDownAmount?: number;
+
+  @ApiPropertyOptional({ description: 'Min deposit type: percent or fixed' })
+  @IsOptional()
+  @IsString()
+  minDepositType?: string;
+
+  @ApiPropertyOptional({ description: 'Min deposit percent' })
+  @IsOptional()
+  @Type(() => Number)
+  minDepositPercent?: number;
+
+  @ApiPropertyOptional({ description: 'Min deposit amount' })
+  @IsOptional()
+  @Type(() => Number)
+  minDepositAmount?: number;
+
+  // Wholesale Pricing
+  @ApiPropertyOptional({ description: 'Wholesale price' })
+  @IsOptional()
+  @Type(() => Number)
+  wholesalePrice?: number;
+
+  @ApiPropertyOptional({ description: 'Floor price' })
+  @IsOptional()
+  @Type(() => Number)
+  floorPrice?: number;
+
+  @ApiPropertyOptional({ description: 'Buy now price' })
+  @IsOptional()
+  @Type(() => Number)
+  buyNowPrice?: number;
+
+  @ApiPropertyOptional({ description: 'Start bid' })
+  @IsOptional()
+  @Type(() => Number)
+  startBid?: number;
+
+  @ApiPropertyOptional({ description: 'Start bid equals floor price' })
+  @IsOptional()
+  @IsBoolean()
+  @Type(() => Boolean)
+  startBidEqualsFloor?: boolean;
+
+  @ApiPropertyOptional({ description: 'Bid increment' })
+  @IsOptional()
+  @Type(() => Number)
+  bidIncrement?: number;
+
+  @ApiPropertyOptional({ description: 'Engine ID (from vehicle_engines nomenclator)' })
+  @IsOptional()
+  @IsUUID()
+  engineId?: string;
+
   @ApiPropertyOptional({
     description: 'Engine description',
     example: '2.5L 4-Cylinder',
@@ -223,32 +347,41 @@ export class CreateVehicleDto {
   engine?: string;
 
   @ApiPropertyOptional({
-    description: 'Number of cylinders',
+    description: 'Number of cylinders (1-16)',
     example: 4,
+    minimum: 1,
+    maximum: 16,
   })
   @IsOptional()
   @IsInt()
   @Min(1)
+  @Max(16)
   @Type(() => Number)
   cylinders?: number;
 
   @ApiPropertyOptional({
-    description: 'Number of doors',
+    description: 'Number of doors (1-6)',
     example: 4,
+    minimum: 1,
+    maximum: 6,
   })
   @IsOptional()
   @IsInt()
   @Min(1)
+  @Max(6)
   @Type(() => Number)
   doors?: number;
 
   @ApiPropertyOptional({
-    description: 'Passenger capacity',
+    description: 'Passenger capacity (1-100)',
     example: 5,
+    minimum: 1,
+    maximum: 100,
   })
   @IsOptional()
   @IsInt()
   @Min(1)
+  @Max(100)
   @Type(() => Number)
   passengers?: number;
 

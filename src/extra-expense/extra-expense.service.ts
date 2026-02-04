@@ -1,104 +1,82 @@
-import {
-  Injectable,
-  NotFoundException,
-  BadRequestException,
-} from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma.service';
 import { CreateExtraExpenseDto } from './dto/create-extra-expense.dto';
 import { UpdateExtraExpenseDto } from './dto/update-extra-expense.dto';
 import { QueryExtraExpenseDto } from './dto/query-extra-expense.dto';
 import { ExtraExpenseEntity } from './entities/extra-expense.entity';
 import { PaginatedResponseDto } from '../common/dto/paginated-response.dto';
-import { Prisma } from '@prisma/client';
+
+/** Shared include for queries that need vehicle + receipts */
+const INCLUDE_VEHICLE_AND_RECEIPTS = {
+  vehicle: {
+    select: {
+      id: true,
+      vin: true,
+      stockNumber: true,
+      year: { select: { year: true } },
+      make: { select: { name: true } },
+      model: { select: { name: true } },
+    },
+  },
+  receipts: true,
+} as const;
 
 @Injectable()
 export class ExtraExpenseService {
-  constructor(private readonly prisma: PrismaService) {}
+  private readonly expense: ReturnType<PrismaService['getModel']>;
+  private readonly vehicle: ReturnType<PrismaService['getModel']>;
 
-  async create(
-    createExtraExpenseDto: CreateExtraExpenseDto,
-  ): Promise<ExtraExpenseEntity> {
-    const { vehicleId, description, price, receiptId } =
-      createExtraExpenseDto;
+  constructor(private readonly prisma: PrismaService) {
+    this.expense = prisma.getModel('extraExpense');
+    this.vehicle = prisma.getModel('vehicle');
+  }
 
-    // Verify vehicleId exists
-    const vehicleExists = await this.prisma.getModel('vehicle').findUnique({
-      where: { id: vehicleId },
-    });
+  async create(dto: CreateExtraExpenseDto): Promise<ExtraExpenseEntity> {
+    await this.ensureVehicleExists(dto.vehicleId);
 
-    if (!vehicleExists) {
-      throw new NotFoundException(`Vehicle with ID ${vehicleId} not found`);
-    }
-
-    // Verify receiptId exists if provided
-    if (receiptId) {
-      const receiptExists = await this.prisma.getModel('media').findUnique({
-        where: { id: receiptId },
-      });
-
-      if (!receiptExists) {
-        throw new NotFoundException(`Receipt with ID ${receiptId} not found`);
-      }
-    }
-
-    const extraExpense = await this.prisma.getModel('extraExpense').create({
+    const record = await this.expense.create({
       data: {
-        vehicleId,
-        description,
-        price: new Prisma.Decimal(price),
-        ...(receiptId && { receiptId }),
+        vehicleId: dto.vehicleId,
+        description: dto.description,
+        price: new Prisma.Decimal(dto.price),
+        ...(dto.metaValue !== undefined && { metaValue: dto.metaValue }),
+        ...(dto.receiptIds?.length && {
+          receipts: { connect: dto.receiptIds.map((id) => ({ id })) },
+        }),
       },
+      include: { receipts: true },
     });
 
-    return new ExtraExpenseEntity(extraExpense);
+    return new ExtraExpenseEntity(record);
   }
 
   async findAll(
     query: QueryExtraExpenseDto,
   ): Promise<PaginatedResponseDto<ExtraExpenseEntity>> {
     const { page = 1, limit = 10, vehicleId } = query;
+    const where: Prisma.ExtraExpenseWhereInput = {};
 
-    const skip = (page - 1) * limit;
-
-    const where: any = {};
-
-    // Filter by vehicleId
-    if (vehicleId !== undefined) {
-      const vehicleExists = await this.prisma.getModel('vehicle').findUnique({
-        where: { id: vehicleId },
-      });
-
-      if (!vehicleExists) {
-        throw new NotFoundException(`Vehicle with ID ${vehicleId} not found`);
-      }
-
+    if (vehicleId) {
+      await this.ensureVehicleExists(vehicleId);
       where.vehicleId = vehicleId;
     }
 
     const [data, total] = await Promise.all([
-      this.prisma.getModel('extraExpense').findMany({
+      this.expense.findMany({
         where,
-        skip,
+        skip: (page - 1) * limit,
         take: limit,
         orderBy: { createdAt: 'desc' },
-        include: {
-          vehicle: {
-            select: {
-              vin: true,
-              year: true,
-              make: true,
-              model: true,
-            },
-          },
-        },
+        include: INCLUDE_VEHICLE_AND_RECEIPTS,
       }),
-      this.prisma.getModel('extraExpense').count({ where }),
+      this.expense.count({ where }),
     ]);
 
     const totalPages = Math.ceil(total / limit);
 
     return {
-      data: data.map((item: any) => new ExtraExpenseEntity(item)),
+      data: data.map((row: Record<string, unknown>) => new ExtraExpenseEntity(row)),
       meta: {
         page,
         limit,
@@ -111,118 +89,76 @@ export class ExtraExpenseService {
   }
 
   async findOne(id: string): Promise<ExtraExpenseEntity> {
-    const extraExpense = await this.prisma.getModel('extraExpense').findUnique({
+    const record = await this.expense.findUnique({
       where: { id },
-      include: {
-        vehicle: {
-          select: {
-            vin: true,
-            year: true,
-            make: true,
-            model: true,
-          },
-        },
-        receipt: true,
-      },
+      include: INCLUDE_VEHICLE_AND_RECEIPTS,
     });
 
-    if (!extraExpense) {
-      throw new NotFoundException(`Extra expense with ID ${id} not found`);
+    if (!record) {
+      throw new NotFoundException(`Extra expense ${id} not found`);
     }
 
-    return new ExtraExpenseEntity(extraExpense);
+    return new ExtraExpenseEntity(record);
   }
 
   async update(
     id: string,
-    updateExtraExpenseDto: UpdateExtraExpenseDto,
+    dto: UpdateExtraExpenseDto,
   ): Promise<ExtraExpenseEntity> {
-    // Verify expense exists
-    const existingExpense = await this.prisma.getModel('extraExpense').findUnique({
-      where: { id },
-    });
+    await this.ensureExpenseExists(id);
 
-    if (!existingExpense) {
-      throw new NotFoundException(`Extra expense with ID ${id} not found`);
-    }
-
-    const { vehicleId, description, price, receiptId } =
-      updateExtraExpenseDto;
-
-    // If vehicleId is being changed, verify it exists
-    if (vehicleId && vehicleId !== existingExpense.vehicleId) {
-      const vehicleExists = await this.prisma.getModel('vehicle').findUnique({
-        where: { id: vehicleId },
-      });
-
-      if (!vehicleExists) {
-        throw new NotFoundException(`Vehicle with ID ${vehicleId} not found`);
-      }
-    }
-
-    // If receiptId is being changed, verify it exists
-    if (receiptId && receiptId !== existingExpense.receiptId) {
-      const receiptExists = await this.prisma.getModel('media').findUnique({
-        where: { id: receiptId },
-      });
-
-      if (!receiptExists) {
-        throw new NotFoundException(`Receipt with ID ${receiptId} not found`);
-      }
-    }
-
-    const updated = await this.prisma.getModel('extraExpense').update({
+    const record = await this.expense.update({
       where: { id },
       data: {
-        ...(vehicleId && { vehicleId }),
-        ...(description && { description }),
-        ...(price !== undefined && { price: new Prisma.Decimal(price) }),
-        ...(receiptId !== undefined && { receiptId }),
+        ...(dto.description && { description: dto.description }),
+        ...(dto.price !== undefined && { price: new Prisma.Decimal(dto.price) }),
+        ...(dto.metaValue !== undefined && { metaValue: dto.metaValue }),
+        ...(dto.receiptIds !== undefined && {
+          receipts: { set: dto.receiptIds.map((rid) => ({ id: rid })) },
+        }),
       },
+      include: { receipts: true },
     });
 
-    return new ExtraExpenseEntity(updated);
+    return new ExtraExpenseEntity(record);
   }
 
   async remove(id: string): Promise<{ message: string }> {
-    // Verify expense exists
-    const existingExpense = await this.prisma.getModel('extraExpense').findUnique({
-      where: { id },
-    });
-
-    if (!existingExpense) {
-      throw new NotFoundException(`Extra expense with ID ${id} not found`);
-    }
-
-    await this.prisma.getModel('extraExpense').delete({
-      where: { id },
-    });
-
-    return {
-      message: `Extra expense with ID ${id} has been successfully deleted`,
-    };
+    await this.ensureExpenseExists(id);
+    await this.expense.delete({ where: { id } });
+    return { message: `Extra expense ${id} deleted` };
   }
 
   async getVehicleTotal(vehicleId: string): Promise<{ total: number }> {
-    // Verify vehicle exists
-    const vehicleExists = await this.prisma.getModel('vehicle').findUnique({
-      where: { id: vehicleId },
-    });
+    await this.ensureVehicleExists(vehicleId);
 
-    if (!vehicleExists) {
-      throw new NotFoundException(`Vehicle with ID ${vehicleId} not found`);
-    }
-
-    const expenses = await this.prisma.getModel('extraExpense').findMany({
+    const result = await this.expense.aggregate({
       where: { vehicleId },
-      select: { price: true },
+      _sum: { price: true },
     });
 
-    const total = expenses.reduce(
-      (sum: number, expense: any) => sum + Number(expense.price),
-      0,
-    );
+    return { total: Number(result._sum.price ?? 0) };
+  }
 
-    return { total };
+  // ── Private helpers ──────────────────────────────────────────
+
+  private async ensureVehicleExists(vehicleId: string): Promise<void> {
+    const exists = await this.vehicle.findUnique({
+      where: { id: vehicleId },
+      select: { id: true },
+    });
+    if (!exists) {
+      throw new NotFoundException(`Vehicle ${vehicleId} not found`);
+    }
+  }
+
+  private async ensureExpenseExists(id: string): Promise<void> {
+    const exists = await this.expense.findUnique({
+      where: { id },
+      select: { id: true },
+    });
+    if (!exists) {
+      throw new NotFoundException(`Extra expense ${id} not found`);
+    }
   }
 }

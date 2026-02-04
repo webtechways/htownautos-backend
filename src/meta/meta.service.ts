@@ -82,10 +82,10 @@ export class MetaService {
    */
   async findOne(id: string) {
     const meta = await this.prisma.meta.findUnique({
-      where: { id, isDeleted: false },
+      where: { id },
     });
 
-    if (!meta) {
+    if (!meta || meta.isDeleted) {
       throw new NotFoundException(`Meta with ID ${id} not found`);
     }
 
@@ -118,11 +118,10 @@ export class MetaService {
           entityId,
           key,
         },
-        isDeleted: false,
       },
     });
 
-    if (!meta) {
+    if (!meta || meta.isDeleted) {
       throw new NotFoundException(
         `Meta with key "${key}" not found for ${entityType}:${entityId}`,
       );
@@ -164,18 +163,14 @@ export class MetaService {
   }
 
   /**
-   * Soft delete a meta entry
+   * Delete a meta entry (hard delete)
    */
   async remove(id: string) {
     // Check if meta exists
     await this.findOne(id);
 
-    return this.prisma.meta.update({
+    return this.prisma.meta.delete({
       where: { id },
-      data: {
-        isDeleted: true,
-        isActive: false,
-      },
     });
   }
 

@@ -1,9 +1,11 @@
 import {
   Injectable,
+  Logger,
   NotFoundException,
   ConflictException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma.service';
+import { MarketCheckService } from '../marketcheck/marketcheck.service';
 import { CreateVehicleTrimDto } from './dto/create-vehicle-trim.dto';
 import { UpdateVehicleTrimDto } from './dto/update-vehicle-trim.dto';
 import { QueryVehicleTrimDto } from './dto/query-vehicle-trim.dto';
@@ -12,7 +14,12 @@ import { PaginatedResponseDto } from '../common/dto/paginated-response.dto';
 
 @Injectable()
 export class VehicleTrimService {
-  constructor(private readonly prisma: PrismaService) {}
+  private readonly logger = new Logger(VehicleTrimService.name);
+
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly marketCheckService: MarketCheckService,
+  ) {}
 
   private slugify(text: string): string {
     return text
@@ -138,7 +145,7 @@ export class VehicleTrimService {
       };
     }
 
-    const [data, total] = await Promise.all([
+    let [data, total] = await Promise.all([
       this.prisma.vehicleTrim.findMany({
         where,
         skip,
@@ -164,6 +171,53 @@ export class VehicleTrimService {
       }),
       this.prisma.vehicleTrim.count({ where }),
     ]);
+
+    // Cache-through: if no trims found and modelId filter is set, backfill from MarketCheck
+    if (total === 0 && modelId !== undefined) {
+      try {
+        const model = await this.prisma.vehicleModel.findUnique({
+          where: { id: modelId },
+          include: { make: { include: { year: true } } },
+        });
+        if (model) {
+          const trimNames = await this.marketCheckService.getTrims(
+            model.make.year.year.toString(),
+            model.make.name,
+            model.name,
+          );
+          for (const name of trimNames) {
+            const slug = this.slugify(name);
+            try {
+              await this.prisma.vehicleTrim.create({
+                data: { modelId, name, slug, isActive: true },
+              });
+            } catch {
+              // Skip duplicates
+            }
+          }
+          // Re-query after backfill
+          [data, total] = await Promise.all([
+            this.prisma.vehicleTrim.findMany({
+              where,
+              skip,
+              take: limit,
+              orderBy: { name: 'asc' },
+              include: {
+                model: {
+                  select: {
+                    name: true,
+                    make: { select: { name: true, year: { select: { year: true } } } },
+                  },
+                },
+              },
+            }),
+            this.prisma.vehicleTrim.count({ where }),
+          ]);
+        }
+      } catch (error) {
+        this.logger.error(`MarketCheck backfill failed for trims (modelId=${modelId}): ${error}`);
+      }
+    }
 
     const totalPages = Math.ceil(total / limit);
 

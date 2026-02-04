@@ -46,6 +46,7 @@ export class MetaController {
     level: 'medium',
     pii: false,
     compliance: [],
+    trackChanges: true,
   })
   create(@Body() createMetaDto: CreateMetaDto) {
     return this.metaService.create(createMetaDto);
@@ -188,6 +189,7 @@ export class MetaController {
     level: 'medium',
     pii: false,
     compliance: [],
+    trackChanges: true,
   })
   update(@Param('id') id: string, @Body() updateMetaDto: UpdateMetaDto) {
     return this.metaService.update(id, updateMetaDto);
@@ -208,6 +210,7 @@ export class MetaController {
     level: 'high',
     pii: false,
     compliance: [],
+    trackChanges: true,
   })
   async remove(@Param('id') id: string) {
     await this.metaService.remove(id);

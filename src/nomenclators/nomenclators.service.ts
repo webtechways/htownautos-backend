@@ -28,7 +28,6 @@ const NOMENCLATOR_MODELS: Record<string, string> = {
   'inspection-statuses': 'inspectionStatus',
   'activity-types': 'activityType',
   'activity-statuses': 'activityStatus',
-  'user-roles': 'userRole',
   'lead-sources': 'leadSource',
   'inquiry-types': 'inquiryType',
   'preferred-languages': 'preferredLanguage',
@@ -41,6 +40,9 @@ const NOMENCLATOR_MODELS: Record<string, string> = {
   'occupations': 'occupation',
   'deal-statuses': 'dealStatus',
   'finance-types': 'financeType',
+  'title-brands': 'titleBrand',
+  'mileage-units': 'mileageUnit',
+  'vehicle-engines': 'vehicleEngine',
 };
 
 @Injectable()

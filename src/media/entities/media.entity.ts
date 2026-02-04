@@ -129,6 +129,12 @@ export class MediaEntity implements Media {
   buyerId: string | null;
 
   @ApiPropertyOptional({
+    description: 'Part UUID',
+    example: '123e4567-e89b-12d3-a456-426614174000',
+  })
+  partId: string | null;
+
+  @ApiPropertyOptional({
     description: 'Main image UUID for vehicle',
     example: '123e4567-e89b-12d3-a456-426614174001',
   })
