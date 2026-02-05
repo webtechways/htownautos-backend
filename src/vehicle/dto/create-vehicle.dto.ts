@@ -99,13 +99,13 @@ export class CreateVehicleDto {
   trimId?: string;
 
   @ApiPropertyOptional({
-    description: 'Vehicle mileage in miles',
+    description: 'Vehicle mileage in miles (must be greater than 0)',
     example: 50000,
-    minimum: 0,
+    minimum: 1,
   })
   @IsOptional()
   @IsInt()
-  @Min(0)
+  @Min(1, { message: 'Mileage must be at least 1' })
   @Type(() => Number)
   mileage?: number;
 

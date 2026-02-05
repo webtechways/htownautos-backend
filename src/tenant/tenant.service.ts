@@ -870,7 +870,7 @@ export class TenantService {
       // In production, this should only be sent via email
       _debug: {
         invitationCode,
-        invitationUrl: `${process.env.FRONTEND_URL || 'http://localhost:3000'}/accept-invitation?code=${invitationCode}`,
+        invitationUrl: `${process.env.FRONTEND_URL || 'https://app.htownautos.com'}/accept-invitation?code=${invitationCode}`,
       },
     };
   }
@@ -1058,7 +1058,7 @@ export class TenantService {
       // Include invitation code in response for testing purposes
       _debug: {
         invitationCode,
-        invitationUrl: `${process.env.FRONTEND_URL || 'http://localhost:3000'}/accept-invitation?code=${invitationCode}`,
+        invitationUrl: `${process.env.FRONTEND_URL || 'https://app.htownautos.com'}/accept-invitation?code=${invitationCode}`,
       },
     };
   }

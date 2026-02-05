@@ -5,7 +5,7 @@ import { MarketCheckService } from './marketcheck.service';
 @ApiTags('MarketCheck')
 @Controller('marketcheck')
 export class MarketCheckController {
-  constructor(private readonly marketCheckService: MarketCheckService) {}
+  constructor(private readonly marketCheckService: MarketCheckService) { }
 
   @Get('makes')
   @ApiOperation({ summary: 'List makes for a given year' })
@@ -39,5 +39,47 @@ export class MarketCheckController {
   ) {
     const trims = await this.marketCheckService.getTrims(year, make, model);
     return { data: trims };
+  }
+
+  @Get('price')
+  @ApiOperation({ summary: 'Get predicted market price for a vehicle by zip code (cached 24h)' })
+  @ApiQuery({ name: 'vin', required: true, example: '5TDKK3DC6DS302565' })
+  @ApiQuery({ name: 'miles', required: true, example: '100000' })
+  @ApiQuery({ name: 'dealer_type', required: false, example: 'independent' })
+  @ApiQuery({ name: 'zip', required: true, example: '77063' })
+  async getPrice(
+    @Query('vin') vin: string,
+    @Query('miles') miles: string,
+    @Query('dealer_type') dealerType: string = 'independent',
+    @Query('zip') zip: string,
+  ) {
+    const result = await this.marketCheckService.getPredictedPrice(
+      vin,
+      parseInt(miles, 10) || 0,
+      dealerType,
+      zip,
+    );
+    return { data: result };
+  }
+
+  @Get('comparables')
+  @ApiOperation({ summary: 'Get comparable active listings by make/model/year near a zip code (cached 24h)' })
+  @ApiQuery({ name: 'make', required: true, example: 'Toyota' })
+  @ApiQuery({ name: 'model', required: true, example: 'Sienna' })
+  @ApiQuery({ name: 'year', required: true, example: '2013' })
+  @ApiQuery({ name: 'zip', required: true, example: '77063' })
+  async getComparables(
+    @Query('make') make: string,
+    @Query('model') model: string,
+    @Query('year') year: string,
+    @Query('zip') zip: string,
+  ) {
+    const result = await this.marketCheckService.getComparables(
+      make,
+      model,
+      parseInt(year, 10),
+      zip,
+    );
+    return { data: result };
   }
 }

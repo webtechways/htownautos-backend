@@ -2218,3 +2218,54 @@ model UploadSession {
   @@index([expiresAt])
   @@map("upload_sessions")
 }
+
+// ============================================
+// MARKETCHECK PRICE CACHE - Cache de precios de MarketCheck (24h TTL)
+// ============================================
+model MarketCheckPriceCache {
+  id    String @id @default(uuid())
+
+  // Cache key components
+  vin        String
+  miles      Int
+  dealerType String
+  zip        String
+
+  // Cached response
+  marketcheckPrice Decimal? @db.Decimal(10, 2)
+  msrp             Decimal? @db.Decimal(10, 2)
+  rawResponse      Json?
+
+  // TTL
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@unique([vin, miles, dealerType, zip])
+  @@index([expiresAt])
+  @@map("marketcheck_price_cache")
+}
+
+// ============================================
+// MARKETCHECK COMPS CACHE - Cache de comparables de MarketCheck (24h TTL)
+// ============================================
+model MarketCheckCompsCache {
+  id String @id @default(uuid())
+
+  // Cache key components
+  make  String
+  model String
+  year  Int
+  zip   String
+
+  // Cached response
+  listings Json
+  numFound Int
+
+  // TTL
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@unique([make, model, year, zip])
+  @@index([expiresAt])
+  @@map("marketcheck_comps_cache")
+}
