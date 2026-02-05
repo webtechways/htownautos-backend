@@ -2269,3 +2269,27 @@ model MarketCheckCompsCache {
   @@index([expiresAt])
   @@map("marketcheck_comps_cache")
 }
+
+// ============================================
+// MARKETCHECK AUCTION CACHE - Cache de subastas de MarketCheck (1h TTL)
+// ============================================
+model MarketCheckAuctionCache {
+  id String @id @default(uuid())
+
+  // Cache key (hash of all filter params)
+  cacheKey String @unique
+
+  // Cached response
+  listings Json
+  numFound Int
+  facets   Json?
+  stats    Json?
+
+  // TTL (shorter for auctions - 1 hour)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([expiresAt])
+  @@index([cacheKey])
+  @@map("marketcheck_auction_cache")
+}

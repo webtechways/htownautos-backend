@@ -79,14 +79,47 @@ export interface MarketCheckPriceResult {
   zip: string;
 }
 
+export interface AuctionSearchParams {
+  make?: string;
+  model?: string;
+  year_range?: string;
+  price_range?: string;
+  odometer_range?: string;
+  state?: string;
+  zip?: string;
+  radius?: number;
+  body_type?: string;
+  transmission?: string;
+  fuel_type?: string;
+  drivetrain?: string;
+  exterior_color?: string;
+  seller_type?: string;
+  sort_by?: string;
+  sort_order?: 'asc' | 'desc';
+  rows?: number;
+  start?: number;
+  facets?: string;
+  stats?: string;
+}
+
+export interface AuctionSearchResult {
+  listings: MarketCheckListing[];
+  numFound: number;
+  facets?: Record<string, Record<string, number>>;
+  stats?: Record<string, { min: number; max: number; mean: number; count: number }>;
+  cached: boolean;
+}
+
 @Injectable()
 export class MarketCheckService {
   private readonly logger = new Logger(MarketCheckService.name);
   private readonly baseUrl = 'https://api.marketcheck.com/v2/specs/car/terms';
   private readonly priceUrl = 'https://api.marketcheck.com/v2/predict/car/us/marketcheck_price';
   private readonly searchUrl = 'https://api.marketcheck.com/v2/search/car/active';
+  private readonly auctionUrl = 'https://api.marketcheck.com/v2/search/car/auction/active';
   private readonly apiKey: string;
   private readonly CACHE_TTL_HOURS = 24;
+  private readonly AUCTION_CACHE_TTL_MINUTES = 60;
 
   constructor(private readonly prisma: PrismaService) {
     this.apiKey = process.env.MARKETCHECK_API_KEY || '';
@@ -416,6 +449,175 @@ export class MarketCheckService {
       if (error instanceof InternalServerErrorException) throw error;
       this.logger.error(`← MarketCheck Search API FAILED (${duration}ms): ${error}`);
       throw new InternalServerErrorException('Failed to fetch comparables from MarketCheck');
+    }
+  }
+
+  private generateAuctionCacheKey(params: AuctionSearchParams): string {
+    const sortedParams = Object.keys(params)
+      .sort()
+      .reduce((acc, key) => {
+        const value = params[key as keyof AuctionSearchParams];
+        if (value !== undefined && value !== null && value !== '') {
+          acc[key] = value;
+        }
+        return acc;
+      }, {} as Record<string, any>);
+    return JSON.stringify(sortedParams);
+  }
+
+  async searchAuctions(params: AuctionSearchParams): Promise<AuctionSearchResult> {
+    const cacheKey = this.generateAuctionCacheKey(params);
+
+    // Check cache first
+    const cached = await this.prisma.marketCheckAuctionCache.findUnique({
+      where: { cacheKey },
+    });
+
+    if (cached && cached.expiresAt > new Date()) {
+      this.logger.log(`Auction Cache HIT for key=${cacheKey.substring(0, 50)}...`);
+      return {
+        listings: cached.listings as unknown as MarketCheckListing[],
+        numFound: cached.numFound,
+        facets: cached.facets as Record<string, Record<string, number>> | undefined,
+        stats: cached.stats as Record<string, { min: number; max: number; mean: number; count: number }> | undefined,
+        cached: true,
+      };
+    }
+
+    // If expired, delete it
+    if (cached) {
+      await this.prisma.marketCheckAuctionCache.delete({
+        where: { id: cached.id },
+      });
+    }
+
+    // Build query params for MarketCheck API
+    const queryParams = new URLSearchParams({
+      api_key: this.apiKey,
+      rows: (params.rows || 50).toString(),
+      start: (params.start || 0).toString(),
+    });
+
+    // Add optional filters
+    if (params.make) queryParams.set('make', params.make);
+    if (params.model) queryParams.set('model', params.model);
+    if (params.year_range) queryParams.set('year_range', params.year_range);
+    if (params.price_range) queryParams.set('price_range', params.price_range);
+    if (params.odometer_range) queryParams.set('odometer_range', params.odometer_range);
+    if (params.state) queryParams.set('state', params.state);
+    if (params.zip) queryParams.set('zip', params.zip);
+    if (params.radius) queryParams.set('radius', params.radius.toString());
+    if (params.body_type) queryParams.set('body_type', params.body_type);
+    if (params.transmission) queryParams.set('transmission', params.transmission);
+    if (params.fuel_type) queryParams.set('fuel_type', params.fuel_type);
+    if (params.drivetrain) queryParams.set('drivetrain', params.drivetrain);
+    if (params.exterior_color) queryParams.set('exterior_color', params.exterior_color);
+    if (params.seller_type) queryParams.set('seller_type', params.seller_type);
+    if (params.sort_by) queryParams.set('sort_by', params.sort_by);
+    if (params.sort_order) queryParams.set('sort_order', params.sort_order);
+    if (params.facets) queryParams.set('facets', params.facets);
+    if (params.stats) queryParams.set('stats', params.stats);
+
+    const url = `${this.auctionUrl}?${queryParams.toString()}`;
+    const safeUrl = url.replace(/api_key=[^&]+/, 'api_key=***');
+
+    this.logger.log(`→ MarketCheck Auction API GET ${safeUrl}`);
+    const start = Date.now();
+
+    try {
+      const response = await fetch(url, {
+        headers: { Accept: 'application/json' },
+      });
+
+      const duration = Date.now() - start;
+
+      if (!response.ok) {
+        const errorBody = await response.text();
+        this.logger.error(
+          `← MarketCheck Auction API ${response.status} ${response.statusText} (${duration}ms)`,
+        );
+        this.logger.error(`← MarketCheck Auction API Error Body: ${errorBody}`);
+        throw new InternalServerErrorException('Failed to fetch auctions from MarketCheck');
+      }
+
+      const data = await response.json();
+      this.logger.log(`← MarketCheck Auction API 200 OK (${duration}ms) num_found=${data.num_found} listings=${data.listings?.length || 0}`);
+
+      const listings: MarketCheckListing[] = (data.listings || []).map((l: any) => ({
+        id: l.id,
+        vin: l.vin,
+        heading: l.heading,
+        price: l.price ?? null,
+        miles: l.miles ?? null,
+        msrp: l.msrp ?? null,
+        exterior_color: l.exterior_color ?? null,
+        interior_color: l.interior_color ?? null,
+        dom: l.dom ?? null,
+        dom_active: l.dom_active ?? null,
+        seller_type: l.seller_type ?? null,
+        inventory_type: l.inventory_type ?? null,
+        stock_no: l.stock_no ?? null,
+        carfax_1_owner: l.carfax_1_owner ?? null,
+        carfax_clean_title: l.carfax_clean_title ?? null,
+        first_seen_at_date: l.first_seen_at_date ?? null,
+        last_seen_at_date: l.last_seen_at_date ?? null,
+        vdp_url: l.vdp_url ?? null,
+        source: l.source ?? null,
+        media: l.media ? { photo_links: (l.media.photo_links || []).slice(0, 5) } : undefined,
+        dealer: l.dealer ? {
+          name: l.dealer.name,
+          city: l.dealer.city,
+          state: l.dealer.state,
+          zip: l.dealer.zip ?? '',
+          dealer_type: l.dealer.dealer_type,
+          phone: l.dealer.phone ?? null,
+          street: l.dealer.street ?? null,
+        } : undefined,
+        build: l.build ? {
+          year: l.build.year,
+          make: l.build.make,
+          model: l.build.model,
+          trim: l.build.trim,
+          body_type: l.build.body_type ?? null,
+          transmission: l.build.transmission ?? null,
+          drivetrain: l.build.drivetrain ?? null,
+          fuel_type: l.build.fuel_type ?? null,
+          engine: l.build.engine ?? null,
+          doors: l.build.doors ?? null,
+          cylinders: l.build.cylinders ?? null,
+          highway_mpg: l.build.highway_mpg ?? null,
+          city_mpg: l.build.city_mpg ?? null,
+        } : undefined,
+        dist: l.dist ?? null,
+      }));
+
+      // Store in cache
+      const expiresAt = new Date();
+      expiresAt.setMinutes(expiresAt.getMinutes() + this.AUCTION_CACHE_TTL_MINUTES);
+
+      await this.prisma.marketCheckAuctionCache.create({
+        data: {
+          cacheKey,
+          listings: listings as any,
+          numFound: data.num_found || listings.length,
+          facets: data.facets || null,
+          stats: data.stats || null,
+          expiresAt,
+        },
+      });
+
+      return {
+        listings,
+        numFound: data.num_found || listings.length,
+        facets: data.facets,
+        stats: data.stats,
+        cached: false,
+      };
+    } catch (error) {
+      const duration = Date.now() - start;
+      if (error instanceof InternalServerErrorException) throw error;
+      this.logger.error(`← MarketCheck Auction API FAILED (${duration}ms): ${error}`);
+      throw new InternalServerErrorException('Failed to fetch auctions from MarketCheck');
     }
   }
 }
