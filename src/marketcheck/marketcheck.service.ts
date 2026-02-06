@@ -79,34 +79,56 @@ export interface MarketCheckPriceResult {
   zip: string;
 }
 
-export interface AuctionSearchParams {
+export interface AuctionListing {
+  id: string;
+  vin: string;
+  heading: string;
+  price: number | null;
+  miles: number | null;
+  exterior_color: string | null;
+  interior_color: string | null;
+  source: string | null;
+  vdp_url: string | null;
+  seller_name: string | null;
+  auction_date: string | null;
+  media?: {
+    photo_links?: string[];
+  };
+  build?: {
+    year: number;
+    make: string;
+    model: string;
+    trim: string;
+    body_type: string | null;
+    transmission: string | null;
+    drivetrain: string | null;
+    fuel_type: string | null;
+    engine: string | null;
+  };
+}
+
+export interface AuctionSearchFilters {
   make?: string;
   model?: string;
+  year?: string;
   year_range?: string;
-  price_range?: string;
-  odometer_range?: string;
-  state?: string;
-  zip?: string;
-  radius?: number;
   body_type?: string;
   transmission?: string;
   fuel_type?: string;
   drivetrain?: string;
-  exterior_color?: string;
-  seller_type?: string;
+  price_range?: string;
+  odometer_range?: string;
+  state?: string;
+  source?: string;
   sort_by?: string;
-  sort_order?: 'asc' | 'desc';
+  sort_order?: string;
   rows?: number;
   start?: number;
-  facets?: string;
-  stats?: string;
 }
 
 export interface AuctionSearchResult {
-  listings: MarketCheckListing[];
+  listings: AuctionListing[];
   numFound: number;
-  facets?: Record<string, Record<string, number>>;
-  stats?: Record<string, { min: number; max: number; mean: number; count: number }>;
   cached: boolean;
 }
 
@@ -116,10 +138,10 @@ export class MarketCheckService {
   private readonly baseUrl = 'https://api.marketcheck.com/v2/specs/car/terms';
   private readonly priceUrl = 'https://api.marketcheck.com/v2/predict/car/us/marketcheck_price';
   private readonly searchUrl = 'https://api.marketcheck.com/v2/search/car/active';
-  private readonly auctionUrl = 'https://api.marketcheck.com/v2/search/car/auction/active';
+  private readonly auctionUrl = 'https://api.marketcheck.com/v2/search/car/auction';
   private readonly apiKey: string;
   private readonly CACHE_TTL_HOURS = 24;
-  private readonly AUCTION_CACHE_TTL_MINUTES = 60;
+  private readonly AUCTION_CACHE_TTL_HOURS = 6;
 
   constructor(private readonly prisma: PrismaService) {
     this.apiKey = process.env.MARKETCHECK_API_KEY || '';
@@ -452,21 +474,36 @@ export class MarketCheckService {
     }
   }
 
-  private generateAuctionCacheKey(params: AuctionSearchParams): string {
-    const sortedParams = Object.keys(params)
-      .sort()
-      .reduce((acc, key) => {
-        const value = params[key as keyof AuctionSearchParams];
-        if (value !== undefined && value !== null && value !== '') {
-          acc[key] = value;
-        }
-        return acc;
-      }, {} as Record<string, any>);
-    return JSON.stringify(sortedParams);
+  /**
+   * Generate cache key for auction search
+   */
+  private generateAuctionCacheKey(filters: AuctionSearchFilters): string {
+    const parts = [
+      filters.make || '',
+      filters.model || '',
+      filters.year || '',
+      filters.year_range || '',
+      filters.body_type || '',
+      filters.transmission || '',
+      filters.fuel_type || '',
+      filters.drivetrain || '',
+      filters.price_range || '',
+      filters.odometer_range || '',
+      filters.state || '',
+      filters.source || '',
+      filters.sort_by || 'first_seen_at_date',
+      filters.sort_order || 'desc',
+      String(filters.rows || 50),
+      String(filters.start || 0),
+    ];
+    return parts.join('|');
   }
 
-  async searchAuctions(params: AuctionSearchParams): Promise<AuctionSearchResult> {
-    const cacheKey = this.generateAuctionCacheKey(params);
+  /**
+   * Search active auction listings
+   */
+  async searchAuctions(filters: AuctionSearchFilters): Promise<AuctionSearchResult> {
+    const cacheKey = this.generateAuctionCacheKey(filters);
 
     // Check cache first
     const cached = await this.prisma.marketCheckAuctionCache.findUnique({
@@ -476,10 +513,8 @@ export class MarketCheckService {
     if (cached && cached.expiresAt > new Date()) {
       this.logger.log(`Auction Cache HIT for key=${cacheKey.substring(0, 50)}...`);
       return {
-        listings: cached.listings as unknown as MarketCheckListing[],
+        listings: cached.listings as unknown as AuctionListing[],
         numFound: cached.numFound,
-        facets: cached.facets as Record<string, Record<string, number>> | undefined,
-        stats: cached.stats as Record<string, { min: number; max: number; mean: number; count: number }> | undefined,
         cached: true,
       };
     }
@@ -491,34 +526,29 @@ export class MarketCheckService {
       });
     }
 
-    // Build query params for MarketCheck API
-    const queryParams = new URLSearchParams({
+    // Build query params
+    const params = new URLSearchParams({
       api_key: this.apiKey,
-      rows: (params.rows || 50).toString(),
-      start: (params.start || 0).toString(),
+      rows: String(filters.rows || 50),
+      start: String(filters.start || 0),
+      sort_by: filters.sort_by || 'first_seen_at_date',
+      sort_order: filters.sort_order || 'desc',
     });
 
-    // Add optional filters
-    if (params.make) queryParams.set('make', params.make);
-    if (params.model) queryParams.set('model', params.model);
-    if (params.year_range) queryParams.set('year_range', params.year_range);
-    if (params.price_range) queryParams.set('price_range', params.price_range);
-    if (params.odometer_range) queryParams.set('odometer_range', params.odometer_range);
-    if (params.state) queryParams.set('state', params.state);
-    if (params.zip) queryParams.set('zip', params.zip);
-    if (params.radius) queryParams.set('radius', params.radius.toString());
-    if (params.body_type) queryParams.set('body_type', params.body_type);
-    if (params.transmission) queryParams.set('transmission', params.transmission);
-    if (params.fuel_type) queryParams.set('fuel_type', params.fuel_type);
-    if (params.drivetrain) queryParams.set('drivetrain', params.drivetrain);
-    if (params.exterior_color) queryParams.set('exterior_color', params.exterior_color);
-    if (params.seller_type) queryParams.set('seller_type', params.seller_type);
-    if (params.sort_by) queryParams.set('sort_by', params.sort_by);
-    if (params.sort_order) queryParams.set('sort_order', params.sort_order);
-    if (params.facets) queryParams.set('facets', params.facets);
-    if (params.stats) queryParams.set('stats', params.stats);
+    if (filters.make) params.append('make', filters.make);
+    if (filters.model) params.append('model', filters.model);
+    if (filters.year) params.append('year', filters.year);
+    if (filters.year_range) params.append('year_range', filters.year_range);
+    if (filters.body_type) params.append('body_type', filters.body_type);
+    if (filters.transmission) params.append('transmission', filters.transmission);
+    if (filters.fuel_type) params.append('fuel_type', filters.fuel_type);
+    if (filters.drivetrain) params.append('drivetrain', filters.drivetrain);
+    if (filters.price_range) params.append('price_range', filters.price_range);
+    if (filters.odometer_range) params.append('odometer_range', filters.odometer_range);
+    if (filters.state) params.append('state', filters.state);
+    if (filters.source) params.append('source', filters.source);
 
-    const url = `${this.auctionUrl}?${queryParams.toString()}`;
+    const url = `${this.auctionUrl}?${params.toString()}`;
     const safeUrl = url.replace(/api_key=[^&]+/, 'api_key=***');
 
     this.logger.log(`→ MarketCheck Auction API GET ${safeUrl}`);
@@ -543,65 +573,41 @@ export class MarketCheckService {
       const data = await response.json();
       this.logger.log(`← MarketCheck Auction API 200 OK (${duration}ms) num_found=${data.num_found} listings=${data.listings?.length || 0}`);
 
-      const listings: MarketCheckListing[] = (data.listings || []).map((l: any) => ({
+      const listings: AuctionListing[] = (data.listings || []).map((l: any) => ({
         id: l.id,
         vin: l.vin,
         heading: l.heading,
         price: l.price ?? null,
         miles: l.miles ?? null,
-        msrp: l.msrp ?? null,
         exterior_color: l.exterior_color ?? null,
         interior_color: l.interior_color ?? null,
-        dom: l.dom ?? null,
-        dom_active: l.dom_active ?? null,
-        seller_type: l.seller_type ?? null,
-        inventory_type: l.inventory_type ?? null,
-        stock_no: l.stock_no ?? null,
-        carfax_1_owner: l.carfax_1_owner ?? null,
-        carfax_clean_title: l.carfax_clean_title ?? null,
-        first_seen_at_date: l.first_seen_at_date ?? null,
-        last_seen_at_date: l.last_seen_at_date ?? null,
-        vdp_url: l.vdp_url ?? null,
         source: l.source ?? null,
+        vdp_url: l.vdp_url ?? null,
+        seller_name: l.seller_name ?? l.dealer?.name ?? null,
+        auction_date: l.auction_date ?? l.first_seen_at_date ?? null,
         media: l.media ? { photo_links: (l.media.photo_links || []).slice(0, 5) } : undefined,
-        dealer: l.dealer ? {
-          name: l.dealer.name,
-          city: l.dealer.city,
-          state: l.dealer.state,
-          zip: l.dealer.zip ?? '',
-          dealer_type: l.dealer.dealer_type,
-          phone: l.dealer.phone ?? null,
-          street: l.dealer.street ?? null,
-        } : undefined,
         build: l.build ? {
           year: l.build.year,
           make: l.build.make,
           model: l.build.model,
-          trim: l.build.trim,
+          trim: l.build.trim ?? '',
           body_type: l.build.body_type ?? null,
           transmission: l.build.transmission ?? null,
           drivetrain: l.build.drivetrain ?? null,
           fuel_type: l.build.fuel_type ?? null,
           engine: l.build.engine ?? null,
-          doors: l.build.doors ?? null,
-          cylinders: l.build.cylinders ?? null,
-          highway_mpg: l.build.highway_mpg ?? null,
-          city_mpg: l.build.city_mpg ?? null,
         } : undefined,
-        dist: l.dist ?? null,
       }));
 
       // Store in cache
       const expiresAt = new Date();
-      expiresAt.setMinutes(expiresAt.getMinutes() + this.AUCTION_CACHE_TTL_MINUTES);
+      expiresAt.setHours(expiresAt.getHours() + this.AUCTION_CACHE_TTL_HOURS);
 
       await this.prisma.marketCheckAuctionCache.create({
         data: {
           cacheKey,
           listings: listings as any,
           numFound: data.num_found || listings.length,
-          facets: data.facets || null,
-          stats: data.stats || null,
           expiresAt,
         },
       });
@@ -609,8 +615,6 @@ export class MarketCheckService {
       return {
         listings,
         numFound: data.num_found || listings.length,
-        facets: data.facets,
-        stats: data.stats,
         cached: false,
       };
     } catch (error) {

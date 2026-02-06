@@ -1,9 +1,3 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
-// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
-// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
-
 generator client {
   provider = "prisma-client-js"
 }
@@ -12,15 +6,10 @@ datasource db {
   provider = "postgresql"
 }
 
-// ============================================
-// NOMENCLADORES DINÁMICOS (TABLAS DE CATÁLOGO)
-// ============================================
-
-// Tipo de Venta (Both, Retail, Wholesale)
 model SaleType {
   id        String   @id @default(uuid())
-  slug      String   @unique // both, retail, wholesale api
-  title     String // Both, Retail, Wholesale. 
+  slug      String   @unique
+  title     String
   isActive  Boolean  @default(true)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -28,7 +17,6 @@ model SaleType {
   @@map("sale_types")
 }
 
-// Estado de Millaje (TMU, EML, Exempt, Actual)
 model MileageStatus {
   id        String   @id @default(uuid())
   slug      String   @unique
@@ -40,28 +28,22 @@ model MileageStatus {
   @@map("mileage_statuses")
 }
 
-// Estado del Vehículo (In Inventory, Sold, Pending, etc.)
 model VehicleStatus {
-  id        String   @id @default(uuid())
+  id        String    @id @default(uuid())
   slug      String
   title     String
-  isActive  Boolean  @default(true)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  // Multi-tenancy (null = global, tenantId = custom for tenant)
-  tenantId String?
-  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-
-  // Relaciones
-  vehicles Vehicle[]
+  isActive  Boolean   @default(true)
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  tenantId  String?
+  tenant    Tenant?   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  vehicles  Vehicle[]
 
   @@unique([tenantId, slug])
   @@index([tenantId])
   @@map("vehicle_statuses")
 }
 
-// Estado del Título (Received, Not Received, etc.)
 model TitleStatus {
   id        String   @id @default(uuid())
   slug      String   @unique
@@ -69,29 +51,23 @@ model TitleStatus {
   isActive  Boolean  @default(true)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
-
-  // Relaciones
-  titles Title[]
+  titles    Title[]
 
   @@map("title_statuses")
 }
 
-// Condición del Vehículo (Excellent, Very Good, Good, etc.)
 model VehicleCondition {
-  id        String   @id @default(uuid())
-  slug      String   @unique
+  id        String    @id @default(uuid())
+  slug      String    @unique
   title     String
-  isActive  Boolean  @default(true)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  // Relaciones
-  vehicles Vehicle[]
+  isActive  Boolean   @default(true)
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  vehicles  Vehicle[]
 
   @@map("vehicle_conditions")
 }
 
-// Marcas del Título (Clean, Salvage, Junk, etc.)
 model BrandStatus {
   id        String   @id @default(uuid())
   slug      String   @unique
@@ -99,160 +75,126 @@ model BrandStatus {
   isActive  Boolean  @default(true)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
-
-  // Relaciones
-  titles Title[]
+  titles    Title[]
 
   @@map("brand_statuses")
 }
 
-// Tipo de Vehículo (Auto, Truck, Motorcycle, etc.)
 model VehicleType {
-  id        String   @id @default(uuid())
-  slug      String   @unique
+  id        String    @id @default(uuid())
+  slug      String    @unique
   title     String
-  isActive  Boolean  @default(true)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  // Relaciones
-  vehicles Vehicle[]
+  isActive  Boolean   @default(true)
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  vehicles  Vehicle[]
 
   @@map("vehicle_types")
 }
 
-// Tipo de Carrocería (Sedan, Coupe, SUV, etc.)
 model BodyType {
-  id        String   @id @default(uuid())
-  slug      String   @unique
-  title     String
-  isActive  Boolean  @default(true)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  // Relaciones
-  vehicles     Vehicle[]
+  id           String        @id @default(uuid())
+  slug         String        @unique
+  title        String
+  isActive     Boolean       @default(true)
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
   bodySubtypes BodySubtype[]
+  vehicles     Vehicle[]
 
   @@map("body_types")
 }
 
-// Subtipo de Carrocería (relacionado con BodyType)
 model BodySubtype {
-  id         String   @id @default(uuid())
-  slug       String   @unique
+  id         String    @id @default(uuid())
+  slug       String    @unique
   title      String
-  isActive   Boolean  @default(true)
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
-
-  // Relación con BodyType
+  isActive   Boolean   @default(true)
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
   bodyTypeId String
-  bodyType   BodyType @relation(fields: [bodyTypeId], references: [id])
-
-  // Relaciones
-  vehicles Vehicle[]
+  bodyType   BodyType  @relation(fields: [bodyTypeId], references: [id])
+  vehicles   Vehicle[]
 
   @@map("body_subtypes")
 }
 
-// Tipo de Combustible (Gasoline, Diesel, Electric, etc.)
 model FuelType {
-  id        String   @id @default(uuid())
-  slug      String   @unique
+  id        String    @id @default(uuid())
+  slug      String    @unique
   title     String
-  isActive  Boolean  @default(true)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  // Relaciones
-  vehicles Vehicle[]
+  isActive  Boolean   @default(true)
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  vehicles  Vehicle[]
 
   @@map("fuel_types")
 }
 
-// Tipo de Tracción (FWD, RWD, AWD, 4WD)
 model DriveType {
-  id        String   @id @default(uuid())
-  slug      String   @unique
+  id        String    @id @default(uuid())
+  slug      String    @unique
   title     String
-  isActive  Boolean  @default(true)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  // Relaciones
-  vehicles Vehicle[]
+  isActive  Boolean   @default(true)
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  vehicles  Vehicle[]
 
   @@map("drive_types")
 }
 
-// Tipo de Transmisión (Automatic, Manual, CVT, etc.)
 model TransmissionType {
-  id        String   @id @default(uuid())
-  slug      String   @unique
+  id        String    @id @default(uuid())
+  slug      String    @unique
   title     String
-  isActive  Boolean  @default(true)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  // Relaciones
-  vehicles Vehicle[]
+  isActive  Boolean   @default(true)
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  vehicles  Vehicle[]
 
   @@map("transmission_types")
 }
 
-// Marca del Título (Clean, Salvage, Rebuilt, Junk, Flood, Lemon, etc.)
 model TitleBrand {
-  id        String   @id @default(uuid())
-  slug      String   @unique
+  id        String    @id @default(uuid())
+  slug      String    @unique
   title     String
-  isActive  Boolean  @default(true)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  // Relaciones
-  vehicles Vehicle[]
+  isActive  Boolean   @default(true)
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  vehicles  Vehicle[]
 
   @@map("title_brands")
 }
 
-// Unidad de Millaje (Miles, Kilometers)
 model MileageUnit {
-  id        String   @id @default(uuid())
-  slug      String   @unique
+  id        String    @id @default(uuid())
+  slug      String    @unique
   title     String
-  isActive  Boolean  @default(true)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  // Relaciones
-  vehicles Vehicle[]
+  isActive  Boolean   @default(true)
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  vehicles  Vehicle[]
 
   @@map("mileage_units")
 }
 
-// Origen del Vehículo (Auction, Trade-In, Private Party, Dealer, etc.)
 model VehicleSource {
-  id        String   @id @default(uuid())
+  id        String    @id @default(uuid())
   slug      String
   title     String
-  isActive  Boolean  @default(true)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  // Multi-tenancy (null = global, tenantId = custom for tenant)
-  tenantId String?
-  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-
-  // Relaciones
-  vehicles Vehicle[]
+  isActive  Boolean   @default(true)
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  tenantId  String?
+  tenant    Tenant?   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  vehicles  Vehicle[]
 
   @@unique([tenantId, slug])
   @@index([tenantId])
   @@map("vehicle_sources")
 }
 
-// Estado de Inspección (Passed, Failed, Pending, etc.)
 model InspectionStatus {
   id        String   @id @default(uuid())
   slug      String   @unique
@@ -264,49 +206,38 @@ model InspectionStatus {
   @@map("inspection_statuses")
 }
 
-// Tipo de Actividad (Note, Task, Call, Email, etc.)
 model ActivityType {
-  id        String   @id @default(uuid())
-  slug      String
-  title     String
-  isActive  Boolean  @default(true)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  // Multi-tenancy (null = global, tenantId = custom for tenant)
-  tenantId String?
-  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-
-  // Relaciones
+  id         String     @id @default(uuid())
+  slug       String
+  title      String
+  isActive   Boolean    @default(true)
+  createdAt  DateTime   @default(now())
+  updatedAt  DateTime   @updatedAt
+  tenantId   String?
   activities Activity[]
+  tenant     Tenant?    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@unique([tenantId, slug])
   @@index([tenantId])
   @@map("activity_types")
 }
 
-// Estado de Actividad (Created, Completed, Cancelled, etc.)
 model ActivityStatus {
-  id        String   @id @default(uuid())
-  slug      String
-  title     String
-  isActive  Boolean  @default(true)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  // Multi-tenancy (null = global, tenantId = custom for tenant)
-  tenantId String?
-  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-
-  // Relaciones
+  id         String     @id @default(uuid())
+  slug       String
+  title      String
+  isActive   Boolean    @default(true)
+  createdAt  DateTime   @default(now())
+  updatedAt  DateTime   @updatedAt
+  tenantId   String?
   activities Activity[]
+  tenant     Tenant?    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@unique([tenantId, slug])
   @@index([tenantId])
   @@map("activity_statuses")
 }
 
-// Fuente de Lead (Lead Source - Social Media & Marketplaces)
 model LeadSource {
   id        String   @id @default(uuid())
   slug      String
@@ -314,20 +245,15 @@ model LeadSource {
   isActive  Boolean  @default(true)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
-
-  // Multi-tenancy (null = global, tenantId = custom for tenant)
-  tenantId String?
-  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-
-  // Relaciones
-  leads Lead[]
+  tenantId  String?
+  tenant    Tenant?  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  leads     Lead[]
 
   @@unique([tenantId, slug])
   @@index([tenantId])
   @@map("lead_sources")
 }
 
-// Tipo de Consulta (Inquiry Type)
 model InquiryType {
   id        String   @id @default(uuid())
   slug      String   @unique
@@ -339,7 +265,6 @@ model InquiryType {
   @@map("inquiry_types")
 }
 
-// Idioma Preferido (Preferred Language)
 model PreferredLanguage {
   id        String   @id @default(uuid())
   slug      String   @unique
@@ -347,14 +272,11 @@ model PreferredLanguage {
   isActive  Boolean  @default(true)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
-
-  // Relaciones
-  buyers Buyer[]
+  buyers    Buyer[]
 
   @@map("preferred_languages")
 }
 
-// Método de Contacto (Contact Method)
 model ContactMethod {
   id        String   @id @default(uuid())
   slug      String   @unique
@@ -366,7 +288,6 @@ model ContactMethod {
   @@map("contact_methods")
 }
 
-// Hora de Contacto (Contact Time)
 model ContactTime {
   id        String   @id @default(uuid())
   slug      String   @unique
@@ -378,7 +299,6 @@ model ContactTime {
   @@map("contact_times")
 }
 
-// Género (Gender)
 model Gender {
   id        String   @id @default(uuid())
   slug      String   @unique
@@ -386,14 +306,11 @@ model Gender {
   isActive  Boolean  @default(true)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
-
-  // Relaciones
-  buyers Buyer[]
+  buyers    Buyer[]
 
   @@map("genders")
 }
 
-// Tipo de ID (ID Type)
 model IdType {
   id        String   @id @default(uuid())
   slug      String   @unique
@@ -401,29 +318,23 @@ model IdType {
   isActive  Boolean  @default(true)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
-
-  // Relaciones
-  buyers Buyer[]
+  buyers    Buyer[]
 
   @@map("id_types")
 }
 
-// Estado del ID (ID State - US States)
 model IdState {
   id        String   @id @default(uuid())
-  slug      String   @unique // Código del estado (AL, AK, AZ, etc.)
-  title     String // Nombre del estado
+  slug      String   @unique
+  title     String
   isActive  Boolean  @default(true)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
-
-  // Relaciones
-  buyers Buyer[]
+  buyers    Buyer[]
 
   @@map("id_states")
 }
 
-// Estado de Empleo (Employment Status)
 model EmploymentStatus {
   id        String   @id @default(uuid())
   slug      String   @unique
@@ -431,14 +342,11 @@ model EmploymentStatus {
   isActive  Boolean  @default(true)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
-
-  // Relaciones
-  buyers Buyer[]
+  buyers    Buyer[]
 
   @@map("employment_statuses")
 }
 
-// Ocupación (Occupation)
 model Occupation {
   id        String   @id @default(uuid())
   slug      String   @unique
@@ -446,92 +354,67 @@ model Occupation {
   isActive  Boolean  @default(true)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
-
-  // Relaciones
-  buyers Buyer[]
+  buyers    Buyer[]
 
   @@map("occupations")
 }
 
-// Estado del Deal (Deal Status)
 model DealStatus {
   id        String   @id @default(uuid())
-  slug      String // draft, pending, approved, funded, delivered, cancelled
+  slug      String
   title     String
   isActive  Boolean  @default(true)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
-
-  // Multi-tenancy (null = global, tenantId = custom for tenant)
-  tenantId String?
-  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-
-  // Relaciones
-  deals Deal[]
+  tenantId  String?
+  tenant    Tenant?  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  deals     Deal[]
 
   @@unique([tenantId, slug])
   @@index([tenantId])
   @@map("deal_statuses")
 }
 
-// Tipo de Financiamiento (Finance Type)
 model FinanceType {
   id        String   @id @default(uuid())
-  slug      String   @unique // cash, finance, lease
+  slug      String   @unique
   title     String
   isActive  Boolean  @default(true)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
-
-  // Relaciones
-  deals Deal[]
+  deals     Deal[]
 
   @@map("finance_types")
 }
 
-// ============================================
-// JERARQUÍA DE VEHÍCULOS (Year → Make → Model → Trim)
-// ============================================
-
-// Año del Vehículo
 model VehicleYear {
-  id        String   @id @default(uuid())
-  year      Int      @unique // 2020, 2021, 2022, etc.
-  isActive  Boolean  @default(true)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  // Metadata
-  metaValue Json? // Metadata flexible en formato JSON
-
-  // Relaciones
-  makes    VehicleMake[]
-  vehicles Vehicle[]
-  parts    Part[]
+  id        String        @id @default(uuid())
+  year      Int           @unique
+  isActive  Boolean       @default(true)
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+  metaValue Json?
+  parts     Part[]
+  makes     VehicleMake[]
+  vehicles  Vehicle[]
 
   @@index([year])
   @@map("vehicle_years")
 }
 
-// Marca del Vehículo (Make)
 model VehicleMake {
-  id     String @id @default(uuid())
-  yearId String
-  name   String // <filter using like operator>
-
-  slug      String // ford, toyota, honda
-  isActive  Boolean  @default(true) //<filter using equal operator>
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  // Metadata
-  metaValue Json? // Metadata flexible en formato JSON
-
-  // Relaciones
-  year     VehicleYear    @relation(fields: [yearId], references: [id], onDelete: Cascade)
-  models   VehicleModel[]
-  vehicles Vehicle[]
-  parts    Part[]
+  id        String         @id @default(uuid())
+  yearId    String
+  name      String
+  slug      String
+  isActive  Boolean        @default(true)
+  createdAt DateTime       @default(now())
+  updatedAt DateTime       @updatedAt
+  metaValue Json?
+  parts     Part[]
+  year      VehicleYear    @relation(fields: [yearId], references: [id], onDelete: Cascade)
+  models    VehicleModel[]
+  vehicles  Vehicle[]
 
   @@unique([yearId, slug])
   @@index([yearId])
@@ -539,24 +422,19 @@ model VehicleMake {
   @@map("vehicle_makes")
 }
 
-// Modelo del Vehículo (Model)
 model VehicleModel {
-  id        String   @id @default(uuid())
+  id        String        @id @default(uuid())
   makeId    String
-  name      String // F-150, Camry, Accord, etc.
-  slug      String // f-150, camry, accord
-  isActive  Boolean  @default(true)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  // Metadata
-  metaValue Json? // Metadata flexible en formato JSON
-
-  // Relaciones
-  make     VehicleMake   @relation(fields: [makeId], references: [id], onDelete: Cascade)
-  trims    VehicleTrim[]
-  vehicles Vehicle[]
-  parts    Part[]
+  name      String
+  slug      String
+  isActive  Boolean       @default(true)
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+  metaValue Json?
+  parts     Part[]
+  make      VehicleMake   @relation(fields: [makeId], references: [id], onDelete: Cascade)
+  trims     VehicleTrim[]
+  vehicles  Vehicle[]
 
   @@unique([makeId, slug])
   @@index([makeId])
@@ -564,23 +442,18 @@ model VehicleModel {
   @@map("vehicle_models")
 }
 
-// Trim/Versión del Vehículo
 model VehicleTrim {
-  id        String   @id @default(uuid())
+  id        String       @id @default(uuid())
   modelId   String
-  name      String // XLT, LE, EX, Sport, etc.
-  slug      String // xlt, le, ex, sport
-  isActive  Boolean  @default(true)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  // Metadata
-  metaValue Json? // Metadata flexible en formato JSON
-
-  // Relaciones
-  model    VehicleModel @relation(fields: [modelId], references: [id], onDelete: Cascade)
-  vehicles Vehicle[]
-  parts    Part[]
+  name      String
+  slug      String
+  isActive  Boolean      @default(true)
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+  metaValue Json?
+  parts     Part[]
+  model     VehicleModel @relation(fields: [modelId], references: [id], onDelete: Cascade)
+  vehicles  Vehicle[]
 
   @@unique([modelId, slug])
   @@index([modelId])
@@ -588,115 +461,84 @@ model VehicleTrim {
   @@map("vehicle_trims")
 }
 
-// Motor / Engine Type (nomenclador global)
 model VehicleEngine {
-  id        String   @id @default(uuid())
+  id        String    @id @default(uuid())
   title     String
-  slug      String   @unique
-  isActive  Boolean  @default(true)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  vehicles Vehicle[]
+  slug      String    @unique
+  isActive  Boolean   @default(true)
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  vehicles  Vehicle[]
 
   @@map("vehicle_engines")
 }
 
-// ============================================
-// MULTI-TENANCY & AUTH
-// ============================================
-
-// Tenant - Organización/Dealership
 model Tenant {
-  id   String @id @default(uuid())
-  name String // Nombre del dealership
-  slug String @unique // URL-friendly identifier
-
-  // Información del negocio
-  businessName String? // Nombre legal del negocio
-  taxId        String? // Tax ID / EIN
-  phone        String?
-  email        String?
-  website      String?
-
-  // Dirección
-  address String?
-  city    String?
-  state   String?
-  zipCode String?
-  country String  @default("USA")
-
-  // Configuración
-  settings Json? // Configuración específica del tenant
-  logo     String? // URL del logo
-
-  // Estado
-  isActive  Boolean  @default(true)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  // Relaciones
-  users         TenantUser[]
-  roles         Role[] // Custom roles for this tenant
-  buyers        Buyer[]
-  vehicles      Vehicle[]
-  deals         Deal[]
-  extraExpenses ExtraExpense[]
-  media         Media[]
-  titles        Title[]
-  metas         Meta[]
-  auditLogs     AuditLog[]
-
-  // Nomencladores personalizables por tenant
-  vehicleStatuses  VehicleStatus[]
-  vehicleSources   VehicleSource[]
-  activityTypes    ActivityType[]
-  activityStatuses ActivityStatus[]
-  leadSources      LeadSource[]
-  dealStatuses     DealStatus[]
-
-  // Nuevos modelos
+  id                 String              @id @default(uuid())
+  name               String
+  slug               String              @unique
+  businessName       String?
+  taxId              String?
+  phone              String?
+  email              String?
+  website            String?
+  address            String?
+  city               String?
+  state              String?
+  zipCode            String?
+  country            String              @default("USA")
+  settings           Json?
+  logo               String?
+  isActive           Boolean             @default(true)
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
   activities         Activity[]
+  activityStatuses   ActivityStatus[]
+  activityTypes      ActivityType[]
+  auditLogs          AuditLog[]
+  buyers             Buyer[]
+  dealStatuses       DealStatus[]
+  deals              Deal[]
+  extraExpenses      ExtraExpense[]
+  leadSources        LeadSource[]
   leads              Lead[]
+  media              Media[]
+  metas              Meta[]
   notifications      Notification[]
+  partCategories     PartCategory[]
+  partConditions     PartCondition[]
+  partStatuses       PartStatus[]
+  parts              Part[]
+  roles              Role[]
   tenantIntegrations TenantIntegration[]
-
-  // Parts inventory
-  partConditions PartCondition[]
-  partStatuses   PartStatus[]
-  partCategories PartCategory[]
-  parts          Part[]
+  users              TenantUser[]
+  titles             Title[]
+  vehicleSources     VehicleSource[]
+  vehicleStatuses    VehicleStatus[]
+  vehicles           Vehicle[]
 
   @@index([slug])
   @@index([isActive])
   @@map("tenants")
 }
 
-// User - Usuario del sistema con auth de Cognito
 model User {
-  id          String  @id @default(uuid())
-  // TenantId eliminado -> Usuario global
-  cognitoSub  String  @unique // Cognito User Sub (unique identifier from Cognito)
-  email       String  @unique // Email único globalmente
-  name        String?
-  firstName   String?
-  lastName    String?
-  phoneNumber String?
-  avatar      String? // URL del avatar
-
-  // Estado
-  isActive       Boolean   @default(true)
-  emailVerified  Boolean   @default(false)
-  lastLoginAt    DateTime?
+  id             String       @id @default(uuid())
+  email          String       @unique
+  name           String?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  metaValue      Json?
+  avatar         String?
+  cognitoSub     String       @unique
+  emailVerified  Boolean      @default(false)
+  firstName      String?
+  isActive       Boolean      @default(true)
   lastActivityAt DateTime?
-
-  // Metadata
-  metaValue Json? // Metadata flexible en formato JSON
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  // Relaciones
-  tenants TenantUser[]
+  lastLoginAt    DateTime?
+  lastName       String?
+  phoneNumber    String?
+  tenants        TenantUser[]
 
   @@index([cognitoSub])
   @@index([email])
@@ -704,86 +546,64 @@ model User {
   @@map("users")
 }
 
-// Role - Roles dinámicos (Globales o por Tenant)
 model Role {
-  id          String  @id @default(uuid())
+  id          String           @id @default(uuid())
   name        String
-  slug        String // admin, sales_manager, etc.
+  slug        String
   description String?
-  isSystem    Boolean @default(false) // Roles inmutables (ej. superadmin)
-
-  // Si tenantId es null, es un rol global/sistema disponible para todos
-  // Si tiene tenantId, es un rol personalizado para ese tenant
-  tenantId String?
-  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-
-  isActive  Boolean  @default(true)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  // Relaciones
+  isSystem    Boolean          @default(false)
+  tenantId    String?
+  isActive    Boolean          @default(true)
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
   permissions RolePermission[]
+  tenant      Tenant?          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   users       TenantUser[]
 
-  @@unique([tenantId, slug]) // Slug único por tenant (o global si tenantId es null)
+  @@unique([tenantId, slug])
   @@map("roles")
 }
 
-// Permission - Permisos granulares
 model Permission {
-  id          String  @id @default(uuid())
-  action      String // create, read, update, delete, manage
-  resource    String // vehicle, deal, user, analytics
-  slug        String  @unique // vehicle:create, deal:view_sensitive
+  id          String           @id @default(uuid())
+  action      String
+  resource    String
+  slug        String           @unique
   description String?
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  // Relaciones
-  roles RolePermission[]
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+  roles       RolePermission[]
 
   @@map("permissions")
 }
 
-// Tabla intermedia Role <-> Permission
 model RolePermission {
   roleId       String
   permissionId String
-
-  role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
-  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+  permission   Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+  role         Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
 
   @@id([roleId, permissionId])
   @@map("role_permissions")
 }
 
-// Relación N:M entre Users y Tenants con Rol asignado
 model TenantUser {
-  id       String @id @default(uuid())
-  tenantId String
-  userId   String
-
-  // RBAC Link
-  roleId String
-  role   Role   @relation(fields: [roleId], references: [id])
-
-  permissions Json? // Permisos específicos/overrides para este usuario en este tenant
-
-  // Invitation status
-  status           String    @default("pending") // pending, active, suspended
-  invitationCode   String?   @unique // Secret code for invitation verification
-  invitationSentAt DateTime? // When the invitation was sent
-  invitedBy        String? // User ID who sent the invitation
-  acceptedAt       DateTime? // When the user accepted the invitation
-
-  isActive  Boolean  @default(true)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  // Relaciones
-  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id               String    @id @default(uuid())
+  tenantId         String
+  userId           String
+  permissions      Json?
+  isActive         Boolean   @default(true)
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+  roleId           String
+  acceptedAt       DateTime?
+  invitationCode   String?   @unique
+  invitationSentAt DateTime?
+  invitedBy        String?
+  status           String    @default("pending")
+  role             Role      @relation(fields: [roleId], references: [id])
+  tenant           Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user             User      @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([tenantId, userId])
   @@index([tenantId])
@@ -795,65 +615,38 @@ model TenantUser {
   @@map("tenant_users")
 }
 
-// ============================================
-// MODELOS PRINCIPALES
-// ============================================
-
-// ============================================
-// BUYER - Solo datos personales básicos del comprador
-// ============================================
 model Buyer {
-  id String @id @default(uuid())
-
-  // Multi-tenancy
-  tenantId String?
-  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-
-  // Información Personal Básica
-  firstName   String
-  middleName  String?
-  lastName    String
-  suffix      String? // Jr., Sr., III, etc.
-  dateOfBirth DateTime
-  genderId    String?
-  ssn         String? // Social Security Number (encriptado)
-  itin        String? // Individual Taxpayer Identification Number (alternative to SSN)
-  citizenship String? // US Citizen, Permanent Resident, Visa Holder, etc.
-
-  // Relación con Gender
-  gender Gender? @relation(fields: [genderId], references: [id])
-
-  // Información de Contacto
-  email               String
-  phoneMain           String
-  phoneSecondary      String?
-  phoneMobile         String?
-  preferredLanguageId String?
-
-  // Relaciones de contacto
-  preferredLanguage PreferredLanguage? @relation(fields: [preferredLanguageId], references: [id])
-
-  // Dirección Actual
-  currentAddress     String
-  currentCity        String
-  currentState       String
-  currentZipCode     String
-  currentCountry     String   @default("USA")
-  yearsAtAddress     Int?
-  monthsAtAddress    Int?
-  housingStatus      String? // Own, Rent, Living with parents, etc.
-  monthlyHousingCost Decimal? @db.Decimal(10, 2)
-
-  // Dirección Anterior (si menos de 2 años en actual)
-  previousAddress         String?
-  previousCity            String?
-  previousState           String?
-  previousZipCode         String?
-  previousCountry         String?
-  yearsAtPreviousAddress  Int?
-  monthsAtPreviousAddress Int?
-
-  // Identificación
+  id                       String             @id @default(uuid())
+  firstName                String
+  middleName               String?
+  lastName                 String
+  suffix                   String?
+  dateOfBirth              DateTime
+  genderId                 String?
+  ssn                      String?
+  itin                     String?
+  citizenship              String?
+  email                    String
+  phoneMain                String
+  phoneSecondary           String?
+  phoneMobile              String?
+  preferredLanguageId      String?
+  currentAddress           String
+  currentCity              String
+  currentState             String
+  currentZipCode           String
+  currentCountry           String             @default("USA")
+  yearsAtAddress           Int?
+  monthsAtAddress          Int?
+  housingStatus            String?
+  monthlyHousingCost       Decimal?           @db.Decimal(10, 2)
+  previousAddress          String?
+  previousCity             String?
+  previousState            String?
+  previousZipCode          String?
+  previousCountry          String?
+  yearsAtPreviousAddress   Int?
+  monthsAtPreviousAddress  Int?
   idTypeId                 String?
   idNumber                 String?
   idStateId                String?
@@ -862,128 +655,102 @@ model Buyer {
   driversLicenseNumber     String?
   driversLicenseState      String?
   driversLicenseExpiration DateTime?
-
-  // Relaciones de ID
-  idType  IdType?  @relation(fields: [idTypeId], references: [id])
-  idState IdState? @relation(fields: [idStateId], references: [id])
-
-  // Empleo Actual
-  employmentStatusId     String?
-  currentEmployer        String?
-  employerPhone          String?
-  occupationId           String?
-  jobTitle               String?
-  employerAddress        String?
-  employerCity           String?
-  employerState          String?
-  employerZipCode        String?
-  monthlyIncome          Decimal? @db.Decimal(10, 2)
-  yearsEmployed          Int?
-  monthsEmployed         Int?
-  additionalIncome       Decimal? @db.Decimal(10, 2)
-  additionalIncomeSource String?
-
-  // Relaciones de empleo
-  employmentStatus EmploymentStatus? @relation(fields: [employmentStatusId], references: [id])
-  occupation       Occupation?       @relation(fields: [occupationId], references: [id])
-
-  // Empleo Anterior
-  previousEmployer        String?
-  previousEmployerPhone   String?
-  previousJobTitle        String?
-  previousEmployerAddress String?
-  previousEmployerCity    String?
-  previousEmployerState   String?
-  previousEmployerZipCode String?
-  previousMonthlyIncome   Decimal? @db.Decimal(10, 2)
-  previousYearsEmployed   Int?
-  previousMonthsEmployed  Int?
-
-  // Información Bancaria
-  bankName          String?
-  bankAccountType   String?
-  bankRoutingNumber String?
-  bankAccountNumber String? // Encriptado
-  yearsWithBank     Int?
-  monthsWithBank    Int?
-
-  // Historial de Crédito
-  creditScore             Int?
-  bankruptcyHistory       Boolean   @default(false)
-  bankruptcyDate          DateTime?
-  bankruptcyType          String?
-  bankruptcyDischargeDate DateTime?
-  repoHistory             Boolean   @default(false)
-  repoDate                DateTime?
-  foreclosureHistory      Boolean   @default(false)
-  foreclosureDate         DateTime?
-
-  // Deudas Mensuales
-  currentMonthlyDebts Decimal? @db.Decimal(10, 2)
-  alimonyChildSupport Decimal? @db.Decimal(10, 2)
-
-  // Referencias Personales
-  reference1Name       String?
-  reference1Phone      String?
-  reference1Relation   String?
-  reference1Address    String?
-  reference1YearsKnown Int?
-
-  reference2Name       String?
-  reference2Phone      String?
-  reference2Relation   String?
-  reference2Address    String?
-  reference2YearsKnown Int?
-
-  reference3Name       String?
-  reference3Phone      String?
-  reference3Relation   String?
-  reference3Address    String?
-  reference3YearsKnown Int?
-
-  reference4Name       String?
-  reference4Phone      String?
-  reference4Relation   String?
-  reference4Address    String?
-  reference4YearsKnown Int?
-
-  reference5Name       String?
-  reference5Phone      String?
-  reference5Relation   String?
-  reference5Address    String?
-  reference5YearsKnown Int?
-
-  // Business Information (para aplicaciones comerciales)
-  isBusinessBuyer         Boolean  @default(false)
-  businessName            String?
-  businessType            String?
-  businessEIN             String?
-  businessYearsInBusiness Int?
-  businessAnnualRevenue   Decimal? @db.Decimal(12, 2)
-
-  // OFAC / Compliance
-  ofacCheckCompleted   Boolean   @default(false)
-  ofacCheckDate        DateTime?
-  ofacCheckResult      String?
-  ofacNotes            String?
-  identityVerified     Boolean   @default(false)
-  identityVerifiedDate DateTime?
-  identityVerifiedBy   String?
-
-  // Metadatos
-  source    String? // walk-in, phone, website, referral
-  notes     String?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  // Metadata
-  metaValue Json? // Metadata flexible en formato JSON
-
-  // Relaciones
-  dealsAsBuyer   Deal[]     @relation("BuyerDeals")
-  dealsAsCoBuyer Deal[]     @relation("CoBuyerDeals")
-  media          Media[]    @relation("BuyerMedia")
-  activities     Activity[]
+  employmentStatusId       String?
+  currentEmployer          String?
+  employerPhone            String?
+  occupationId             String?
+  jobTitle                 String?
+  employerAddress          String?
+  employerCity             String?
+  employerState            String?
+  employerZipCode          String?
+  monthlyIncome            Decimal?           @db.Decimal(10, 2)
+  yearsEmployed            Int?
+  monthsEmployed           Int?
+  additionalIncome         Decimal?           @db.Decimal(10, 2)
+  additionalIncomeSource   String?
+  previousEmployer         String?
+  previousEmployerPhone    String?
+  previousJobTitle         String?
+  previousEmployerAddress  String?
+  previousEmployerCity     String?
+  previousEmployerState    String?
+  previousEmployerZipCode  String?
+  previousMonthlyIncome    Decimal?           @db.Decimal(10, 2)
+  previousYearsEmployed    Int?
+  previousMonthsEmployed   Int?
+  bankName                 String?
+  bankAccountType          String?
+  bankRoutingNumber        String?
+  bankAccountNumber        String?
+  yearsWithBank            Int?
+  monthsWithBank           Int?
+  creditScore              Int?
+  bankruptcyHistory        Boolean            @default(false)
+  bankruptcyDate           DateTime?
+  bankruptcyType           String?
+  bankruptcyDischargeDate  DateTime?
+  repoHistory              Boolean            @default(false)
+  repoDate                 DateTime?
+  foreclosureHistory       Boolean            @default(false)
+  foreclosureDate          DateTime?
+  currentMonthlyDebts      Decimal?           @db.Decimal(10, 2)
+  alimonyChildSupport      Decimal?           @db.Decimal(10, 2)
+  reference1Name           String?
+  reference1Phone          String?
+  reference1Relation       String?
+  reference1Address        String?
+  reference1YearsKnown     Int?
+  reference2Name           String?
+  reference2Phone          String?
+  reference2Relation       String?
+  reference2Address        String?
+  reference2YearsKnown     Int?
+  reference3Name           String?
+  reference3Phone          String?
+  reference3Relation       String?
+  reference3Address        String?
+  reference3YearsKnown     Int?
+  reference4Name           String?
+  reference4Phone          String?
+  reference4Relation       String?
+  reference4Address        String?
+  reference4YearsKnown     Int?
+  reference5Name           String?
+  reference5Phone          String?
+  reference5Relation       String?
+  reference5Address        String?
+  reference5YearsKnown     Int?
+  isBusinessBuyer          Boolean            @default(false)
+  businessName             String?
+  businessType             String?
+  businessEIN              String?
+  businessYearsInBusiness  Int?
+  businessAnnualRevenue    Decimal?           @db.Decimal(12, 2)
+  ofacCheckCompleted       Boolean            @default(false)
+  ofacCheckDate            DateTime?
+  ofacCheckResult          String?
+  ofacNotes                String?
+  identityVerified         Boolean            @default(false)
+  identityVerifiedDate     DateTime?
+  identityVerifiedBy       String?
+  source                   String?
+  notes                    String?
+  createdAt                DateTime           @default(now())
+  updatedAt                DateTime           @updatedAt
+  metaValue                Json?
+  tenantId                 String?
+  activities               Activity[]
+  employmentStatus         EmploymentStatus?  @relation(fields: [employmentStatusId], references: [id])
+  gender                   Gender?            @relation(fields: [genderId], references: [id])
+  idState                  IdState?           @relation(fields: [idStateId], references: [id])
+  idType                   IdType?            @relation(fields: [idTypeId], references: [id])
+  occupation               Occupation?        @relation(fields: [occupationId], references: [id])
+  preferredLanguage        PreferredLanguage? @relation(fields: [preferredLanguageId], references: [id])
+  tenant                   Tenant?            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  dealsAsBuyer             Deal[]             @relation("BuyerDeals")
+  dealsAsCoBuyer           Deal[]             @relation("CoBuyerDeals")
+  media                    Media[]            @relation("BuyerMedia")
 
   @@index([tenantId])
   @@index([email])
@@ -993,233 +760,134 @@ model Buyer {
   @@map("buyers")
 }
 
-// ============================================
-// DEAL - Transacción/Aplicación de crédito vinculada a un vehículo y buyer
-// ============================================
 model Deal {
-  id String @id @default(uuid())
-
-  // Multi-tenancy
-  tenantId String?
-  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-
-  // ============================================
-  // RELACIONES PRINCIPALES (Obligatorias)
-  // ============================================
-  buyerId   String // Obligatorio - Todo deal debe tener un buyer
-  vehicleId String // Obligatorio - Todo deal debe tener un vehículo
-
-  buyer   Buyer   @relation("BuyerDeals", fields: [buyerId], references: [id])
-  vehicle Vehicle @relation(fields: [vehicleId], references: [id])
-
-  // Co-Buyer (opcional)
-  coBuyerId String?
-  coBuyer   Buyer?  @relation("CoBuyerDeals", fields: [coBuyerId], references: [id])
-
-  // ============================================
-  // INFORMACIÓN DEL DEAL
-  // ============================================
-  dealNumber   String     @unique // Número único del deal (generado automáticamente)
-  dealStatusId String
-  dealStatus   DealStatus @relation(fields: [dealStatusId], references: [id])
-
-  financeTypeId String? // cash, finance, lease
-  financeType   FinanceType? @relation(fields: [financeTypeId], references: [id])
-
-  // Fechas importantes
-  dealDate     DateTime  @default(now()) // Fecha en que se inició el deal
-  deliveryDate DateTime? // Fecha de entrega del vehículo
-  fundedDate   DateTime? // Fecha en que se financió
-
-  // ============================================
-  // PRECIOS Y TÉRMINOS
-  // ============================================
-  // Precio del vehículo
-  vehiclePrice Decimal  @db.Decimal(10, 2) // Precio de lista
-  sellingPrice Decimal  @db.Decimal(10, 2) // Precio de venta final
-  discount     Decimal? @db.Decimal(10, 2) // Descuento aplicado
-  rebate       Decimal? @db.Decimal(10, 2) // Rebates del fabricante
-
-  // Trade-In
-  hasTradeIn         Boolean  @default(false)
-  tradeInYear        Int?
-  tradeInMake        String?
-  tradeInModel       String?
-  tradeInVin         String?
-  tradeInMileage     Int?
-  tradeInActualValue Decimal? @db.Decimal(10, 2) // Valor real del trade-in
-  tradeInAllowance   Decimal? @db.Decimal(10, 2) // Lo que se le da al cliente
-  tradeInPayoff      Decimal? @db.Decimal(10, 2) // Lo que se debe del trade-in
-  tradeInLienHolder  String?
-  tradeInEquity      Decimal? @db.Decimal(10, 2) // Calculado: allowance - payoff
-
-  // Impuestos y Fees
-  salesTax        Decimal? @db.Decimal(10, 2)
-  docFee          Decimal? @db.Decimal(10, 2)
-  titleFee        Decimal? @db.Decimal(10, 2)
-  registrationFee Decimal? @db.Decimal(10, 2)
-  otherFees       Decimal? @db.Decimal(10, 2)
-  totalFees       Decimal? @db.Decimal(10, 2) // Total de fees
-
-  // Totales
-  totalCashPrice Decimal? @db.Decimal(10, 2) // Precio total si paga en efectivo
-  downPayment    Decimal? @db.Decimal(10, 2) // Enganche
-  amountFinanced Decimal? @db.Decimal(10, 2) // Monto a financiar
-
-  // ============================================
-  // TÉRMINOS DE FINANCIAMIENTO
-  // ============================================
-  apr             Decimal? @db.Decimal(5, 3) // Annual Percentage Rate
-  term            Int? // Término en meses
-  monthlyPayment  Decimal? @db.Decimal(10, 2)
-  totalOfPayments Decimal? @db.Decimal(10, 2) // Total a pagar
-  financeCharge   Decimal? @db.Decimal(10, 2) // Cargos financieros
-
-  // Lender Information
-  lenderName    String?
-  lenderId      String? // ID del lender en el sistema
-  lenderRate    Decimal? @db.Decimal(5, 3) // Rate que da el lender
-  dealerReserve Decimal? @db.Decimal(5, 3) // Reserve/markup del dealer
-  buyRate       Decimal? @db.Decimal(5, 3) // Buy rate (lender rate)
-  sellRate      Decimal? @db.Decimal(5, 3) // Sell rate (to customer)
-
-  // ============================================
-  // PRODUCTOS ADICIONALES (F&I)
-  // ============================================
-  // Extended Warranty
-  hasWarranty        Boolean  @default(false)
-  warrantyProvider   String?
-  warrantyCost       Decimal? @db.Decimal(10, 2)
-  warrantyTerm       Int? // Meses o millas
-  warrantyDeductible Decimal? @db.Decimal(10, 2)
-
-  // GAP Insurance
-  hasGap      Boolean  @default(false)
-  gapProvider String?
-  gapCost     Decimal? @db.Decimal(10, 2)
-
-  // Maintenance Plan
-  hasMaintenancePlan  Boolean  @default(false)
-  maintenanceProvider String?
-  maintenanceCost     Decimal? @db.Decimal(10, 2)
-
-  // Other Products
-  hasTheftProtection  Boolean  @default(false)
-  theftProtectionCost Decimal? @db.Decimal(10, 2)
-
-  hasPaintProtection  Boolean  @default(false)
-  paintProtectionCost Decimal? @db.Decimal(10, 2)
-
-  totalAftermarketProducts Decimal? @db.Decimal(10, 2) // Total de todos los productos
-
-  // ============================================
-  // CÁLCULOS AUTOMÁTICOS (LTV, PTI, DTI)
-  // ============================================
-  loanToValue     Decimal? @db.Decimal(5, 2) // LTV %
-  paymentToIncome Decimal? @db.Decimal(5, 2) // PTI %
-  debtToIncome    Decimal? @db.Decimal(5, 2) // DTI %
-
-  // ============================================
-  // APLICACIÓN DE CRÉDITO
-  // ============================================
-  // Consentimientos
-  creditCheckConsent          Boolean   @default(false)
+  id                          String       @id @default(uuid())
+  buyerId                     String
+  vehicleId                   String
+  coBuyerId                   String?
+  dealNumber                  String       @unique
+  dealStatusId                String
+  financeTypeId               String?
+  dealDate                    DateTime     @default(now())
+  deliveryDate                DateTime?
+  fundedDate                  DateTime?
+  vehiclePrice                Decimal      @db.Decimal(10, 2)
+  sellingPrice                Decimal      @db.Decimal(10, 2)
+  discount                    Decimal?     @db.Decimal(10, 2)
+  rebate                      Decimal?     @db.Decimal(10, 2)
+  hasTradeIn                  Boolean      @default(false)
+  tradeInYear                 Int?
+  tradeInMake                 String?
+  tradeInModel                String?
+  tradeInVin                  String?
+  tradeInMileage              Int?
+  tradeInActualValue          Decimal?     @db.Decimal(10, 2)
+  tradeInAllowance            Decimal?     @db.Decimal(10, 2)
+  tradeInPayoff               Decimal?     @db.Decimal(10, 2)
+  tradeInLienHolder           String?
+  tradeInEquity               Decimal?     @db.Decimal(10, 2)
+  salesTax                    Decimal?     @db.Decimal(10, 2)
+  docFee                      Decimal?     @db.Decimal(10, 2)
+  titleFee                    Decimal?     @db.Decimal(10, 2)
+  registrationFee             Decimal?     @db.Decimal(10, 2)
+  otherFees                   Decimal?     @db.Decimal(10, 2)
+  totalFees                   Decimal?     @db.Decimal(10, 2)
+  totalCashPrice              Decimal?     @db.Decimal(10, 2)
+  downPayment                 Decimal?     @db.Decimal(10, 2)
+  amountFinanced              Decimal?     @db.Decimal(10, 2)
+  apr                         Decimal?     @db.Decimal(5, 3)
+  term                        Int?
+  monthlyPayment              Decimal?     @db.Decimal(10, 2)
+  totalOfPayments             Decimal?     @db.Decimal(10, 2)
+  financeCharge               Decimal?     @db.Decimal(10, 2)
+  lenderName                  String?
+  lenderId                    String?
+  lenderRate                  Decimal?     @db.Decimal(5, 3)
+  dealerReserve               Decimal?     @db.Decimal(5, 3)
+  buyRate                     Decimal?     @db.Decimal(5, 3)
+  sellRate                    Decimal?     @db.Decimal(5, 3)
+  hasWarranty                 Boolean      @default(false)
+  warrantyProvider            String?
+  warrantyCost                Decimal?     @db.Decimal(10, 2)
+  warrantyTerm                Int?
+  warrantyDeductible          Decimal?     @db.Decimal(10, 2)
+  hasGap                      Boolean      @default(false)
+  gapProvider                 String?
+  gapCost                     Decimal?     @db.Decimal(10, 2)
+  hasMaintenancePlan          Boolean      @default(false)
+  maintenanceProvider         String?
+  maintenanceCost             Decimal?     @db.Decimal(10, 2)
+  hasTheftProtection          Boolean      @default(false)
+  theftProtectionCost         Decimal?     @db.Decimal(10, 2)
+  hasPaintProtection          Boolean      @default(false)
+  paintProtectionCost         Decimal?     @db.Decimal(10, 2)
+  totalAftermarketProducts    Decimal?     @db.Decimal(10, 2)
+  loanToValue                 Decimal?     @db.Decimal(5, 2)
+  paymentToIncome             Decimal?     @db.Decimal(5, 2)
+  debtToIncome                Decimal?     @db.Decimal(5, 2)
+  creditCheckConsent          Boolean      @default(false)
   creditCheckDate             DateTime?
-  termsAccepted               Boolean   @default(false)
+  termsAccepted               Boolean      @default(false)
   termsAcceptedDate           DateTime?
-  privacyPolicyAccepted       Boolean   @default(false)
-  electronicDisclosureConsent Boolean   @default(false)
-
-  // Credit Report
-  creditReportPulled   Boolean   @default(false)
-  creditReportDate     DateTime?
-  creditReportProvider String? // Equifax, Experian, TransUnion
-  creditScore          Int? // Score obtenido en este deal
-
-  // Loan Application Status
-  applicationStatus String? // draft, submitted, under_review, approved, denied, pending_info
-  applicationDate   DateTime?
-  approvalDate      DateTime?
-  denialDate        DateTime?
-  denialReason      String?
-  stipulations      String? // Condiciones del lender
-
-  // ============================================
-  // INTEGRACIÓN CON PLATAFORMAS EXTERNAS
-  // ============================================
-  // DealerTrack
-  dealertrackAppId         String?
-  dealertrackStatus        String?
-  dealertrackSubmittedDate DateTime?
-
-  // RouteOne
-  routeoneAppId         String?
-  routeoneStatus        String?
-  routeoneSubmittedDate DateTime?
-
-  // CUDL
-  cudlAppId         String?
-  cudlStatus        String?
-  cudlSubmittedDate DateTime?
-
-  // ============================================
-  // COMPLIANCE (Por transacción)
-  // ============================================
-  // Form 8300 - Cash transactions > $10,000
-  cashTransactionOver10k Boolean   @default(false)
-  form8300Filed          Boolean   @default(false)
-  form8300FiledDate      DateTime?
-
-  // Red Flags Rule
-  redFlagsChecked Boolean @default(false)
-  redFlagsNotes   String?
-
-  // ============================================
-  // LOAN DETAILS (para préstamos activos del buyer)
-  // ============================================
-  // Hasta 3 préstamos activos del buyer (snapshot al momento del deal)
-  activeLoan1Type     String?
-  activeLoan1Creditor String?
-  activeLoan1Balance  Decimal? @db.Decimal(10, 2)
-  activeLoan1Payment  Decimal? @db.Decimal(10, 2)
-
-  activeLoan2Type     String?
-  activeLoan2Creditor String?
-  activeLoan2Balance  Decimal? @db.Decimal(10, 2)
-  activeLoan2Payment  Decimal? @db.Decimal(10, 2)
-
-  activeLoan3Type     String?
-  activeLoan3Creditor String?
-  activeLoan3Balance  Decimal? @db.Decimal(10, 2)
-  activeLoan3Payment  Decimal? @db.Decimal(10, 2)
-
-  // ============================================
-  // PERSONAL DEL DEALER
-  // ============================================
-  salesPersonId    String? // Vendedor asignado
-  salesManagerId   String? // Manager de ventas
-  financeManagerId String? // F&I Manager
-
-  // ============================================
-  // NOTAS Y METADATOS
-  // ============================================
-  notes         String? // Notas generales
-  internalNotes String? // Notas internas/privadas
-  customerNotes String? // Notas del cliente
-
-  source              String? // website, walk-in, phone, referral
-  ipAddress           String?
-  userAgent           String?
-  applicationLanguage String? // en, es
-
-  // Metadata
-  metaValue Json? // Metadata flexible en formato JSON
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  // Relaciones
-  activities Activity[]
+  privacyPolicyAccepted       Boolean      @default(false)
+  electronicDisclosureConsent Boolean      @default(false)
+  creditReportPulled          Boolean      @default(false)
+  creditReportDate            DateTime?
+  creditReportProvider        String?
+  creditScore                 Int?
+  applicationStatus           String?
+  applicationDate             DateTime?
+  approvalDate                DateTime?
+  denialDate                  DateTime?
+  denialReason                String?
+  stipulations                String?
+  dealertrackAppId            String?
+  dealertrackStatus           String?
+  dealertrackSubmittedDate    DateTime?
+  routeoneAppId               String?
+  routeoneStatus              String?
+  routeoneSubmittedDate       DateTime?
+  cudlAppId                   String?
+  cudlStatus                  String?
+  cudlSubmittedDate           DateTime?
+  cashTransactionOver10k      Boolean      @default(false)
+  form8300Filed               Boolean      @default(false)
+  form8300FiledDate           DateTime?
+  redFlagsChecked             Boolean      @default(false)
+  redFlagsNotes               String?
+  activeLoan1Type             String?
+  activeLoan1Creditor         String?
+  activeLoan1Balance          Decimal?     @db.Decimal(10, 2)
+  activeLoan1Payment          Decimal?     @db.Decimal(10, 2)
+  activeLoan2Type             String?
+  activeLoan2Creditor         String?
+  activeLoan2Balance          Decimal?     @db.Decimal(10, 2)
+  activeLoan2Payment          Decimal?     @db.Decimal(10, 2)
+  activeLoan3Type             String?
+  activeLoan3Creditor         String?
+  activeLoan3Balance          Decimal?     @db.Decimal(10, 2)
+  activeLoan3Payment          Decimal?     @db.Decimal(10, 2)
+  salesPersonId               String?
+  salesManagerId              String?
+  financeManagerId            String?
+  notes                       String?
+  internalNotes               String?
+  customerNotes               String?
+  source                      String?
+  ipAddress                   String?
+  userAgent                   String?
+  applicationLanguage         String?
+  createdAt                   DateTime     @default(now())
+  updatedAt                   DateTime     @updatedAt
+  metaValue                   Json?
+  tenantId                    String?
+  activities                  Activity[]
+  buyer                       Buyer        @relation("BuyerDeals", fields: [buyerId], references: [id])
+  coBuyer                     Buyer?       @relation("CoBuyerDeals", fields: [coBuyerId], references: [id])
+  dealStatus                  DealStatus   @relation(fields: [dealStatusId], references: [id])
+  financeType                 FinanceType? @relation(fields: [financeTypeId], references: [id])
+  tenant                      Tenant?      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  vehicle                     Vehicle      @relation(fields: [vehicleId], references: [id])
 
   @@index([tenantId])
   @@index([buyerId])
@@ -1235,143 +903,90 @@ model Deal {
   @@map("deals")
 }
 
-// ============================================
-// TITLE - Título de propiedad del vehículo
-// ============================================
 model Title {
-  id String @id @default(uuid())
-
-  // Multi-tenancy
-  tenantId String?
-  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-
-  // Relación con el vehículo (un título pertenece a un vehículo)
-  vehicleId String
-  vehicle   Vehicle @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
-
-  // Información del Título
-  titleNumber String? // Número del título (ROS / Title)
-  titleState  String? // Estado que emitió el título (CA, TX, FL, etc.)
-  titleType   String? // Original, Duplicate, Salvage, Rebuilt, etc.
-
-  // Estado del título
-  titleStatusId String?
-  titleStatus   TitleStatus? @relation(fields: [titleStatusId], references: [id])
-
-  // Brand del título (Clean, Salvage, Junk, Rebuilt, etc.)
-  brandStatusId String?
-  brandStatus   BrandStatus? @relation(fields: [brandStatusId], references: [id])
-
-  // Fechas importantes
-  titleIssueDate    DateTime? // Fecha de emisión del título
-  titleReceivedDate DateTime? // Fecha en que se recibió el título
-  titleSentDate     DateTime? // Fecha en que se envió el título
-
-  // Información del propietario en el título
-  ownerName    String? // Nombre del propietario según el título
-  ownerAddress String?
-  ownerCity    String?
-  ownerState   String?
-  ownerZipCode String?
-
-  // Información del co-propietario (si aplica)
-  coOwnerName    String?
-  coOwnerAddress String?
-
-  // Gravámenes (Liens)
-  hasLien           Boolean   @default(false)
-  lienHolder        String? // Nombre del acreedor
-  lienHolderAddress String?
-  lienHolderCity    String?
-  lienHolderState   String?
-  lienHolderZipCode String?
-  lienAmount        Decimal?  @db.Decimal(10, 2)
-  lienDate          DateTime?
-  lienReleaseDate   DateTime?
-  hasSecondLien     Boolean   @default(false)
-  secondLienHolder  String?
-  secondLienAmount  Decimal?  @db.Decimal(10, 2)
-
-  // Odómetro
-  odometerReading    Int? // Lectura del odómetro
-  odometerDate       DateTime? // Fecha de la lectura
-  odometerDisclosure String? // Actual, Not Actual, Exceeds Mechanical Limits
-  odometerBrand      String? // TMU (True Mileage Unknown), EML (Exceeds Mechanical Limits)
-
-  // Información del vehículo según el título
-  titleVIN       String? // VIN según el título (para verificación)
-  titleYear      Int?
-  titleMake      String?
-  titleModel     String?
-  titleBodyStyle String?
-  titleColor     String?
-
-  // Transferencia
-  isPendingTransfer Boolean   @default(false)
-  transferDate      DateTime?
-  transferredFrom   String? // Nombre del vendedor anterior
-  transferredTo     String? // Nombre del nuevo comprador
-
-  // Title Application Number
-  titleAppNumber String?
-
-  // Front/Back images of the title
-  frontImageId String?
-  frontImage   Media?  @relation("TitleFrontImage", fields: [frontImageId], references: [id])
-
-  backImageId String?
-  backImage   Media?  @relation("TitleBackImage", fields: [backImageId], references: [id])
-
-  // Documentos relacionados - Relación con Media
-  fileId String? // Archivo del título escaneado
-  file   Media?  @relation("TitleFile", fields: [fileId], references: [id])
-
-  lienReleaseFileId String?
-  lienReleaseFile   Media?  @relation("TitleLienReleaseFile", fields: [lienReleaseFileId], references: [id])
-
-  billOfSaleFileId String?
-  billOfSaleFile   Media?  @relation("TitleBillOfSaleFile", fields: [billOfSaleFileId], references: [id])
-
+  id                      String       @id @default(uuid())
+  vehicleId               String
+  titleNumber             String?
+  titleState              String?
+  titleType               String?
+  titleStatusId           String?
+  brandStatusId           String?
+  titleIssueDate          DateTime?
+  titleReceivedDate       DateTime?
+  titleSentDate           DateTime?
+  ownerName               String?
+  ownerAddress            String?
+  ownerCity               String?
+  ownerState              String?
+  ownerZipCode            String?
+  coOwnerName             String?
+  coOwnerAddress          String?
+  hasLien                 Boolean      @default(false)
+  lienHolder              String?
+  lienHolderAddress       String?
+  lienHolderCity          String?
+  lienHolderState         String?
+  lienHolderZipCode       String?
+  lienAmount              Decimal?     @db.Decimal(10, 2)
+  lienDate                DateTime?
+  lienReleaseDate         DateTime?
+  hasSecondLien           Boolean      @default(false)
+  secondLienHolder        String?
+  secondLienAmount        Decimal?     @db.Decimal(10, 2)
+  odometerReading         Int?
+  odometerDate            DateTime?
+  odometerDisclosure      String?
+  odometerBrand           String?
+  titleVIN                String?
+  titleYear               Int?
+  titleMake               String?
+  titleModel              String?
+  titleBodyStyle          String?
+  titleColor              String?
+  isPendingTransfer       Boolean      @default(false)
+  transferDate            DateTime?
+  transferredFrom         String?
+  transferredTo           String?
+  fileId                  String?
+  lienReleaseFileId       String?
+  billOfSaleFileId        String?
   odometerStatementFileId String?
-  odometerStatementFile   Media?  @relation("TitleOdometerStatementFile", fields: [odometerStatementFileId], references: [id])
-
-  // Historial y verificación
-  titleVerified     Boolean   @default(false)
-  titleVerifiedDate DateTime?
-  titleVerifiedBy   String? // Usuario que verificó
-
-  isElectronic      Boolean @default(false) // Título electrónico
-  electronicTitleId String? // ID del título electrónico
-
-  // NMVTIS (National Motor Vehicle Title Information System)
-  nmvtisChecked   Boolean   @default(false)
-  nmvtisCheckDate DateTime?
-  nmvtisStatus    String? // Clean, Salvage, Junk, etc.
-
-  // Estado actual del título
-  currentLocation    String? // Physical, Bank, DMV, Customer, etc.
-  shippingTracking   String? // Tracking number si fue enviado
-  expectedReturnDate DateTime?
-
-  // Fees y costos
-  titleFee            Decimal? @db.Decimal(10, 2)
-  transferFee         Decimal? @db.Decimal(10, 2)
-  liensatisfactionFee Decimal? @db.Decimal(10, 2)
-  totalFees           Decimal? @db.Decimal(10, 2)
-
-  // Notas
-  notes         String?
-  internalNotes String?
-
-  // Compliance
-  form8300Required Boolean @default(false) // Si la transacción fue > $10,000 en efectivo
-  form8300Filed    Boolean @default(false)
-
-  // Metadata
-  metaValue Json? // Metadata flexible en formato JSON
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  titleVerified           Boolean      @default(false)
+  titleVerifiedDate       DateTime?
+  titleVerifiedBy         String?
+  isElectronic            Boolean      @default(false)
+  electronicTitleId       String?
+  nmvtisChecked           Boolean      @default(false)
+  nmvtisCheckDate         DateTime?
+  nmvtisStatus            String?
+  currentLocation         String?
+  shippingTracking        String?
+  expectedReturnDate      DateTime?
+  titleFee                Decimal?     @db.Decimal(10, 2)
+  transferFee             Decimal?     @db.Decimal(10, 2)
+  liensatisfactionFee     Decimal?     @db.Decimal(10, 2)
+  totalFees               Decimal?     @db.Decimal(10, 2)
+  notes                   String?
+  internalNotes           String?
+  form8300Required        Boolean      @default(false)
+  form8300Filed           Boolean      @default(false)
+  createdAt               DateTime     @default(now())
+  updatedAt               DateTime     @updatedAt
+  metaValue               Json?
+  tenantId                String?
+  backImageId             String?
+  frontImageId            String?
+  titleAppNumber          String?
+  backImage               Media?       @relation("TitleBackImage", fields: [backImageId], references: [id])
+  billOfSaleFile          Media?       @relation("TitleBillOfSaleFile", fields: [billOfSaleFileId], references: [id])
+  brandStatus             BrandStatus? @relation(fields: [brandStatusId], references: [id])
+  file                    Media?       @relation("TitleFile", fields: [fileId], references: [id])
+  frontImage              Media?       @relation("TitleFrontImage", fields: [frontImageId], references: [id])
+  lienReleaseFile         Media?       @relation("TitleLienReleaseFile", fields: [lienReleaseFileId], references: [id])
+  odometerStatementFile   Media?       @relation("TitleOdometerStatementFile", fields: [odometerStatementFileId], references: [id])
+  tenant                  Tenant?      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  titleStatus             TitleStatus? @relation(fields: [titleStatusId], references: [id])
+  vehicle                 Vehicle      @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
 
   @@index([tenantId])
   @@index([vehicleId])
@@ -1390,75 +1005,46 @@ model Title {
   @@map("titles")
 }
 
-// ============================================
-// MEDIA - Archivos multimedia (imágenes, videos, documentos)
-// ============================================
 model Media {
-  id String @id @default(uuid())
-
-  // Multi-tenancy
-  tenantId String?
-  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-
-  // Información del archivo
-  filename String // Nombre original del archivo
-  url      String // URL completa del archivo
-  path     String? // Ruta relativa en el storage
-  mimeType String // image/jpeg, image/png, video/mp4, application/pdf, etc.
-  size     Int // Tamaño en bytes
-  width    Int? // Ancho en píxeles (para imágenes/videos)
-  height   Int? // Alto en píxeles (para imágenes/videos)
-  duration Int? // Duración en segundos (para videos)
-
-  // Metadata
-  title       String?
-  description String?
-  alt         String? // Texto alternativo para imágenes
-
-  // Tipo y contexto
-  mediaType String // image, video, document, etc.
-  category  String? // exterior, interior, engine, document, etc.
-
-  // Storage
-  storageProvider String? // local, s3, cloudinary, etc.
-  storageBucket   String? // Nombre del bucket si aplica
-  storageKey      String? // Key/identificador en el storage
-
-  // Estado
-  isPublic Boolean @default(true)
-  isActive Boolean @default(true)
-
-  // Relaciones con Vehicle
-  vehicleId String?
-  vehicle   Vehicle? @relation("VehicleGallery", fields: [vehicleId], references: [id], onDelete: Cascade)
-
-  vehicleAsMain Vehicle? @relation("VehicleMainImage")
-
-  // Relaciones con Buyer (documentos privados del comprador)
-  buyerId String?
-  buyer   Buyer?  @relation("BuyerMedia", fields: [buyerId], references: [id], onDelete: Cascade)
-
-  // Relaciones con Title (documentos del título)
-  titleAsFrontImage            Title[] @relation("TitleFrontImage")
-  titleAsBackImage             Title[] @relation("TitleBackImage")
-  titleAsFile                  Title[] @relation("TitleFile")
-  titleAsLienReleaseFile       Title[] @relation("TitleLienReleaseFile")
-  titleAsBillOfSaleFile        Title[] @relation("TitleBillOfSaleFile")
-  titleAsOdometerStatementFile Title[] @relation("TitleOdometerStatementFile")
-
-  // Relaciones con ExtraExpense (recibos)
-  extraExpenseReceipts ExtraExpense[] @relation("ExtraExpenseReceipts")
-
-  // Relaciones con Part
-  partId       String?
-  part         Part?   @relation("PartMedia", fields: [partId], references: [id], onDelete: Cascade)
-  partAsMain   Part?   @relation("PartMainImage")
-
-  // Metadata
-  metaValue Json? // Metadata flexible en formato JSON
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id                           String         @id @default(uuid())
+  filename                     String
+  url                          String
+  path                         String?
+  mimeType                     String
+  size                         Int
+  width                        Int?
+  height                       Int?
+  duration                     Int?
+  title                        String?
+  description                  String?
+  alt                          String?
+  mediaType                    String
+  category                     String?
+  storageProvider              String?
+  storageBucket                String?
+  storageKey                   String?
+  isPublic                     Boolean        @default(true)
+  isActive                     Boolean        @default(true)
+  vehicleId                    String?
+  createdAt                    DateTime       @default(now())
+  updatedAt                    DateTime       @updatedAt
+  metaValue                    Json?
+  buyerId                      String?
+  tenantId                     String?
+  partId                       String?
+  buyer                        Buyer?         @relation("BuyerMedia", fields: [buyerId], references: [id], onDelete: Cascade)
+  part                         Part?          @relation("PartMedia", fields: [partId], references: [id], onDelete: Cascade)
+  tenant                       Tenant?        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  vehicle                      Vehicle?       @relation("VehicleGallery", fields: [vehicleId], references: [id], onDelete: Cascade)
+  partAsMain                   Part?          @relation("PartMainImage")
+  titleAsBackImage             Title[]        @relation("TitleBackImage")
+  titleAsBillOfSaleFile        Title[]        @relation("TitleBillOfSaleFile")
+  titleAsFile                  Title[]        @relation("TitleFile")
+  titleAsFrontImage            Title[]        @relation("TitleFrontImage")
+  titleAsLienReleaseFile       Title[]        @relation("TitleLienReleaseFile")
+  titleAsOdometerStatementFile Title[]        @relation("TitleOdometerStatementFile")
+  vehicleAsMain                Vehicle?       @relation("VehicleMainImage")
+  extraExpenseReceipts         ExtraExpense[] @relation("ExtraExpenseReceipts")
 
   @@index([tenantId])
   @@index([vehicleId])
@@ -1470,123 +1056,88 @@ model Media {
   @@map("media")
 }
 
-// ============================================
-// VEHICLE - Vehículo en inventario
-// ============================================
 model Vehicle {
-  id String @id @default(uuid())
-
-  // Multi-tenancy
-  tenantId String?
-  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-
-  // VIN y Stock
-  vin         String  @unique
-  stockNumber String? @unique
-
-  // Relaciones con Año, Marca, Modelo, Trim (requeridos excepto trim)
-  yearId  String
-  makeId  String
-  modelId String
-  trimId  String?
-
-  year  VehicleYear  @relation(fields: [yearId], references: [id])
-  make  VehicleMake  @relation(fields: [makeId], references: [id])
-  model VehicleModel @relation(fields: [modelId], references: [id])
-  trim  VehicleTrim? @relation(fields: [trimId], references: [id])
-
-  // Detalles del vehículo
-  mileage       Int?
-  mileageUnitId String?
-  exteriorColor String?
-  interiorColor String?
-
-  // Tipos y condiciones (usando nomencladores)
-  vehicleTypeId      String?
-  bodyTypeId         String?
-  bodySubtypeId      String?
-  fuelTypeId         String?
-  driveTypeId        String?
-  transmissionTypeId String?
-  vehicleConditionId String?
-  vehicleStatusId    String?
-  sourceId           String?
-  titleBrandId       String?
-
-  // Relaciones con nomencladores
-  mileageUnit      MileageUnit?      @relation(fields: [mileageUnitId], references: [id])
-  vehicleType      VehicleType?      @relation(fields: [vehicleTypeId], references: [id])
-  bodyType         BodyType?         @relation(fields: [bodyTypeId], references: [id])
-  bodySubtype      BodySubtype?      @relation(fields: [bodySubtypeId], references: [id])
-  fuelType         FuelType?         @relation(fields: [fuelTypeId], references: [id])
-  driveType        DriveType?        @relation(fields: [driveTypeId], references: [id])
-  transmissionType TransmissionType? @relation(fields: [transmissionTypeId], references: [id])
-  vehicleCondition VehicleCondition? @relation(fields: [vehicleConditionId], references: [id])
-  vehicleStatus    VehicleStatus?    @relation(fields: [vehicleStatusId], references: [id])
-  titleBrand       TitleBrand?       @relation(fields: [titleBrandId], references: [id])
-  source           VehicleSource?    @relation(fields: [sourceId], references: [id])
-
-  // Precios (legacy - kept for backward compat)
-  costPrice Decimal? @db.Decimal(10, 2)
-  listPrice Decimal? @db.Decimal(10, 2)
-  salePrice Decimal? @db.Decimal(10, 2)
-
-  // Cost Info
-  vehicleCost  Decimal?  @db.Decimal(10, 2)
-  purchaseDate DateTime?
-
-  // Retail Pricing
-  askingPrice           Decimal?  @db.Decimal(10, 2)
-  advertisingPrice      Decimal?  @db.Decimal(10, 2)
-  specialPrice          Decimal?  @db.Decimal(10, 2)
-  specialPriceStartDate DateTime?
+  id                    String            @id @default(uuid())
+  vin                   String            @unique
+  stockNumber           String?           @unique
+  mileage               Int?
+  exteriorColor         String?
+  interiorColor         String?
+  vehicleTypeId         String?
+  bodyTypeId            String?
+  fuelTypeId            String?
+  driveTypeId           String?
+  transmissionTypeId    String?
+  vehicleConditionId    String?
+  vehicleStatusId       String?
+  sourceId              String?
+  costPrice             Decimal?          @db.Decimal(10, 2)
+  listPrice             Decimal?          @db.Decimal(10, 2)
+  salePrice             Decimal?          @db.Decimal(10, 2)
+  engine                String?
+  cylinders             Int?
+  doors                 Int?
+  passengers            Int?
+  description           String?
+  features              String?
+  mainImageId           String?           @unique
+  createdAt             DateTime          @default(now())
+  updatedAt             DateTime          @updatedAt
+  makeId                String
+  modelId               String
+  trimId                String?
+  yearId                String
+  metaValue             Json?
+  tenantId              String?
+  titleBrandId          String?
+  advertisingPrice      Decimal?          @db.Decimal(10, 2)
+  askingPrice           Decimal?          @db.Decimal(10, 2)
+  bidIncrement          Decimal?          @db.Decimal(10, 2)
+  buyNowPrice           Decimal?          @db.Decimal(10, 2)
+  floorPrice            Decimal?          @db.Decimal(10, 2)
+  minDepositAmount      Decimal?          @db.Decimal(10, 2)
+  minDepositPercent     Decimal?          @db.Decimal(5, 2)
+  minDepositType        String?
+  minDownAmount         Decimal?          @db.Decimal(10, 2)
+  minDownPercent        Decimal?          @db.Decimal(5, 2)
+  minDownType           String?
+  msrp                  Decimal?          @db.Decimal(10, 2)
+  purchaseDate          DateTime? @default(now())
+  specialPrice          Decimal?          @db.Decimal(10, 2)
   specialPriceEndDate   DateTime?
-  msrp                  Decimal?  @db.Decimal(10, 2)
-  minDownType           String?   // "percent" | "fixed"
-  minDownPercent        Decimal?  @db.Decimal(5, 2)
-  minDownAmount         Decimal?  @db.Decimal(10, 2)
-  minDepositType        String?   // "percent" | "fixed"
-  minDepositPercent     Decimal?  @db.Decimal(5, 2)
-  minDepositAmount      Decimal?  @db.Decimal(10, 2)
-
-  // Wholesale Pricing
-  wholesalePrice      Decimal? @db.Decimal(10, 2)
-  floorPrice          Decimal? @db.Decimal(10, 2)
-  buyNowPrice         Decimal? @db.Decimal(10, 2)
-  startBid            Decimal? @db.Decimal(10, 2)
-  startBidEqualsFloor Boolean  @default(false)
-  bidIncrement        Decimal? @db.Decimal(10, 2)
-
-  // Motor y especificaciones
-  engineId   String?
-  vehicleEngine VehicleEngine? @relation(fields: [engineId], references: [id])
-  engine     String?
-  cylinders  Int?
-  doors      Int?
-  passengers Int?
-
-  // Información adicional
-  description String?
-  features    String? // JSON o texto con features
-
-  // Imágenes - Relación con Media
-  mainImageId String? @unique
-  mainImage   Media?  @relation("VehicleMainImage", fields: [mainImageId], references: [id])
-  gallery     Media[] @relation("VehicleGallery")
-
-  // Metadata
-  metaValue Json? // Metadata flexible en formato JSON
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  // Relaciones
-  deals           Deal[]
-  titles          Title[] // Un vehículo puede tener múltiples títulos
-  extraExpenses   ExtraExpense[] // Gastos extras del vehículo
-  activities      Activity[]
-  leadsInterested Lead[]         @relation("LeadInterestedVehicle")
-  partsExtracted  Part[]         @relation("PartSourceVehicle") // Partes extraídas de este vehículo
+  specialPriceStartDate DateTime?
+  startBid              Decimal?          @db.Decimal(10, 2)
+  startBidEqualsFloor   Boolean           @default(false)
+  vehicleCost           Decimal           @default(0) @db.Decimal(10, 2)
+  wholesalePrice        Decimal?          @db.Decimal(10, 2)
+  mileageUnitId         String?
+  bodySubtypeId         String?
+  engineId              String?
+  activities            Activity[]
+  deals                 Deal[]
+  extraExpenses         ExtraExpense[]
+  leadsInterested       Lead[]            @relation("LeadInterestedVehicle")
+  gallery               Media[]           @relation("VehicleGallery")
+  partsExtracted        Part[]            @relation("PartSourceVehicle")
+  titles                Title[]
+  bodySubtype           BodySubtype?      @relation(fields: [bodySubtypeId], references: [id])
+  bodyType              BodyType?         @relation(fields: [bodyTypeId], references: [id])
+  driveType             DriveType?        @relation(fields: [driveTypeId], references: [id])
+  vehicleEngine         VehicleEngine?    @relation(fields: [engineId], references: [id])
+  fuelType              FuelType?         @relation(fields: [fuelTypeId], references: [id])
+  mainImage             Media?            @relation("VehicleMainImage", fields: [mainImageId], references: [id])
+  make                  VehicleMake       @relation(fields: [makeId], references: [id])
+  mileageUnit           MileageUnit?      @relation(fields: [mileageUnitId], references: [id])
+  model                 VehicleModel      @relation(fields: [modelId], references: [id])
+  source                VehicleSource?    @relation(fields: [sourceId], references: [id])
+  tenant                Tenant?           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  titleBrand            TitleBrand?       @relation(fields: [titleBrandId], references: [id])
+  transmissionType      TransmissionType? @relation(fields: [transmissionTypeId], references: [id])
+  trim                  VehicleTrim?      @relation(fields: [trimId], references: [id])
+  vehicleCondition      VehicleCondition? @relation(fields: [vehicleConditionId], references: [id])
+  vehicleStatus         VehicleStatus?    @relation(fields: [vehicleStatusId], references: [id])
+  vehicleType           VehicleType?      @relation(fields: [vehicleTypeId], references: [id])
+  year                  VehicleYear       @relation(fields: [yearId], references: [id])
 
   @@index([tenantId])
   @@index([vin])
@@ -1602,74 +1153,44 @@ model Vehicle {
   @@map("vehicles")
 }
 
-// ============================================
-// EXTRA EXPENSE - Gastos extras del vehículo
-// ============================================
 model ExtraExpense {
-  id String @id @default(uuid())
-
-  // Multi-tenancy
-  tenantId String?
-  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-
+  id          String   @id @default(uuid())
   /// Relación con el vehículo
-  vehicleId String
-  vehicle   Vehicle @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
-
-  // Información del gasto
+  vehicleId   String
   description String
-  price       Decimal @db.Decimal(10, 2)
-
-  // Recibos escaneados - Relación many-to-many con Media
-  receipts Media[] @relation("ExtraExpenseReceipts")
-
-  // Metadata
-  metaValue Json? // Metadata flexible en formato JSON
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  price       Decimal  @db.Decimal(10, 2)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  metaValue   Json?
+  tenantId    String?
+  tenant      Tenant?  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  vehicle     Vehicle  @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  receipts    Media[]  @relation("ExtraExpenseReceipts")
 
   @@index([tenantId])
   @@index([vehicleId])
   @@map("extra_expenses")
 }
 
-// ============================================
-// META - Metadata flexible para cualquier entidad del sistema
-// Relación polimórfica con múltiples tablas
-// ============================================
 model Meta {
-  id String @id @default(uuid())
+  id          String   @id @default(uuid())
+  entityType  String
+  entityId    String
+  userId      String?
+  key         String
+  value       String
+  valueType   String   @default("string")
+  description String?
+  isPublic    Boolean  @default(false)
+  isSystem    Boolean  @default(false)
+  isActive    Boolean  @default(true)
+  isDeleted   Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  tenantId    String?
+  tenant      Tenant?  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
-  // Multi-tenancy
-  tenantId String?
-  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-
-  // Relación polimórfica
-  entityType String // 'user', 'vehicle', 'buyer', 'deal', 'title', 'media', 'vehicleYear', 'vehicleMake', 'vehicleModel', 'vehicleTrim', 'extraExpense'
-  entityId   String // ID de la entidad
-
-  // Usuario que creó/modificó el meta (opcional) - sin relación directa
-  userId String?
-
-  // Información del meta
-  key         String // Clave del metadata (ej: 'custom_field_1', 'api_sync_status', 'carfax_report_id')
-  value       String // Valor del metadata como string
-  valueType   String  @default("string") // string, number, boolean, json, date
-  description String? // Descripción opcional del campo
-
-  // Control de visibilidad
-  isPublic  Boolean @default(false) // Si es visible públicamente
-  isSystem  Boolean @default(false) // Si es un meta del sistema (no editable por usuarios)
-  isActive  Boolean @default(true) // Si está activo
-  isDeleted Boolean @default(false) // Soft delete
-
-  // Timestamps
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  // Índices compuestos para búsquedas eficientes
-  @@unique([entityType, entityId, key]) // Un entityType+entityId no puede tener la misma key duplicada
+  @@unique([entityType, entityId, key])
   @@index([tenantId])
   @@index([entityType, entityId])
   @@index([userId])
@@ -1679,53 +1200,31 @@ model Meta {
   @@map("metas")
 }
 
-// ============================================
-// AUDIT LOG - Registro de auditoría para compliance
-// RouteOne, DealerTrack, GLBA, OFAC
-// ============================================
 model AuditLog {
-  id String @id @default(uuid())
-
-  // Multi-tenancy
-  tenantId String?
-  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-
-  // Usuario que realizó la acción - sin relación directa
-  userId    String?
-  userEmail String
-
-  // Acción realizada
-  action   String // create, read, update, delete, export, access
-  resource String // buyer, deal, vehicle, media, title, etc.
-
-  // IDs de recursos afectados
-  resourceId String? // ID del recurso principal
-  buyerId    String? // ID del buyer (si aplica)
-  vehicleId  String? // ID del vehículo (si aplica)
-  dealId     String? // ID del deal (si aplica)
-
-  // Detalles de la request
-  method    String // GET, POST, PUT, DELETE, PATCH
-  url       String
-  ipAddress String
-  userAgent String?
-
-  // Resultado
-  status       String // success, failure
-  duration     Int? // Duración en ms
+  id           String   @id @default(uuid())
+  userId       String?
+  userEmail    String
+  action       String
+  resource     String
+  resourceId   String?
+  buyerId      String?
+  vehicleId    String?
+  dealId       String?
+  method       String
+  url          String
+  ipAddress    String
+  userAgent    String?
+  status       String
+  duration     Int?
   errorMessage String?
   errorCode    Int?
-
-  // Clasificación de seguridad
-  level      String // low, medium, high, critical
-  pii        Boolean // Personally Identifiable Information
-  compliance String[] // ['routeone', 'dealertrack', 'glba', 'ofac']
-
-  // Metadata adicional (JSON)
-  metadata Json?
-
-  // Timestamp
-  createdAt DateTime @default(now())
+  level        String
+  pii          Boolean
+  compliance   String[]
+  metadata     Json?
+  createdAt    DateTime @default(now())
+  tenantId     String?
+  tenant       Tenant?  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@index([tenantId])
   @@index([userId])
@@ -1743,70 +1242,45 @@ model AuditLog {
   @@map("audit_logs")
 }
 
-// ============================================
-// ACTIVITY - Notas, tareas, llamadas, emails
-// ============================================
 model Activity {
-  id String @id @default(uuid())
-
-  // Multi-tenancy
-  tenantId String
-  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-
-  // Tipo y estado de actividad
+  id               String         @id @default(uuid())
+  tenantId         String
   activityTypeId   String
-  activityType     ActivityType   @relation(fields: [activityTypeId], references: [id])
   activityStatusId String
+  subject          String?
+  description      String?
+  notes            String?
+  entityType       String?
+  entityId         String?
+  buyerId          String?
+  dealId           String?
+  vehicleId        String?
+  leadId           String?
+  assignedToId     String?
+  createdById      String?
+  dueDate          DateTime?
+  reminderDate     DateTime?
+  completedAt      DateTime?
+  completedById    String?
+  callDuration     Int?
+  callDirection    String?
+  phoneNumber      String?
+  emailFrom        String?
+  emailTo          String?
+  emailSubject     String?
+  priority         String         @default("normal")
+  metaValue        Json?
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+  partId           String?
   activityStatus   ActivityStatus @relation(fields: [activityStatusId], references: [id])
-
-  // Contenido
-  subject     String? // Asunto de la actividad
-  description String? // Descripción o contenido de la nota/tarea
-  notes       String? // Notas adicionales
-
-  // Relación polimórfica - la actividad puede estar asociada a diferentes entidades
-  entityType String? // 'buyer', 'deal', 'vehicle', 'lead'
-  entityId   String? // ID de la entidad asociada
-
-  // Relaciones directas (opcionales, para queries más eficientes)
-  buyerId   String?
-  buyer     Buyer?   @relation(fields: [buyerId], references: [id], onDelete: SetNull)
-  dealId    String?
-  deal      Deal?    @relation(fields: [dealId], references: [id], onDelete: SetNull)
-  vehicleId String?
-  vehicle   Vehicle? @relation(fields: [vehicleId], references: [id], onDelete: SetNull)
-  leadId    String?
-  lead      Lead?    @relation(fields: [leadId], references: [id], onDelete: SetNull)
-  partId    String?
-  part      Part?    @relation("PartActivities", fields: [partId], references: [id], onDelete: SetNull)
-
-  // Asignación
-  assignedToId String? // Usuario asignado (TenantUser ID)
-  createdById  String? // Usuario que creó la actividad
-
-  // Fechas
-  dueDate       DateTime? // Fecha límite para tareas
-  reminderDate  DateTime? // Recordatorio
-  completedAt   DateTime? // Fecha de completado
-  completedById String? // Usuario que completó
-
-  // Para llamadas
-  callDuration  Int? // Duración en segundos
-  callDirection String? // inbound, outbound
-  phoneNumber   String? // Número de teléfono
-
-  // Para emails
-  emailFrom    String?
-  emailTo      String?
-  emailSubject String?
-
-  // Prioridad
-  priority String @default("normal") // low, normal, high, urgent
-
-  // Metadata
-  metaValue Json?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  activityType     ActivityType   @relation(fields: [activityTypeId], references: [id])
+  buyer            Buyer?         @relation(fields: [buyerId], references: [id])
+  deal             Deal?          @relation(fields: [dealId], references: [id])
+  lead             Lead?          @relation(fields: [leadId], references: [id])
+  part             Part?          @relation("PartActivities", fields: [partId], references: [id])
+  tenant           Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  vehicle          Vehicle?       @relation(fields: [vehicleId], references: [id])
 
   @@index([tenantId])
   @@index([activityTypeId])
@@ -1824,81 +1298,49 @@ model Activity {
   @@map("activities")
 }
 
-// ============================================
-// LEAD - Prospecto/Oportunidad de venta
-// ============================================
 model Lead {
-  id String @id @default(uuid())
-
-  // Multi-tenancy
-  tenantId String
-  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-
-  // Información de contacto
-  firstName String
-  lastName  String
-  email     String?
-  phone     String?
-  phoneAlt  String?
-
-  // Fuente del lead
-  leadSourceId String?
-  leadSource   LeadSource? @relation(fields: [leadSourceId], references: [id])
-
-  // Estado del lead (pipeline stage)
-  stage String @default("new") // new, contacted, qualified, proposal, negotiation, won, lost
-
-  // Vehículo de interés
+  id                  String      @id @default(uuid())
+  tenantId            String
+  firstName           String
+  lastName            String
+  email               String?
+  phone               String?
+  phoneAlt            String?
+  leadSourceId        String?
+  stage               String      @default("new")
   interestedVehicleId String?
-  interestedVehicle   Vehicle? @relation("LeadInterestedVehicle", fields: [interestedVehicleId], references: [id], onDelete: SetNull)
-
-  // Preferencias del cliente
-  preferredYear     Int?
-  preferredMake     String?
-  preferredModel    String?
-  preferredPriceMin Decimal? @db.Decimal(10, 2)
-  preferredPriceMax Decimal? @db.Decimal(10, 2)
-  preferredBodyType String?
-  preferredFuelType String?
-
-  // Información financiera
-  budget             Decimal? @db.Decimal(10, 2)
-  downPaymentAmount  Decimal? @db.Decimal(10, 2)
-  hasTradeIn         Boolean  @default(false)
-  tradeInDescription String?
-  creditScore        Int?
-
-  // Asignación
-  assignedToId String? // Vendedor asignado (TenantUser ID)
-
-  // Conversión
-  convertedToBuyerId String? // Si se convierte en buyer
-  convertedToDealId  String? // Si se convierte en deal
-  convertedAt        DateTime?
-
-  // Motivo de pérdida
-  lostReason String?
-  lostAt     DateTime?
-
-  // Notas
-  notes         String?
-  internalNotes String?
-
-  // Fechas de seguimiento
-  nextFollowUpDate DateTime?
-  lastContactedAt  DateTime?
-
-  // Metadata
-  source    String? // website, walk-in, phone, referral, social
-  ipAddress String?
-  userAgent String?
-  metaValue Json?
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  // Relaciones
-  activities Activity[]
+  preferredYear       Int?
+  preferredMake       String?
+  preferredModel      String?
+  preferredPriceMin   Decimal?    @db.Decimal(10, 2)
+  preferredPriceMax   Decimal?    @db.Decimal(10, 2)
+  preferredBodyType   String?
+  preferredFuelType   String?
+  budget              Decimal?    @db.Decimal(10, 2)
+  downPaymentAmount   Decimal?    @db.Decimal(10, 2)
+  hasTradeIn          Boolean     @default(false)
+  tradeInDescription  String?
+  creditScore         Int?
+  assignedToId        String?
+  convertedToBuyerId  String?
+  convertedToDealId   String?
+  convertedAt         DateTime?
+  lostReason          String?
+  lostAt              DateTime?
+  notes               String?
+  internalNotes       String?
+  nextFollowUpDate    DateTime?
+  lastContactedAt     DateTime?
+  source              String?
+  ipAddress           String?
+  userAgent           String?
+  metaValue           Json?
+  createdAt           DateTime    @default(now())
+  updatedAt           DateTime    @updatedAt
+  activities          Activity[]
+  interestedVehicle   Vehicle?    @relation("LeadInterestedVehicle", fields: [interestedVehicleId], references: [id])
+  leadSource          LeadSource? @relation(fields: [leadSourceId], references: [id])
+  tenant              Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@index([tenantId])
   @@index([leadSourceId])
@@ -1913,44 +1355,25 @@ model Lead {
   @@map("leads")
 }
 
-// ============================================
-// NOTIFICATION - Notificaciones del sistema
-// ============================================
 model Notification {
-  id String @id @default(uuid())
-
-  // Multi-tenancy
-  tenantId String
-  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-
-  // Destinatario
-  userId String // Usuario destinatario (User ID)
-
-  // Contenido
-  title   String
-  message String
-  type    String // info, success, warning, error, reminder, task, lead, deal
-
-  // Referencia a entidad relacionada
-  entityType String? // 'lead', 'deal', 'activity', 'buyer', 'vehicle'
-  entityId   String?
-
-  // URL de acción
-  actionUrl String?
-
-  // Estado
-  isRead   Boolean   @default(false)
-  readAt   DateTime?
-  priority String    @default("normal") // low, normal, high, urgent
-
-  // Canales de envío
-  sentViaEmail Boolean @default(false)
-  sentViaPush  Boolean @default(false)
-  sentViaSms   Boolean @default(false)
-
-  // Metadata
-  metaValue Json?
-  createdAt DateTime @default(now())
+  id           String    @id @default(uuid())
+  tenantId     String
+  userId       String
+  title        String
+  message      String
+  type         String
+  entityType   String?
+  entityId     String?
+  actionUrl    String?
+  isRead       Boolean   @default(false)
+  readAt       DateTime?
+  priority     String    @default("normal")
+  sentViaEmail Boolean   @default(false)
+  sentViaPush  Boolean   @default(false)
+  sentViaSms   Boolean   @default(false)
+  metaValue    Json?
+  createdAt    DateTime  @default(now())
+  tenant       Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@index([tenantId])
   @@index([userId])
@@ -1961,49 +1384,30 @@ model Notification {
   @@map("notifications")
 }
 
-// ============================================
-// TENANT INTEGRATION - Integraciones externas por tenant
-// ============================================
 model TenantIntegration {
-  id String @id @default(uuid())
-
-  // Multi-tenancy
-  tenantId String
-  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-
-  // Información de la integración
-  provider    String // dealertrack, routeone, cudl, carfax, autocheck, etc.
-  name        String // Nombre descriptivo
-  description String?
-
-  // Credenciales (encriptadas)
-  credentials Json? // { apiKey, apiSecret, username, password, etc. }
-
-  // Configuración
-  config   Json? // Configuración específica del provider
-  settings Json? // Preferencias del tenant para esta integración
-
-  // URLs
-  baseUrl     String?
-  webhookUrl  String?
-  callbackUrl String?
-
-  // Estado
-  isActive     Boolean   @default(true)
-  isConfigured Boolean   @default(false)
-  lastSyncAt   DateTime?
-  lastErrorAt  DateTime?
-  lastErrorMsg String?
-
-  // Límites y uso
-  rateLimit     Int? // Límite de requests por hora
-  requestsToday Int  @default(0)
-  requestsMonth Int  @default(0)
-
-  // Metadata
-  metaValue Json?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id            String    @id @default(uuid())
+  tenantId      String
+  provider      String
+  name          String
+  description   String?
+  credentials   Json?
+  config        Json?
+  settings      Json?
+  baseUrl       String?
+  webhookUrl    String?
+  callbackUrl   String?
+  isActive      Boolean   @default(true)
+  isConfigured  Boolean   @default(false)
+  lastSyncAt    DateTime?
+  lastErrorAt   DateTime?
+  lastErrorMsg  String?
+  rateLimit     Int?
+  requestsToday Int       @default(0)
+  requestsMonth Int       @default(0)
+  metaValue     Json?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  tenant        Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@unique([tenantId, provider])
   @@index([tenantId])
@@ -2012,11 +1416,6 @@ model TenantIntegration {
   @@map("tenant_integrations")
 }
 
-// ============================================
-// PARTS INVENTORY - Inventario de partes de autos
-// ============================================
-
-// Condición de la Parte (New, Used, Rebuilt, Refurbished, etc.)
 model PartCondition {
   id        String   @id @default(uuid())
   slug      String
@@ -2024,20 +1423,15 @@ model PartCondition {
   isActive  Boolean  @default(true)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
-
-  // Multi-tenancy (null = global, tenantId = custom for tenant)
-  tenantId String?
-  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-
-  // Relaciones
-  parts Part[]
+  tenantId  String?
+  tenant    Tenant?  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  parts     Part[]
 
   @@unique([tenantId, slug])
   @@index([tenantId])
   @@map("part_conditions")
 }
 
-// Estado de la Parte (In Stock, Sold, Reserved, On Hold, Damaged, etc.)
 model PartStatus {
   id        String   @id @default(uuid())
   slug      String
@@ -2045,38 +1439,29 @@ model PartStatus {
   isActive  Boolean  @default(true)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
-
-  // Multi-tenancy (null = global, tenantId = custom for tenant)
-  tenantId String?
-  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-
-  // Relaciones
-  parts Part[]
+  tenantId  String?
+  tenant    Tenant?  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  parts     Part[]
 
   @@unique([tenantId, slug])
   @@index([tenantId])
   @@map("part_statuses")
 }
 
-// Categoría de la Parte (Engine, Transmission, Body, Interior, Electrical, etc.)
 model PartCategory {
-  id          String   @id @default(uuid())
+  id          String         @id @default(uuid())
   slug        String
   title       String
   description String?
-  parentId    String? // Para subcategorías
-  isActive    Boolean  @default(true)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-
-  // Multi-tenancy (null = global, tenantId = custom for tenant)
-  tenantId String?
-  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-
-  // Relaciones
-  parent   PartCategory?  @relation("PartCategoryHierarchy", fields: [parentId], references: [id], onDelete: SetNull)
-  children PartCategory[] @relation("PartCategoryHierarchy")
-  parts    Part[]
+  parentId    String?
+  isActive    Boolean        @default(true)
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+  tenantId    String?
+  parent      PartCategory?  @relation("PartCategoryHierarchy", fields: [parentId], references: [id])
+  children    PartCategory[] @relation("PartCategoryHierarchy")
+  tenant      Tenant?        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  parts       Part[]
 
   @@unique([tenantId, slug])
   @@index([tenantId])
@@ -2084,98 +1469,65 @@ model PartCategory {
   @@map("part_categories")
 }
 
-// Parte de Auto - Inventario principal
 model Part {
-  id String @id @default(uuid())
-
-  // Multi-tenancy
-  tenantId String
-  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-
-  // Información básica
-  name        String // Nombre de la parte
-  partNumber  String? // Número de parte (OEM o aftermarket)
-  sku         String? // SKU interno
-  description String? // Descripción detallada
-  notes       String? // Notas internas
-
-  // Categoría
-  categoryId String?
-  category   PartCategory? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
-
-  // Condición y Estado
-  conditionId String
-  condition   PartCondition @relation(fields: [conditionId], references: [id])
-  statusId    String
-  status      PartStatus    @relation(fields: [statusId], references: [id])
-
-  // Precios
-  cost  Decimal? @db.Decimal(10, 2) // Costo de adquisición
-  price Decimal  @db.Decimal(10, 2) // Precio de venta
-
-  // Inventario
-  quantity         Int     @default(1) // Cantidad en stock
-  minQuantity      Int     @default(0) // Cantidad mínima para alerta
-  location         String? // Ubicación en almacén (estante, bin, etc.)
-  warehouseSection String? // Sección del almacén
-
-  // Compatibilidad del vehículo (de qué vehículo viene o para qué vehículos es compatible)
-  yearId  String?
-  year    VehicleYear? @relation(fields: [yearId], references: [id], onDelete: SetNull)
-  makeId  String?
-  make    VehicleMake? @relation(fields: [makeId], references: [id], onDelete: SetNull)
-  modelId String?
-  model   VehicleModel? @relation(fields: [modelId], references: [id], onDelete: SetNull)
-  trimId  String?
-  trim    VehicleTrim? @relation(fields: [trimId], references: [id], onDelete: SetNull)
-
-  // Información del vehículo de origen (si es parte usada)
-  sourceVin    String? // VIN del vehículo de donde se extrajo
-  sourceMiles  Int? // Millaje del vehículo de origen
-  sourceVehicleId String? // Referencia al vehículo de origen si está en el sistema
-  sourceVehicle   Vehicle? @relation("PartSourceVehicle", fields: [sourceVehicleId], references: [id], onDelete: SetNull)
-
-  // Imágenes
-  mainImageId String? @unique // ID de imagen principal
-  mainImage   Media?  @relation("PartMainImage", fields: [mainImageId], references: [id], onDelete: SetNull)
-
-  // Dimensiones y peso (para envío)
-  weight Decimal? @db.Decimal(8, 2) // Peso en libras
-  length Decimal? @db.Decimal(8, 2) // Largo en pulgadas
-  width  Decimal? @db.Decimal(8, 2) // Ancho en pulgadas
-  height Decimal? @db.Decimal(8, 2) // Alto en pulgadas
-
-  // Garantía
-  warrantyDays Int? // Días de garantía
-  warrantyNotes String? // Notas de garantía
-
-  // Proveedor/Origen
-  supplier     String? // Nombre del proveedor
-  supplierPartNumber String? // Número de parte del proveedor
-  purchaseDate DateTime? // Fecha de compra/adquisición
-  purchaseOrderNumber String? // Número de orden de compra
-
-  // Información adicional
-  brand        String? // Marca de la parte (OEM, Aftermarket brand)
-  manufacturer String? // Fabricante
-  countryOfOrigin String? // País de origen
-  isOem        Boolean @default(false) // Es parte OEM original
-  isAftermarket Boolean @default(false) // Es parte aftermarket
-
-  // Venta
-  soldAt       DateTime? // Fecha de venta
-  soldToId     String? // Buyer ID si se vendió
-  soldPrice    Decimal? @db.Decimal(10, 2) // Precio de venta final
-  soldDealId   String? // Deal ID si fue parte de un deal
-
-  // Metadata
-  metaValue Json?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  // Relaciones adicionales
-  media      Media[]    @relation("PartMedia") // Galería de imágenes
-  activities Activity[] @relation("PartActivities") // Actividades relacionadas
+  id                  String        @id @default(uuid())
+  tenantId            String
+  name                String
+  partNumber          String?
+  sku                 String?
+  description         String?
+  notes               String?
+  categoryId          String?
+  conditionId         String
+  statusId            String
+  cost                Decimal?      @db.Decimal(10, 2)
+  price               Decimal       @db.Decimal(10, 2)
+  quantity            Int           @default(1)
+  minQuantity         Int           @default(0)
+  location            String?
+  warehouseSection    String?
+  yearId              String?
+  makeId              String?
+  modelId             String?
+  trimId              String?
+  sourceVin           String?
+  sourceMiles         Int?
+  sourceVehicleId     String?
+  mainImageId         String?       @unique
+  weight              Decimal?      @db.Decimal(8, 2)
+  length              Decimal?      @db.Decimal(8, 2)
+  width               Decimal?      @db.Decimal(8, 2)
+  height              Decimal?      @db.Decimal(8, 2)
+  warrantyDays        Int?
+  warrantyNotes       String?
+  supplier            String?
+  supplierPartNumber  String?
+  purchaseDate        DateTime?
+  purchaseOrderNumber String?
+  brand               String?
+  manufacturer        String?
+  countryOfOrigin     String?
+  isOem               Boolean       @default(false)
+  isAftermarket       Boolean       @default(false)
+  soldAt              DateTime?
+  soldToId            String?
+  soldPrice           Decimal?      @db.Decimal(10, 2)
+  soldDealId          String?
+  metaValue           Json?
+  createdAt           DateTime      @default(now())
+  updatedAt           DateTime      @updatedAt
+  activities          Activity[]    @relation("PartActivities")
+  media               Media[]       @relation("PartMedia")
+  category            PartCategory? @relation(fields: [categoryId], references: [id])
+  condition           PartCondition @relation(fields: [conditionId], references: [id])
+  mainImage           Media?        @relation("PartMainImage", fields: [mainImageId], references: [id])
+  make                VehicleMake?  @relation(fields: [makeId], references: [id])
+  model               VehicleModel? @relation(fields: [modelId], references: [id])
+  sourceVehicle       Vehicle?      @relation("PartSourceVehicle", fields: [sourceVehicleId], references: [id])
+  status              PartStatus    @relation(fields: [statusId], references: [id])
+  tenant              Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  trim                VehicleTrim?  @relation(fields: [trimId], references: [id])
+  year                VehicleYear?  @relation(fields: [yearId], references: [id])
 
   @@index([tenantId])
   @@index([partNumber])
@@ -2194,74 +1546,51 @@ model Part {
 }
 
 model UploadSession {
-  id        String   @id @default(uuid())
-  token     String   @unique
-  expiresAt DateTime
-  used      Boolean  @default(false)
-  closed    Boolean  @default(false)
-
-  // Context
-  entityType String // "vehicle", "expense", "buyer", "part"
+  id         String   @id @default(uuid())
+  token      String   @unique
+  expiresAt  DateTime
+  used       Boolean  @default(false)
+  closed     Boolean  @default(false)
+  entityType String
   entityId   String
-  mediaType  String  @default("image")
+  mediaType  String   @default("image")
   category   String?
-  isPublic   Boolean @default(true)
-
-  // Owner
-  userId   String
-  tenantId String?
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  isPublic   Boolean  @default(true)
+  userId     String
+  tenantId   String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
 
   @@index([token])
   @@index([expiresAt])
   @@map("upload_sessions")
 }
 
-// ============================================
-// MARKETCHECK PRICE CACHE - Cache de precios de MarketCheck (24h TTL)
-// ============================================
 model MarketCheckPriceCache {
-  id    String @id @default(uuid())
-
-  // Cache key components
-  vin        String
-  miles      Int
-  dealerType String
-  zip        String
-
-  // Cached response
+  id               String   @id @default(uuid())
+  vin              String
+  miles            Int
+  dealerType       String
+  zip              String
   marketcheckPrice Decimal? @db.Decimal(10, 2)
   msrp             Decimal? @db.Decimal(10, 2)
   rawResponse      Json?
-
-  // TTL
-  expiresAt DateTime
-  createdAt DateTime @default(now())
+  expiresAt        DateTime
+  createdAt        DateTime @default(now())
 
   @@unique([vin, miles, dealerType, zip])
   @@index([expiresAt])
   @@map("marketcheck_price_cache")
 }
 
-// ============================================
-// MARKETCHECK COMPS CACHE - Cache de comparables de MarketCheck (24h TTL)
-// ============================================
 model MarketCheckCompsCache {
-  id String @id @default(uuid())
-
-  // Cache key components
-  make  String
-  model String
-  year  Int
-  zip   String
-
-  // Cached response
-  listings Json
-  numFound Int
-
-  // TTL
+  id        String   @id @default(uuid())
+  make      String
+  model     String
+  year      Int
+  zip       String
+  listings  Json
+  numFound  Int
   expiresAt DateTime
   createdAt DateTime @default(now())
 
@@ -2270,26 +1599,92 @@ model MarketCheckCompsCache {
   @@map("marketcheck_comps_cache")
 }
 
-// ============================================
-// MARKETCHECK AUCTION CACHE - Cache de subastas de MarketCheck (1h TTL)
-// ============================================
 model MarketCheckAuctionCache {
-  id String @id @default(uuid())
-
-  // Cache key (hash of all filter params)
-  cacheKey String @unique
-
-  // Cached response
-  listings Json
-  numFound Int
-  facets   Json?
-  stats    Json?
-
-  // TTL (shorter for auctions - 1 hour)
+  id        String   @id @default(uuid())
+  cacheKey  String   @unique
+  listings  Json
+  numFound  Int
+  facets    Json?
+  stats     Json?
   expiresAt DateTime
   createdAt DateTime @default(now())
 
-  @@index([expiresAt])
   @@index([cacheKey])
+  @@index([expiresAt])
   @@map("marketcheck_auction_cache")
+}
+
+model CopartListing {
+  id                 String    @id @default(uuid())
+  copartId           Int
+  yardNumber         Int?
+  yardName           String?
+  saleDate           Int?
+  dayOfWeek          String?
+  saleTime           String?
+  timeZone           String?
+  itemNumber         Int?
+  lotNumber          BigInt    @unique
+  vehicleType        String?
+  year               Int?
+  make               String?
+  modelGroup         String?
+  modelDetail        String?
+  bodyStyle          String?
+  color              String?
+  damageDescription  String?
+  secondaryDamage    String?
+  saleTitleState     String?
+  saleTitleType      String?
+  hasKeys            String?
+  lotCondCode        String?
+  vin                String?
+  odometer           Decimal?  @db.Decimal(12, 1)
+  odometerBrand      String?
+  estRetailValue     Decimal?  @db.Decimal(12, 2)
+  repairCost         Decimal?  @db.Decimal(12, 2)
+  engine             String?
+  drive              String?
+  transmission       String?
+  fuelType           String?
+  cylinders          String?
+  runsDrives         String?
+  saleStatus         String?
+  highBid            Decimal?  @db.Decimal(12, 2)
+  specialNote        String?
+  locationCity       String?
+  locationState      String?
+  locationZip        String?
+  locationCountry    String?
+  currencyCode       String?
+  images             String[]  @default([])
+  createDateTime     String?
+  gridRow            String?
+  makeOfferEligible  String?
+  buyItNowPrice      Decimal?  @db.Decimal(12, 2)
+  trim               String?
+  lastUpdatedTime    DateTime?
+  rentals            String?
+  wholesale          String?
+  sellerName         String?
+  offsiteAddress1    String?
+  offsiteState       String?
+  offsiteCity        String?
+  offsiteZip         String?
+  saleLight          String?
+  autoGrade          String?
+  announcements      String?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  @@index([lotNumber])
+  @@index([vin])
+  @@index([year])
+  @@index([make])
+  @@index([saleDate])
+  @@index([saleStatus])
+  @@index([locationState])
+  @@index([damageDescription])
+  @@index([createdAt])
+  @@map("copart_listings")
 }

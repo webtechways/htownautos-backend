@@ -25,6 +25,16 @@ export class VehicleService {
   ) {}
 
   /**
+   * Get the default "pending" status ID
+   */
+  private async getDefaultStatusId(): Promise<string | undefined> {
+    const pendingStatus = await this.prisma.vehicleStatus.findFirst({
+      where: { slug: 'pending', tenantId: null },
+    });
+    return pendingStatus?.id;
+  }
+
+  /**
    * Generate a unique stock number with HTW prefix
    */
   private async generateStockNumber(): Promise<string> {
@@ -102,11 +112,17 @@ export class VehicleService {
     // Validate year, make, model exist
     await this.validateRelatedEntities(createVehicleDto);
 
+    // Set default status to "pending" if not provided
+    let vehicleStatusId = createVehicleDto.vehicleStatusId;
+    if (!vehicleStatusId) {
+      vehicleStatusId = await this.getDefaultStatusId();
+    }
+
     // Extract metas from DTO
     const { metas, stockNumber: _, ...vehicleData } = createVehicleDto;
 
     // Convert metaValue to JSON if it's a string
-    const data: any = { ...vehicleData, stockNumber };
+    const data: any = { ...vehicleData, stockNumber, vehicleStatusId };
     if (typeof data.metaValue === 'string') {
       try {
         data.metaValue = JSON.parse(data.metaValue);

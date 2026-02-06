@@ -45,6 +45,10 @@ export class PrismaService implements OnModuleInit, OnModuleDestroy {
     return this.prisma.vehicleEngine;
   }
 
+  get vehicleStatus() {
+    return this.prisma.vehicleStatus;
+  }
+
   get meta() {
     return this.prisma.meta;
   }
@@ -124,6 +128,14 @@ export class PrismaService implements OnModuleInit, OnModuleDestroy {
 
   get marketCheckCompsCache() {
     return this.prisma.marketCheckCompsCache;
+  }
+
+  get marketCheckAuctionCache() {
+    return this.prisma.marketCheckAuctionCache;
+  }
+
+  get copartListing() {
+    return this.prisma.copartListing;
   }
 
   get $transaction() {

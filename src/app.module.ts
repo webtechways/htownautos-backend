@@ -23,6 +23,7 @@ import { AuditLogModule } from './audit-log/audit-log.module';
 import { TitleModule } from './title/title.module';
 import { MarketCheckModule } from './marketcheck/marketcheck.module';
 import { UploadSessionModule } from './upload-session/upload-session.module';
+import { CopartModule } from './copart/copart.module';
 
 /**
  * App Module con seguridad RouteOne/DealerTrack
@@ -76,6 +77,7 @@ import { UploadSessionModule } from './upload-session/upload-session.module';
     AuditLogModule,
     MarketCheckModule,
     UploadSessionModule,
+    CopartModule,
   ],
   controllers: [AppController],
   providers: [
