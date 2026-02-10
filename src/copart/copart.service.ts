@@ -28,13 +28,19 @@ export class CopartService {
       saleDateTo,
       sortBy = 'createdAt',
       sortOrder = 'desc',
+      ids,
     } = query;
 
     const skip = (page - 1) * limit;
 
+    // Parse IDs filter (comma-separated string)
+    const idList = ids ? ids.split(',').filter((id) => id.trim()) : null;
+
     // Build where clause
     const where: Prisma.CopartListingWhereInput = {
       AND: [
+        // IDs filter (for favorites)
+        idList && idList.length > 0 ? { id: { in: idList } } : {},
         // Search across VIN, make, model
         search
           ? {

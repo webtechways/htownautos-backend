@@ -22,6 +22,41 @@ import {
 export class PartsService {
   constructor(private prisma: PrismaService) {}
 
+  /**
+   * Generate a unique SKU with HTW-P prefix
+   */
+  private async generateSku(tenantId: string): Promise<string> {
+    const prefix = 'HTW-P';
+
+    // Get the highest SKU with HTW-P prefix for this tenant
+    const lastPart = await this.prisma.part.findFirst({
+      where: {
+        tenantId,
+        sku: {
+          startsWith: prefix,
+        },
+      },
+      orderBy: {
+        sku: 'desc',
+      },
+      select: {
+        sku: true,
+      },
+    });
+
+    let nextNumber = 1;
+    if (lastPart?.sku) {
+      const numPart = lastPart.sku.replace(prefix, '');
+      const parsed = parseInt(numPart, 10);
+      if (!isNaN(parsed)) {
+        nextNumber = parsed + 1;
+      }
+    }
+
+    // Pad with zeros to 6 digits (e.g., HTW-P000001)
+    return `${prefix}${nextNumber.toString().padStart(6, '0')}`;
+  }
+
   // ========================================
   // PART CRUD
   // ========================================
@@ -68,10 +103,17 @@ export class PartsService {
       }
     }
 
+    // Auto-generate SKU with HTW-P prefix if not provided
+    let sku = createPartDto.sku;
+    if (!sku) {
+      sku = await this.generateSku(tenantId);
+    }
+
     return this.prisma.part.create({
       data: {
         tenantId,
         ...createPartDto,
+        sku,
         purchaseDate: createPartDto.purchaseDate
           ? new Date(createPartDto.purchaseDate)
           : undefined,

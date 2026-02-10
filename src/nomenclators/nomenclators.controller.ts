@@ -26,9 +26,11 @@ import { QueryNomenclatorDto } from './dto/query-nomenclator.dto';
 import { NomenclatorEntity } from './entities/nomenclator.entity';
 import { PaginatedResponseDto } from '../common/dto/paginated-response.dto';
 import { AuditLog } from '../common/decorators/audit-log.decorator';
+import { TenantOptional } from '../auth/decorators/tenant-optional.decorator';
 
 @ApiTags('Nomenclators')
 @Controller('nom')
+@TenantOptional()
 export class NomenclatorsController {
   constructor(private readonly nomenclatorsService: NomenclatorsService) {}
 

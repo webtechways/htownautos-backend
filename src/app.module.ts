@@ -24,6 +24,8 @@ import { TitleModule } from './title/title.module';
 import { MarketCheckModule } from './marketcheck/marketcheck.module';
 import { UploadSessionModule } from './upload-session/upload-session.module';
 import { CopartModule } from './copart/copart.module';
+import { FavoritesModule } from './favorites/favorites.module';
+import { BuyersModule } from './buyers/buyers.module';
 
 /**
  * App Module con seguridad RouteOne/DealerTrack
@@ -78,6 +80,8 @@ import { CopartModule } from './copart/copart.module';
     MarketCheckModule,
     UploadSessionModule,
     CopartModule,
+    FavoritesModule,
+    BuyersModule,
   ],
   controllers: [AppController],
   providers: [

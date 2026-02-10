@@ -275,6 +275,7 @@ async function importCopart(csvPath: string) {
     await delay(50);
 
     const record = {
+      auctionName: 'Copart',
       copartId,
       yardNumber: parseInt_(row['Yard number']),
       yardName: trimOrNull(row['Yard name']),

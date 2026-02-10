@@ -35,6 +35,16 @@ export class VehicleService {
   }
 
   /**
+   * Get the default "miles" mileage unit ID
+   */
+  private async getDefaultMileageUnitId(): Promise<string | undefined> {
+    const milesUnit = await this.prisma.mileageUnit.findFirst({
+      where: { slug: 'miles' },
+    });
+    return milesUnit?.id;
+  }
+
+  /**
    * Generate a unique stock number with HTW prefix
    */
   private async generateStockNumber(): Promise<string> {
@@ -74,10 +84,10 @@ export class VehicleService {
    * Creates associated metas if provided
    * Stock number is auto-generated with HTW prefix if not provided
    */
-  async create(createVehicleDto: CreateVehicleDto) {
-    // Check if VIN already exists
-    const existingVin = await this.prisma.vehicle.findUnique({
-      where: { vin: createVehicleDto.vin },
+  async create(createVehicleDto: CreateVehicleDto, tenantId: string, createdById: string) {
+    // Check if VIN already exists within the tenant
+    const existingVin = await this.prisma.vehicle.findFirst({
+      where: { vin: createVehicleDto.vin, tenantId },
     });
 
     if (existingVin) {
@@ -94,9 +104,9 @@ export class VehicleService {
         stockNumber = `HTW${stockNumber}`;
       }
 
-      // Check if provided stock number already exists
-      const existingStock = await this.prisma.vehicle.findUnique({
-        where: { stockNumber },
+      // Check if provided stock number already exists within the tenant
+      const existingStock = await this.prisma.vehicle.findFirst({
+        where: { stockNumber, tenantId },
       });
 
       if (existingStock) {
@@ -118,11 +128,17 @@ export class VehicleService {
       vehicleStatusId = await this.getDefaultStatusId();
     }
 
+    // Set default mileage unit to "miles" if not provided
+    let mileageUnitId = createVehicleDto.mileageUnitId;
+    if (!mileageUnitId) {
+      mileageUnitId = await this.getDefaultMileageUnitId();
+    }
+
     // Extract metas from DTO
     const { metas, stockNumber: _, ...vehicleData } = createVehicleDto;
 
     // Convert metaValue to JSON if it's a string
-    const data: any = { ...vehicleData, stockNumber, vehicleStatusId };
+    const data: any = { ...vehicleData, stockNumber, vehicleStatusId, mileageUnitId, tenantId, createdById };
     if (typeof data.metaValue === 'string') {
       try {
         data.metaValue = JSON.parse(data.metaValue);
@@ -161,7 +177,7 @@ export class VehicleService {
   /**
    * Find all vehicles with filtering and pagination
    */
-  async findAll(query: QueryVehicleDto) {
+  async findAll(query: QueryVehicleDto, tenantId: string) {
     const { page = 1, limit = 10, search, ...filters } = query;
     const skip = (page - 1) * limit;
 
@@ -176,6 +192,9 @@ export class VehicleService {
     // Build where clause
     const where: Prisma.VehicleWhereInput = {
       AND: [
+        // Filter by tenant
+        { tenantId },
+
         // VIN filter (partial match)
         filters.vin
           ? { vin: { contains: filters.vin, mode: 'insensitive' } }
@@ -289,9 +308,9 @@ export class VehicleService {
   /**
    * Find one vehicle by ID
    */
-  async findOne(id: string) {
-    const vehicle = await this.prisma.vehicle.findUnique({
-      where: { id },
+  async findOne(id: string, tenantId: string) {
+    const vehicle = await this.prisma.vehicle.findFirst({
+      where: { id, tenantId },
       include: this.getIncludeRelations(),
     });
 
@@ -305,8 +324,8 @@ export class VehicleService {
   /**
    * Find one vehicle by ID with its metas
    */
-  async findOneWithMetas(id: string) {
-    const vehicle = await this.findOne(id);
+  async findOneWithMetas(id: string, tenantId: string) {
+    const vehicle = await this.findOne(id, tenantId);
     const metas = await this.metaService.findByEntity(
       MetaEntityType.VEHICLE,
       id,
@@ -321,9 +340,9 @@ export class VehicleService {
   /**
    * Find vehicle by VIN
    */
-  async findByVin(vin: string) {
-    const vehicle = await this.prisma.vehicle.findUnique({
-      where: { vin },
+  async findByVin(vin: string, tenantId: string) {
+    const vehicle = await this.prisma.vehicle.findFirst({
+      where: { vin, tenantId },
       include: this.getIncludeRelations(),
     });
 
@@ -335,18 +354,120 @@ export class VehicleService {
   }
 
   /**
+   * Find one vehicle by ID for public display
+   * Returns only public-safe fields (excludes cost, wholesale prices, etc.)
+   */
+  async findOnePublic(id: string) {
+    const vehicle = await this.prisma.vehicle.findUnique({
+      where: { id },
+      include: {
+        year: true,
+        make: true,
+        model: true,
+        trim: true,
+        vehicleType: true,
+        bodyType: true,
+        fuelType: true,
+        driveType: true,
+        transmissionType: true,
+        vehicleCondition: true,
+        vehicleStatus: true,
+        mileageUnit: true,
+        vehicleEngine: true,
+        mainImage: {
+          select: {
+            id: true,
+            url: true,
+            filename: true,
+            mimeType: true,
+          },
+        },
+      },
+    });
+
+    if (!vehicle) {
+      throw new NotFoundException(`Vehicle not found`);
+    }
+
+    // Get public gallery images
+    const gallery = await this.prisma.media.findMany({
+      where: {
+        vehicleId: id,
+        category: { notIn: ['receipt', 'document', 'title'] },
+      },
+      select: {
+        id: true,
+        url: true,
+        filename: true,
+        mimeType: true,
+      },
+      orderBy: { createdAt: 'asc' },
+    });
+
+    // Get public metas only
+    const publicMetas = await this.metaService.findByEntity(
+      MetaEntityType.VEHICLE,
+      id,
+    ).then(metas => metas.filter(m => m.isPublic));
+
+    // Return only public-safe fields
+    return {
+      id: vehicle.id,
+      vin: vehicle.vin,
+      stockNumber: vehicle.stockNumber,
+      // Vehicle info
+      year: vehicle.year,
+      make: vehicle.make,
+      model: vehicle.model,
+      trim: vehicle.trim,
+      vehicleType: vehicle.vehicleType,
+      bodyType: vehicle.bodyType,
+      fuelType: vehicle.fuelType,
+      driveType: vehicle.driveType,
+      transmissionType: vehicle.transmissionType,
+      vehicleCondition: vehicle.vehicleCondition,
+      vehicleStatus: vehicle.vehicleStatus,
+      vehicleEngine: vehicle.vehicleEngine,
+      // Specs
+      mileage: vehicle.mileage,
+      mileageUnit: vehicle.mileageUnit,
+      exteriorColor: vehicle.exteriorColor,
+      interiorColor: vehicle.interiorColor,
+      engine: vehicle.engine,
+      cylinders: vehicle.cylinders,
+      doors: vehicle.doors,
+      passengers: vehicle.passengers,
+      // Public pricing (asking price only, no cost or wholesale)
+      askingPrice: vehicle.askingPrice,
+      advertisingPrice: vehicle.advertisingPrice,
+      specialPrice: vehicle.specialPrice,
+      specialPriceStartDate: vehicle.specialPriceStartDate,
+      specialPriceEndDate: vehicle.specialPriceEndDate,
+      msrp: vehicle.msrp,
+      // Description
+      description: vehicle.description,
+      features: vehicle.features,
+      // Images
+      mainImage: vehicle.mainImage,
+      gallery,
+      // Public metas
+      metas: publicMetas,
+    };
+  }
+
+  /**
    * Update a vehicle
    * Note: stockNumber, yearId, makeId, modelId, engine, cylinders, doors,
    * passengers, fuelTypeId, transmissionTypeId, driveTypeId are immutable after creation
    */
-  async update(id: string, updateVehicleDto: UpdateVehicleDto) {
-    // Check if vehicle exists
-    await this.findOne(id);
+  async update(id: string, updateVehicleDto: UpdateVehicleDto, tenantId: string) {
+    // Check if vehicle exists and belongs to tenant
+    await this.findOne(id, tenantId);
 
-    // If VIN is being updated, check uniqueness
+    // If VIN is being updated, check uniqueness within tenant
     if (updateVehicleDto.vin) {
-      const existingVin = await this.prisma.vehicle.findUnique({
-        where: { vin: updateVehicleDto.vin },
+      const existingVin = await this.prisma.vehicle.findFirst({
+        where: { vin: updateVehicleDto.vin, tenantId },
       });
 
       if (existingVin && existingVin.id !== id) {
@@ -395,9 +516,9 @@ export class VehicleService {
   /**
    * Delete a vehicle and all its associated metas
    */
-  async remove(id: string) {
-    // Check if vehicle exists
-    await this.findOne(id);
+  async remove(id: string, tenantId: string) {
+    // Check if vehicle exists and belongs to tenant
+    await this.findOne(id, tenantId);
 
     // Delete all associated metas (soft delete)
     await this.metaService.deleteByEntity(MetaEntityType.VEHICLE, id);
@@ -415,7 +536,9 @@ export class VehicleService {
   /**
    * Get vehicle statistics
    */
-  async getStats() {
+  async getStats(tenantId: string) {
+    const where = { tenantId };
+
     const [
       totalVehicles,
       totalValue,
@@ -424,24 +547,29 @@ export class VehicleService {
       byMake,
       recentVehicles,
     ] = await Promise.all([
-      this.prisma.vehicle.count(),
+      this.prisma.vehicle.count({ where }),
       this.prisma.vehicle.aggregate({
+        where,
         _sum: { askingPrice: true, salePrice: true },
       }),
       this.prisma.vehicle.aggregate({
+        where,
         _avg: { mileage: true },
       }),
       this.prisma.vehicle.groupBy({
         by: ['vehicleStatusId'],
+        where,
         _count: true,
       }),
       this.prisma.vehicle.groupBy({
         by: ['makeId'],
+        where,
         _count: true,
         orderBy: { _count: { makeId: 'desc' } },
         take: 5,
       }),
       this.prisma.vehicle.findMany({
+        where,
         take: 10,
         orderBy: { createdAt: 'desc' },
         include: { year: true, make: true, model: true },

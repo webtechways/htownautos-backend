@@ -68,4 +68,41 @@ export class AuditLogService {
     }
     return log;
   }
+
+  async create(data: {
+    action: string;
+    resource: string;
+    vehicleId?: string;
+    buyerId?: string;
+    dealId?: string;
+    userId?: string;
+    userEmail?: string;
+    tenantId?: string;
+    ipAddress?: string;
+    userAgent?: string;
+    level?: string;
+    piiAccessed?: boolean;
+    details?: any;
+  }) {
+    return this.prisma.auditLog.create({
+      data: {
+        action: data.action,
+        resource: data.resource,
+        vehicleId: data.vehicleId,
+        buyerId: data.buyerId,
+        dealId: data.dealId,
+        userId: data.userId,
+        userEmail: data.userEmail || 'unknown',
+        tenantId: data.tenantId,
+        ipAddress: data.ipAddress || 'unknown',
+        userAgent: data.userAgent,
+        method: 'POST',
+        url: `/audit-logs`,
+        status: 'success',
+        level: data.level || 'low',
+        pii: data.piiAccessed || false,
+        metadata: data.details,
+      },
+    });
+  }
 }

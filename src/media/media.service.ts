@@ -45,6 +45,17 @@ export class MediaService {
       }
     }
 
+    // Verify partId exists if provided
+    if (createMediaDto.partId) {
+      const exists = await this.prisma.part.findUnique({
+        where: { id: createMediaDto.partId },
+        select: { id: true },
+      });
+      if (!exists) {
+        throw new NotFoundException(`Part with ID ${createMediaDto.partId} not found`);
+      }
+    }
+
     // If buyerId is provided, ALWAYS set isPublic to false (buyer media is private)
     const isPrivate = !!createMediaDto.buyerId || !(createMediaDto.isPublic ?? true);
 
@@ -54,6 +65,8 @@ export class MediaService {
       folder = `buyers/${createMediaDto.buyerId}`;
     } else if (createMediaDto.vehicleId) {
       folder = `vehicles/${createMediaDto.vehicleId}`;
+    } else if (createMediaDto.partId) {
+      folder = `parts/${createMediaDto.partId}`;
     }
 
     // Upload file to S3
@@ -80,6 +93,7 @@ export class MediaService {
           isActive: true,
           ...(createMediaDto.vehicleId && { vehicleId: createMediaDto.vehicleId }),
           ...(createMediaDto.buyerId && { buyerId: createMediaDto.buyerId }),
+          ...(createMediaDto.partId && { partId: createMediaDto.partId }),
         },
       });
 
@@ -118,6 +132,16 @@ export class MediaService {
       }
     }
 
+    if (dto.partId) {
+      const exists = await this.prisma.part.findUnique({
+        where: { id: dto.partId },
+        select: { id: true },
+      });
+      if (!exists) {
+        throw new NotFoundException(`Part with ID ${dto.partId} not found`);
+      }
+    }
+
     const isPrivate = !!dto.buyerId || !(dto.isPublic ?? true);
 
     let folder = 'uploads';
@@ -125,6 +149,8 @@ export class MediaService {
       folder = `buyers/${dto.buyerId}`;
     } else if (dto.vehicleId) {
       folder = `vehicles/${dto.vehicleId}`;
+    } else if (dto.partId) {
+      folder = `parts/${dto.partId}`;
     }
 
     const fileExtension = dto.filename.split('.').pop() || 'bin';
@@ -174,6 +200,16 @@ export class MediaService {
       }
     }
 
+    if (dto.partId) {
+      const exists = await this.prisma.part.findUnique({
+        where: { id: dto.partId },
+        select: { id: true },
+      });
+      if (!exists) {
+        throw new NotFoundException(`Part with ID ${dto.partId} not found`);
+      }
+    }
+
     const isPrivate = !!dto.buyerId || !(dto.isPublic ?? true);
     const publicUrl = this.s3Service.buildPublicUrl(dto.key);
 
@@ -198,6 +234,7 @@ export class MediaService {
           isActive: true,
           ...(dto.vehicleId && { vehicleId: dto.vehicleId }),
           ...(dto.buyerId && { buyerId: dto.buyerId }),
+          ...(dto.partId && { partId: dto.partId }),
         },
       });
 
@@ -214,7 +251,7 @@ export class MediaService {
   }
 
   async findAll(query: QueryMediaDto): Promise<PaginatedResponseDto<MediaEntity>> {
-    const { page = 1, limit = 10, vehicleId, buyerId, mediaType, category, isActive } = query;
+    const { page = 1, limit = 10, vehicleId, buyerId, partId, mediaType, category, isActive } = query;
 
     const skip = (page - 1) * limit;
 
@@ -240,6 +277,17 @@ export class MediaService {
         throw new NotFoundException(`Buyer with ID ${buyerId} not found`);
       }
       where.buyerId = buyerId;
+    }
+
+    if (partId !== undefined) {
+      const exists = await this.prisma.part.findUnique({
+        where: { id: partId },
+        select: { id: true },
+      });
+      if (!exists) {
+        throw new NotFoundException(`Part with ID ${partId} not found`);
+      }
+      where.partId = partId;
     }
 
     if (mediaType !== undefined) where.mediaType = mediaType;

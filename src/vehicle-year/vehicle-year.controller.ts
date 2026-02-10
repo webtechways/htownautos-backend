@@ -26,9 +26,11 @@ import { QueryVehicleYearDto } from './dto/query-vehicle-year.dto';
 import { VehicleYearEntity } from './entities/vehicle-year.entity';
 import { PaginatedResponseDto } from '../common/dto/paginated-response.dto';
 import { AuditLog } from '../common/decorators/audit-log.decorator';
+import { TenantOptional } from '../auth/decorators/tenant-optional.decorator';
 
 @ApiTags('Vehicle Years')
 @Controller('vehicle-years')
+@TenantOptional()
 export class VehicleYearController {
   constructor(private readonly vehicleYearService: VehicleYearService) {}
 

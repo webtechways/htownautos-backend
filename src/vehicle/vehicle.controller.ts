@@ -23,6 +23,8 @@ import { UpdateVehicleDto } from './dto/update-vehicle.dto';
 import { QueryVehicleDto } from './dto/query-vehicle.dto';
 import { Vehicle } from './entities/vehicle.entity';
 import { AuditLog } from '../common/decorators/audit-log.decorator';
+import { CurrentUser } from '../auth/decorators/current-user.decorator';
+import { CurrentTenant } from '../auth/decorators/current-tenant.decorator';
 
 /**
  * Vehicle Controller
@@ -54,8 +56,12 @@ export class VehicleController {
     pii: false,
     compliance: ['RouteOne', 'DealerTrack'],
   })
-  create(@Body() createVehicleDto: CreateVehicleDto) {
-    return this.vehicleService.create(createVehicleDto);
+  create(
+    @CurrentTenant() tenantId: string,
+    @CurrentUser() user: { id: string },
+    @Body() createVehicleDto: CreateVehicleDto,
+  ) {
+    return this.vehicleService.create(createVehicleDto, tenantId, user.id);
   }
 
   @Get()
@@ -74,8 +80,11 @@ export class VehicleController {
     level: 'low',
     pii: false,
   })
-  findAll(@Query() query: QueryVehicleDto) {
-    return this.vehicleService.findAll(query);
+  findAll(
+    @CurrentTenant() tenantId: string,
+    @Query() query: QueryVehicleDto,
+  ) {
+    return this.vehicleService.findAll(query, tenantId);
   }
 
   @Get('stats')
@@ -93,8 +102,8 @@ export class VehicleController {
     level: 'low',
     pii: false,
   })
-  getStats() {
-    return this.vehicleService.getStats();
+  getStats(@CurrentTenant() tenantId: string) {
+    return this.vehicleService.getStats(tenantId);
   }
 
   @Get('vin/:vin')
@@ -119,8 +128,11 @@ export class VehicleController {
     level: 'low',
     pii: false,
   })
-  findByVin(@Param('vin') vin: string) {
-    return this.vehicleService.findByVin(vin);
+  findByVin(
+    @CurrentTenant() tenantId: string,
+    @Param('vin') vin: string,
+  ) {
+    return this.vehicleService.findByVin(vin, tenantId);
   }
 
   @Get(':id/with-metas')
@@ -144,8 +156,11 @@ export class VehicleController {
     level: 'low',
     pii: false,
   })
-  findOneWithMetas(@Param('id') id: string) {
-    return this.vehicleService.findOneWithMetas(id);
+  findOneWithMetas(
+    @CurrentTenant() tenantId: string,
+    @Param('id') id: string,
+  ) {
+    return this.vehicleService.findOneWithMetas(id, tenantId);
   }
 
   @Get(':id')
@@ -170,8 +185,11 @@ export class VehicleController {
     level: 'low',
     pii: false,
   })
-  findOne(@Param('id') id: string) {
-    return this.vehicleService.findOne(id);
+  findOne(
+    @CurrentTenant() tenantId: string,
+    @Param('id') id: string,
+  ) {
+    return this.vehicleService.findOne(id, tenantId);
   }
 
   @Patch(':id')
@@ -200,8 +218,12 @@ export class VehicleController {
     compliance: ['RouteOne', 'DealerTrack'],
     trackChanges: true,
   })
-  update(@Param('id') id: string, @Body() updateVehicleDto: UpdateVehicleDto) {
-    return this.vehicleService.update(id, updateVehicleDto);
+  update(
+    @CurrentTenant() tenantId: string,
+    @Param('id') id: string,
+    @Body() updateVehicleDto: UpdateVehicleDto,
+  ) {
+    return this.vehicleService.update(id, updateVehicleDto, tenantId);
   }
 
   @Delete(':id')
@@ -235,7 +257,10 @@ export class VehicleController {
     compliance: ['RouteOne', 'DealerTrack', 'GLBA'],
     trackChanges: true,
   })
-  remove(@Param('id') id: string) {
-    return this.vehicleService.remove(id);
+  remove(
+    @CurrentTenant() tenantId: string,
+    @Param('id') id: string,
+  ) {
+    return this.vehicleService.remove(id, tenantId);
   }
 }

@@ -31,6 +31,7 @@ import {
   ResendInvitationDto,
 } from './dto/add-user-to-tenant.dto';
 import { Public } from '../auth/decorators/public.decorator';
+import { TenantOptional } from '../auth/decorators/tenant-optional.decorator';
 import {
   TenantEntity,
   TenantWithStatsEntity,
@@ -44,7 +45,22 @@ import { CurrentUser } from '../auth/decorators/current-user.decorator';
 export class TenantController {
   constructor(private readonly tenantService: TenantService) {}
 
+  @Get('my-tenants')
+  @TenantOptional()
+  @ApiOperation({
+    summary: 'Get current user tenants',
+    description: 'Returns all tenants the authenticated user belongs to',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'List of user tenants',
+  })
+  getMyTenants(@CurrentUser() user: { id: string }) {
+    return this.tenantService.getUserTenants(user.id);
+  }
+
   @Post()
+  @TenantOptional()
   @ApiOperation({
     summary: 'Create a new tenant',
     description: 'Creates a new tenant (dealership) in the system. The authenticated user becomes the owner of the tenant.',
@@ -84,6 +100,7 @@ export class TenantController {
   }
 
   @Get('check-slug/:slug')
+  @TenantOptional()
   @ApiOperation({
     summary: 'Check slug availability',
     description: 'Checks if a slug is available for use',

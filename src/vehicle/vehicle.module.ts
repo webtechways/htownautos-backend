@@ -1,6 +1,9 @@
 import { Module } from '@nestjs/common';
 import { VehicleService } from './vehicle.service';
 import { VehicleController } from './vehicle.controller';
+import { VehiclePublicController } from './vehicle-public.controller';
+import { VehiclePartsController } from './vehicle-parts.controller';
+import { VehiclePartsService } from './vehicle-parts.service';
 import { PrismaModule } from '../prisma.module';
 import { MetaModule } from '../meta/meta.module';
 
@@ -10,8 +13,8 @@ import { MetaModule } from '../meta/meta.module';
  */
 @Module({
   imports: [PrismaModule, MetaModule],
-  controllers: [VehicleController],
-  providers: [VehicleService],
-  exports: [VehicleService],
+  controllers: [VehicleController, VehiclePublicController, VehiclePartsController],
+  providers: [VehicleService, VehiclePartsService],
+  exports: [VehicleService, VehiclePartsService],
 })
 export class VehicleModule {}

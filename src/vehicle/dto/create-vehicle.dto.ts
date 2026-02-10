@@ -3,6 +3,7 @@ import {
   IsString,
   IsUUID,
   IsOptional,
+  IsNotEmpty,
   IsInt,
   IsBoolean,
   Min,
@@ -98,16 +99,16 @@ export class CreateVehicleDto {
   @Transform(({ value }) => value === '' || value === null ? undefined : value)
   trimId?: string;
 
-  @ApiPropertyOptional({
-    description: 'Vehicle mileage in miles (must be greater than 0)',
+  @ApiProperty({
+    description: 'Vehicle mileage in miles (must be 0 or greater)',
     example: 50000,
-    minimum: 1,
+    minimum: 0,
   })
-  @IsOptional()
+  @IsNotEmpty({ message: 'Mileage is required' })
   @IsInt()
-  @Min(1, { message: 'Mileage must be at least 1' })
+  @Min(0, { message: 'Mileage must be at least 0' })
   @Type(() => Number)
-  mileage?: number;
+  mileage: number;
 
   @ApiPropertyOptional({ description: 'Mileage unit ID (foreign key)' })
   @IsOptional()

@@ -1,7 +1,7 @@
 import { IsOptional, IsString, IsInt, Min, Max } from 'class-validator';
 import { Type } from 'class-transformer';
 
-export class QueryCopartDto {
+export class QueryScaAuctionDto {
   @IsOptional()
   @Type(() => Number)
   @IsInt()
@@ -12,8 +12,8 @@ export class QueryCopartDto {
   @Type(() => Number)
   @IsInt()
   @Min(1)
-  @Max(100)
-  limit?: number = 20;
+  @Max(50)
+  limit?: number = 25;
 
   @IsOptional()
   @IsString()
@@ -24,17 +24,29 @@ export class QueryCopartDto {
   make?: string;
 
   @IsOptional()
+  @IsString()
+  model?: string;
+
+  @IsOptional()
   @Type(() => Number)
   @IsInt()
   year?: number;
 
   @IsOptional()
   @IsString()
-  damageDescription?: string;
+  bodyType?: string;
 
   @IsOptional()
   @IsString()
-  saleStatus?: string;
+  transmission?: string;
+
+  @IsOptional()
+  @IsString()
+  fuelType?: string;
+
+  @IsOptional()
+  @IsString()
+  drivetrain?: string;
 
   @IsOptional()
   @IsString()
@@ -42,45 +54,15 @@ export class QueryCopartDto {
 
   @IsOptional()
   @Type(() => Number)
-  minPrice?: number;
+  minMiles?: number;
 
   @IsOptional()
   @Type(() => Number)
-  maxPrice?: number;
-
-  @IsOptional()
-  @Type(() => Number)
-  minOdometer?: number;
-
-  @IsOptional()
-  @Type(() => Number)
-  maxOdometer?: number;
+  maxMiles?: number;
 
   @IsOptional()
   @IsString()
-  hasKeys?: string;
-
-  @IsOptional()
-  @IsString()
-  runsDrives?: string;
-
-  @IsOptional()
-  @IsString()
-  saleTitleType?: string;
-
-  @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  saleDateFrom?: number;
-
-  @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  saleDateTo?: number;
-
-  @IsOptional()
-  @IsString()
-  sortBy?: string = 'createdAt';
+  sortBy?: string = 'first_seen_at_date';
 
   @IsOptional()
   @IsString()

@@ -49,6 +49,10 @@ export class PrismaService implements OnModuleInit, OnModuleDestroy {
     return this.prisma.vehicleStatus;
   }
 
+  get mileageUnit() {
+    return this.prisma.mileageUnit;
+  }
+
   get meta() {
     return this.prisma.meta;
   }
@@ -118,6 +122,10 @@ export class PrismaService implements OnModuleInit, OnModuleDestroy {
     return this.prisma.partCategory;
   }
 
+  get vehiclePart() {
+    return this.prisma.vehiclePart;
+  }
+
   get uploadSession() {
     return this.prisma.uploadSession;
   }
@@ -136,6 +144,18 @@ export class PrismaService implements OnModuleInit, OnModuleDestroy {
 
   get copartListing() {
     return this.prisma.copartListing;
+  }
+
+  get marketCheckAuctionListing() {
+    return this.prisma.marketCheckAuctionListing;
+  }
+
+  get copartFavorite() {
+    return this.prisma.copartFavorite;
+  }
+
+  get scaAuctionFavorite() {
+    return this.prisma.scaAuctionFavorite;
   }
 
   get $transaction() {

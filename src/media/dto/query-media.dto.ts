@@ -44,6 +44,14 @@ export class QueryMediaDto {
   buyerId?: string;
 
   @ApiPropertyOptional({
+    description: 'Filter by part UUID',
+    example: '123e4567-e89b-12d3-a456-426614174000',
+  })
+  @IsOptional()
+  @IsUUID()
+  partId?: string;
+
+  @ApiPropertyOptional({
     description: 'Filter by media type',
     enum: MediaType,
     example: MediaType.IMAGE,

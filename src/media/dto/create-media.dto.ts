@@ -84,6 +84,14 @@ export class CreateMediaDto {
   buyerId?: string;
 
   @ApiPropertyOptional({
+    description: 'Part UUID to associate with',
+    example: '123e4567-e89b-12d3-a456-426614174000',
+  })
+  @IsOptional()
+  @IsUUID()
+  partId?: string;
+
+  @ApiPropertyOptional({
     description: 'Whether the media is public (ignored if buyerId is provided - buyer media is always private)',
     example: true,
     default: true,

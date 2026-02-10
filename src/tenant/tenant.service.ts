@@ -364,6 +364,73 @@ export class TenantService {
     return { available: !existing };
   }
 
+  /**
+   * Get all tenants the user belongs to
+   */
+  async getUserTenants(userId: string) {
+    const tenantUsers = await this.prisma.tenantUser.findMany({
+      where: {
+        userId,
+        isActive: true,
+        status: INVITATION_STATUS.ACTIVE,
+      },
+      include: {
+        tenant: {
+          select: {
+            id: true,
+            name: true,
+            slug: true,
+            businessName: true,
+            logo: true,
+            address: true,
+            city: true,
+            state: true,
+            isActive: true,
+          },
+        },
+        role: {
+          select: {
+            id: true,
+            name: true,
+            slug: true,
+          },
+        },
+      },
+      orderBy: {
+        tenant: {
+          name: 'asc',
+        },
+      },
+    });
+
+    return tenantUsers.map((tu) => ({
+      id: tu.tenant.id,
+      name: tu.tenant.name,
+      slug: tu.tenant.slug,
+      businessName: tu.tenant.businessName,
+      logo: tu.tenant.logo,
+      address: tu.tenant.address,
+      city: tu.tenant.city,
+      state: tu.tenant.state,
+      isActive: tu.tenant.isActive,
+      role: tu.role,
+      isOwner: tu.role.slug === 'owner',
+    }));
+  }
+
+  /**
+   * Verify if user belongs to a specific tenant
+   */
+  async verifyUserTenantAccess(userId: string, tenantId: string): Promise<boolean> {
+    const tenantUser = await this.prisma.tenantUser.findUnique({
+      where: {
+        tenantId_userId: { tenantId, userId },
+      },
+    });
+
+    return !!(tenantUser?.isActive && tenantUser?.status === INVITATION_STATUS.ACTIVE);
+  }
+
   // ========================================
   // USER MANAGEMENT METHODS
   // ========================================
