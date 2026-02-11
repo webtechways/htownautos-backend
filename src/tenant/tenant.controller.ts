@@ -10,6 +10,7 @@ import {
   ParseUUIDPipe,
   HttpCode,
   HttpStatus,
+  UseGuards,
 } from '@nestjs/common';
 import {
   ApiTags,
@@ -29,6 +30,7 @@ import {
   InviteUserToTenantDto,
   AcceptInvitationDto,
   ResendInvitationDto,
+  RegisterWithInvitationDto,
 } from './dto/add-user-to-tenant.dto';
 import { Public } from '../auth/decorators/public.decorator';
 import { TenantOptional } from '../auth/decorators/tenant-optional.decorator';
@@ -38,6 +40,8 @@ import {
   PaginatedTenantsEntity,
 } from './entities/tenant.entity';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
+import { RequireRoles, ADMIN_ROLES } from '../auth/decorators/roles.decorator';
+import { RolesGuard } from '../auth/guards/roles.guard';
 
 @ApiTags('Tenants')
 @ApiBearerAuth()
@@ -195,14 +199,22 @@ export class TenantController {
   }
 
   @Get(':id/users')
+  @UseGuards(RolesGuard)
+  @RequireRoles(...ADMIN_ROLES)
   @ApiOperation({
     summary: 'Get tenant users',
-    description: 'Retrieves all users associated with a tenant',
+    description: 'Retrieves all users associated with a tenant, optionally filtered by role slugs. Requires admin role.',
   })
   @ApiParam({
     name: 'id',
     description: 'Tenant UUID',
     example: '123e4567-e89b-12d3-a456-426614174000',
+  })
+  @ApiQuery({
+    name: 'roles',
+    required: false,
+    description: 'Comma-separated list of role slugs to filter by (e.g., "owner,salesperson")',
+    example: 'owner,salesperson,bdc',
   })
   @ApiResponse({
     status: 200,
@@ -212,8 +224,36 @@ export class TenantController {
     status: 404,
     description: 'Tenant not found',
   })
-  getUsers(@Param('id', ParseUUIDPipe) id: string) {
-    return this.tenantService.getUsers(id);
+  getUsers(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Query('roles') roles?: string,
+  ) {
+    const roleSlugs = roles ? roles.split(',').map((r) => r.trim()) : undefined;
+    return this.tenantService.getUsers(id, roleSlugs);
+  }
+
+  @Get(':id/roles')
+  @UseGuards(RolesGuard)
+  @RequireRoles(...ADMIN_ROLES)
+  @ApiOperation({
+    summary: 'Get available roles for tenant',
+    description: 'Retrieves all roles available for this tenant (global + tenant-specific). Used for invitation role selection. Requires admin role.',
+  })
+  @ApiParam({
+    name: 'id',
+    description: 'Tenant UUID',
+    example: '123e4567-e89b-12d3-a456-426614174000',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'List of available roles',
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'Tenant not found',
+  })
+  getAvailableRoles(@Param('id', ParseUUIDPipe) id: string) {
+    return this.tenantService.getAvailableRoles(id);
   }
 
   @Patch(':id')
@@ -247,10 +287,12 @@ export class TenantController {
   }
 
   @Patch(':id/settings')
+  @UseGuards(RolesGuard)
+  @RequireRoles(...ADMIN_ROLES)
   @ApiOperation({
     summary: 'Update tenant settings',
     description:
-      'Updates tenant settings (merges with existing settings)',
+      'Updates tenant settings (merges with existing settings). Requires admin role.',
   })
   @ApiParam({
     name: 'id',
@@ -697,6 +739,41 @@ export class TenantController {
 export class InvitationController {
   constructor(private readonly tenantService: TenantService) {}
 
+  @Get(':code')
+  @Public()
+  @ApiOperation({
+    summary: 'Get invitation details',
+    description: 'Retrieves invitation details by code. Used to show invitation info before accepting.',
+  })
+  @ApiParam({
+    name: 'code',
+    description: 'Invitation code',
+    example: 'abc123xyz789',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Invitation details',
+    schema: {
+      type: 'object',
+      properties: {
+        type: { type: 'string', example: 'invitation' },
+        id: { type: 'string' },
+        email: { type: 'string' },
+        tenant: { type: 'object' },
+        role: { type: 'object' },
+        userExists: { type: 'boolean' },
+        requiresRegistration: { type: 'boolean' },
+      },
+    },
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'Invalid or expired invitation code',
+  })
+  getInvitationDetails(@Param('code') code: string) {
+    return this.tenantService.getInvitationByCode(code);
+  }
+
   @Post('accept')
   @Public()
   @ApiOperation({
@@ -738,5 +815,62 @@ export class InvitationController {
   })
   acceptInvitation(@Body() acceptDto: AcceptInvitationDto) {
     return this.tenantService.acceptInvitation(acceptDto.code);
+  }
+
+  @Post('register')
+  @Public()
+  @ApiOperation({
+    summary: 'Register and accept invitation',
+    description:
+      'Creates a new user account and accepts the invitation in one step. ' +
+      'Creates user in Cognito, creates user in database, and associates with tenant.',
+  })
+  @ApiResponse({
+    status: 201,
+    description: 'User registered and invitation accepted successfully',
+    schema: {
+      type: 'object',
+      properties: {
+        message: { type: 'string', example: 'Account created! Welcome to HTown Autos!' },
+        user: {
+          type: 'object',
+          properties: {
+            id: { type: 'string' },
+            email: { type: 'string' },
+            firstName: { type: 'string' },
+            lastName: { type: 'string' },
+          },
+        },
+        tenantUser: {
+          type: 'object',
+          properties: {
+            id: { type: 'string' },
+            status: { type: 'string', example: 'active' },
+            acceptedAt: { type: 'string', format: 'date-time' },
+            tenant: { type: 'object' },
+            role: { type: 'object' },
+          },
+        },
+      },
+    },
+  })
+  @ApiResponse({
+    status: 400,
+    description: 'Email does not match invitation or password requirements not met',
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'Invalid invitation code',
+  })
+  @ApiResponse({
+    status: 409,
+    description: 'Account with this email already exists',
+  })
+  @ApiResponse({
+    status: 410,
+    description: 'Invitation has been revoked or expired',
+  })
+  registerAndAcceptInvitation(@Body() registerDto: RegisterWithInvitationDto) {
+    return this.tenantService.registerAndAcceptInvitation(registerDto);
   }
 }

@@ -26,6 +26,9 @@ import { UploadSessionModule } from './upload-session/upload-session.module';
 import { CopartModule } from './copart/copart.module';
 import { FavoritesModule } from './favorites/favorites.module';
 import { BuyersModule } from './buyers/buyers.module';
+import { EmailModule } from './email/email.module';
+import { TasksModule } from './tasks/tasks.module';
+import { NotesModule } from './notes/notes.module';
 
 /**
  * App Module con seguridad RouteOne/DealerTrack
@@ -60,6 +63,7 @@ import { BuyersModule } from './buyers/buyers.module';
     // Módulos de infraestructura
     PrismaModule,
     AuditModule, // Global audit logging for RouteOne/DealerTrack compliance
+    EmailModule, // SES email service
 
     // Módulos de negocio
     VehicleYearModule,
@@ -82,6 +86,8 @@ import { BuyersModule } from './buyers/buyers.module';
     CopartModule,
     FavoritesModule,
     BuyersModule,
+    TasksModule,
+    NotesModule,
   ],
   controllers: [AppController],
   providers: [

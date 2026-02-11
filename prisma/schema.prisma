@@ -518,6 +518,9 @@ model Tenant {
   vehicles            Vehicle[]
   copartFavorites     CopartFavorite[]
   scaAuctionFavorites ScaAuctionFavorite[]
+  invitations         TenantInvitation[]
+  tasks               Task[]
+  notes               Note[]
 
   @@index([slug])
   @@index([isActive])
@@ -532,7 +535,7 @@ model User {
   updatedAt      DateTime     @updatedAt
   metaValue      Json?
   avatar         String?
-  cognitoSub     String       @unique
+  cognitoSub     String?      @unique
   emailVerified  Boolean      @default(false)
   firstName      String?
   isActive       Boolean      @default(true)
@@ -542,6 +545,7 @@ model User {
   phoneNumber    String?
   tenants          TenantUser[]
   vehiclesCreated  Vehicle[]    @relation("VehicleCreatedBy")
+  sentInvitations  TenantInvitation[]
 
   @@index([cognitoSub])
   @@index([email])
@@ -562,6 +566,7 @@ model Role {
   permissions RolePermission[]
   tenant      Tenant?          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   users       TenantUser[]
+  invitations TenantInvitation[]
 
   @@unique([tenantId, slug])
   @@map("roles")
@@ -604,9 +609,15 @@ model TenantUser {
   invitationSentAt DateTime?
   invitedBy        String?
   status           String    @default("pending")
+  removedAt        DateTime?
   role             Role      @relation(fields: [roleId], references: [id])
   tenant           Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   user             User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  buyersAsSalesperson Buyer[] @relation("BuyerSalesperson")
+  buyersAsBdc         Buyer[] @relation("BuyerBdcAgent")
+  tasksAssigned       Task[]  @relation("TaskAssignedTo")
+  tasksCreated        Task[]  @relation("TaskCreatedBy")
+  notesCreated        Note[]  @relation("NoteCreatedBy")
 
   @@unique([tenantId, userId])
   @@index([tenantId])
@@ -616,6 +627,34 @@ model TenantUser {
   @@index([invitationCode])
   @@index([invitedBy])
   @@map("tenant_users")
+}
+
+// Stores pending invitations for users who may not have an account yet
+model TenantInvitation {
+  id               String    @id @default(uuid())
+  tenantId         String
+  email            String
+  roleId           String
+  permissions      Json?
+  invitationCode   String    @unique
+  invitationSentAt DateTime  @default(now())
+  invitedBy        String
+  expiresAt        DateTime?
+  status           String    @default("pending") // pending, accepted, revoked, expired
+  acceptedAt       DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  tenant           Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  role             Role      @relation(fields: [roleId], references: [id])
+  inviter          User      @relation(fields: [invitedBy], references: [id])
+
+  @@unique([tenantId, email])
+  @@index([tenantId])
+  @@index([email])
+  @@index([invitationCode])
+  @@index([status])
+  @@map("tenant_invitations")
 }
 
 model Buyer {
@@ -738,11 +777,18 @@ model Buyer {
   identityVerifiedDate     DateTime?
   identityVerifiedBy       String?
   source                   String?
+  leadType                 String?
+  leadSource               String?
+  inquiryType              String?
+  contactMethod            String?
+  contactTime              String?
   notes                    String?
   createdAt                DateTime           @default(now())
   updatedAt                DateTime           @updatedAt
   metaValue                Json?
   tenantId                 String?
+  salesPersonId            String?
+  bdcAgentId               String?
   activities               Activity[]
   employmentStatus         EmploymentStatus?  @relation(fields: [employmentStatusId], references: [id])
   gender                   Gender?            @relation(fields: [genderId], references: [id])
@@ -751,15 +797,21 @@ model Buyer {
   occupation               Occupation?        @relation(fields: [occupationId], references: [id])
   preferredLanguage        PreferredLanguage? @relation(fields: [preferredLanguageId], references: [id])
   tenant                   Tenant?            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  salesperson              TenantUser?        @relation("BuyerSalesperson", fields: [salesPersonId], references: [id])
+  bdcAgent                 TenantUser?        @relation("BuyerBdcAgent", fields: [bdcAgentId], references: [id])
   dealsAsBuyer             Deal[]             @relation("BuyerDeals")
   dealsAsCoBuyer           Deal[]             @relation("CoBuyerDeals")
   media                    Media[]            @relation("BuyerMedia")
+  tasks                    Task[]
+  buyerNotes               Note[]
 
   @@index([tenantId])
   @@index([email])
   @@index([lastName, firstName])
   @@index([ssn])
   @@index([dateOfBirth])
+  @@index([salesPersonId])
+  @@index([bdcAgentId])
   @@map("buyers")
 }
 
@@ -1849,4 +1901,73 @@ model ScaAuctionFavorite {
   @@index([tenantId, userId])
   @@index([scaAuctionListingId])
   @@map("sca_auction_favorites")
+}
+
+model Task {
+  id           String    @id @default(uuid())
+  tenantId     String
+  title        String
+  description  String?
+  status       String    @default("pending") // pending, in_progress, completed, cancelled
+  priority     String    @default("normal")  // low, normal, high, urgent
+  dueDate      DateTime?
+  dueTime      String?   // e.g., "14:30"
+  completedAt  DateTime?
+
+  // Relationships
+  assignedToId String    // TenantUser ID - who the task is assigned to
+  createdById  String    // TenantUser ID - who created the task
+
+  // Optional entity associations
+  buyerId      String?
+  vehicleId    String?
+  dealId       String?
+
+  notes        String?
+  metaValue    Json?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  tenant       Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  assignedTo   TenantUser @relation("TaskAssignedTo", fields: [assignedToId], references: [id])
+  createdBy    TenantUser @relation("TaskCreatedBy", fields: [createdById], references: [id])
+  buyer        Buyer?     @relation(fields: [buyerId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId])
+  @@index([assignedToId])
+  @@index([createdById])
+  @@index([buyerId])
+  @@index([status])
+  @@index([priority])
+  @@index([dueDate])
+  @@index([createdAt])
+  @@map("tasks")
+}
+
+model Note {
+  id          String   @id @default(uuid())
+  tenantId    String
+  content     String   // HTML content from rich text editor
+
+  // Relationships
+  createdById String   // TenantUser ID - who created the note
+
+  // Optional entity associations
+  buyerId     String?
+  vehicleId   String?
+  dealId      String?
+
+  metaValue   Json?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  tenant      Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdBy   TenantUser @relation("NoteCreatedBy", fields: [createdById], references: [id])
+  buyer       Buyer?     @relation(fields: [buyerId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId])
+  @@index([createdById])
+  @@index([buyerId])
+  @@index([createdAt])
+  @@map("notes")
 }

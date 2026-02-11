@@ -15,6 +15,20 @@ const BUYER_INCLUDE = {
   occupation: { select: { id: true, title: true } },
   idType: { select: { id: true, title: true } },
   idState: { select: { id: true, title: true } },
+  salesperson: {
+    select: {
+      id: true,
+      user: { select: { id: true, firstName: true, lastName: true, email: true } },
+      role: { select: { id: true, name: true, slug: true } },
+    },
+  },
+  bdcAgent: {
+    select: {
+      id: true,
+      user: { select: { id: true, firstName: true, lastName: true, email: true } },
+      role: { select: { id: true, name: true, slug: true } },
+    },
+  },
 } as const;
 
 @Injectable()
@@ -80,8 +94,15 @@ export class BuyersService {
       ...(dto.businessName && { businessName: dto.businessName }),
       ...(dto.businessEIN && { businessEIN: dto.businessEIN }),
       ...(dto.source && { source: dto.source }),
+      ...(dto.leadType && { leadType: dto.leadType }),
+      ...(dto.leadSource && { leadSource: dto.leadSource }),
+      ...(dto.inquiryType && { inquiryType: dto.inquiryType }),
+      ...(dto.contactMethod && { contactMethod: dto.contactMethod }),
+      ...(dto.contactTime && { contactTime: dto.contactTime }),
       ...(dto.notes && { notes: dto.notes }),
       ...(dto.metaValue && { metaValue: dto.metaValue }),
+      ...(dto.salesPersonId && { salesperson: { connect: { id: dto.salesPersonId } } }),
+      ...(dto.bdcAgentId && { bdcAgent: { connect: { id: dto.bdcAgentId } } }),
     };
 
     const record = await this.buyer.create({
@@ -193,7 +214,8 @@ export class BuyersService {
       'idNumber', 'driversLicenseNumber', 'driversLicenseState',
       'currentEmployer', 'employerPhone', 'jobTitle', 'yearsEmployed', 'monthsEmployed',
       'creditScore', 'isBusinessBuyer', 'businessName', 'businessEIN',
-      'source', 'notes', 'metaValue',
+      'source', 'leadType', 'leadSource', 'inquiryType', 'contactMethod', 'contactTime',
+      'notes', 'metaValue',
     ];
 
     for (const field of simpleFields) {
@@ -236,6 +258,12 @@ export class BuyersService {
     }
     if (dto.idStateId !== undefined) {
       data.idState = dto.idStateId ? { connect: { id: dto.idStateId } } : { disconnect: true };
+    }
+    if (dto.salesPersonId !== undefined) {
+      data.salesperson = dto.salesPersonId ? { connect: { id: dto.salesPersonId } } : { disconnect: true };
+    }
+    if (dto.bdcAgentId !== undefined) {
+      data.bdcAgent = dto.bdcAgentId ? { connect: { id: dto.bdcAgentId } } : { disconnect: true };
     }
 
     const record = await this.buyer.update({

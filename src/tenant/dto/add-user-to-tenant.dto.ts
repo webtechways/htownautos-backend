@@ -106,3 +106,40 @@ export class ResendInvitationDto {
   @IsUUID()
   userId: string;
 }
+
+export class RegisterWithInvitationDto {
+  @ApiProperty({
+    description: 'Secret invitation code received via email',
+    example: 'abc123xyz789',
+  })
+  @IsString()
+  code: string;
+
+  @ApiProperty({
+    description: 'Email address (must match invitation email)',
+    example: 'john.doe@example.com',
+  })
+  @IsEmail()
+  email: string;
+
+  @ApiProperty({
+    description: 'Password for the new account',
+    example: 'SecurePassword123!',
+  })
+  @IsString()
+  password: string;
+
+  @ApiProperty({
+    description: 'User first name',
+    example: 'John',
+  })
+  @IsString()
+  firstName: string;
+
+  @ApiProperty({
+    description: 'User last name',
+    example: 'Doe',
+  })
+  @IsString()
+  lastName: string;
+}

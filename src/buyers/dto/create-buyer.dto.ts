@@ -301,6 +301,32 @@ export class CreateBuyerDto {
   @IsString()
   source?: string;
 
+  // Lead Information
+  @ApiPropertyOptional({ description: 'Lead type (internet, walk_in, phone, referral)' })
+  @IsOptional()
+  @IsString()
+  leadType?: string;
+
+  @ApiPropertyOptional({ description: 'Lead source (website, facebook, google, etc)' })
+  @IsOptional()
+  @IsString()
+  leadSource?: string;
+
+  @ApiPropertyOptional({ description: 'Inquiry type (general, specific_vehicle, trade_in, financing)' })
+  @IsOptional()
+  @IsString()
+  inquiryType?: string;
+
+  @ApiPropertyOptional({ description: 'Preferred contact method (phone, email, text)' })
+  @IsOptional()
+  @IsString()
+  contactMethod?: string;
+
+  @ApiPropertyOptional({ description: 'Preferred contact time (morning, afternoon, evening, anytime)' })
+  @IsOptional()
+  @IsString()
+  contactTime?: string;
+
   @ApiPropertyOptional({ description: 'Notes about the buyer' })
   @IsOptional()
   @IsString()
@@ -310,4 +336,15 @@ export class CreateBuyerDto {
   @IsOptional()
   @IsObject()
   metaValue?: Record<string, any>;
+
+  // Assigned Staff
+  @ApiPropertyOptional({ description: 'Assigned salesperson (TenantUser ID)' })
+  @IsOptional()
+  @IsUUID()
+  salesPersonId?: string;
+
+  @ApiPropertyOptional({ description: 'Assigned BDC agent (TenantUser ID)' })
+  @IsOptional()
+  @IsUUID()
+  bdcAgentId?: string;
 }

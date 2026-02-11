@@ -80,6 +80,16 @@ export class PartsController {
     return this.partsService.getLowStockParts(tenantId);
   }
 
+  @Post('backfill-skus')
+  @ApiOperation({
+    summary: 'Backfill missing SKUs',
+    description: 'Generates SKUs for all parts that do not have one',
+  })
+  @ApiResponse({ status: 200, description: 'SKUs backfilled successfully' })
+  backfillSkus(@CurrentTenant() tenantId: string) {
+    return this.partsService.backfillMissingSKUs(tenantId);
+  }
+
   // ========================================
   // PART CONDITION ENDPOINTS
   // IMPORTANT: Static routes must come BEFORE :id routes

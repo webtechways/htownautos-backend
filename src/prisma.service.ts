@@ -69,6 +69,10 @@ export class PrismaService implements OnModuleInit, OnModuleDestroy {
     return this.prisma.tenantUser;
   }
 
+  get tenantInvitation() {
+    return this.prisma.tenantInvitation;
+  }
+
   get role() {
     return this.prisma.role;
   }
@@ -156,6 +160,14 @@ export class PrismaService implements OnModuleInit, OnModuleDestroy {
 
   get scaAuctionFavorite() {
     return this.prisma.scaAuctionFavorite;
+  }
+
+  get task() {
+    return this.prisma.task;
+  }
+
+  get note() {
+    return this.prisma.note;
   }
 
   get $transaction() {

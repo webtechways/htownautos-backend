@@ -373,6 +373,22 @@ export class BuyerEntity implements Omit<Buyer, 'monthlyHousingCost' | 'monthlyI
   @ApiPropertyOptional()
   source: string | null;
 
+  // Lead Information
+  @ApiPropertyOptional()
+  leadType: string | null;
+
+  @ApiPropertyOptional()
+  leadSource: string | null;
+
+  @ApiPropertyOptional()
+  inquiryType: string | null;
+
+  @ApiPropertyOptional()
+  contactMethod: string | null;
+
+  @ApiPropertyOptional()
+  contactTime: string | null;
+
   @ApiPropertyOptional()
   notes: string | null;
 
@@ -387,6 +403,13 @@ export class BuyerEntity implements Omit<Buyer, 'monthlyHousingCost' | 'monthlyI
 
   @ApiPropertyOptional()
   tenantId: string | null;
+
+  // Assigned Staff
+  @ApiPropertyOptional({ description: 'Assigned salesperson TenantUser ID' })
+  salesPersonId: string | null;
+
+  @ApiPropertyOptional({ description: 'Assigned BDC agent TenantUser ID' })
+  bdcAgentId: string | null;
 
   // Computed full name
   @ApiProperty({ example: 'John R. Doe Jr' })

@@ -5,6 +5,7 @@ import {
   BadRequestException,
   ForbiddenException,
   GoneException,
+  Logger,
 } from '@nestjs/common';
 import { randomBytes } from 'crypto';
 import { PrismaService } from '../prisma.service';
@@ -15,19 +16,29 @@ import {
   AddUserToTenantDto,
   InviteUserToTenantDto,
   UpdateTenantUserDto,
+  RegisterWithInvitationDto,
 } from './dto/add-user-to-tenant.dto';
 import { Prisma } from '@prisma/client';
+import { CognitoService } from '../auth/cognito.service';
+import { EmailService } from '../email/email.service';
 
 // Invitation status constants
 export const INVITATION_STATUS = {
   PENDING: 'pending',
   ACTIVE: 'active',
   SUSPENDED: 'suspended',
+  REMOVED: 'removed',
 } as const;
 
 @Injectable()
 export class TenantService {
-  constructor(private prisma: PrismaService) {}
+  private readonly logger = new Logger(TenantService.name);
+
+  constructor(
+    private prisma: PrismaService,
+    private cognitoService: CognitoService,
+    private emailService: EmailService,
+  ) {}
 
   async create(createTenantDto: CreateTenantDto, creatorUserId: string) {
     // Check if slug already exists
@@ -327,11 +338,24 @@ export class TenantService {
     };
   }
 
-  async getUsers(id: string) {
+  async getUsers(id: string, roleSlugs?: string[]) {
     await this.findOne(id);
 
+    const where: Prisma.TenantUserWhereInput = {
+      tenantId: id,
+      // Include both active and pending users
+      status: { in: [INVITATION_STATUS.ACTIVE, INVITATION_STATUS.PENDING] },
+    };
+
+    // Filter by role slugs if provided
+    if (roleSlugs && roleSlugs.length > 0) {
+      where.role = {
+        slug: { in: roleSlugs },
+      };
+    }
+
     return this.prisma.tenantUser.findMany({
-      where: { tenantId: id },
+      where,
       include: {
         user: {
           select: {
@@ -353,6 +377,10 @@ export class TenantService {
           },
         },
       },
+      orderBy: [
+        { status: 'asc' }, // Active users first, then pending
+        { user: { email: 'asc' } },
+      ],
     });
   }
 
@@ -686,9 +714,15 @@ export class TenantService {
       );
     }
 
-    await this.prisma.tenantUser.delete({
+    // Soft delete: update status to removed and deactivate
+    await this.prisma.tenantUser.update({
       where: {
         tenantId_userId: { tenantId, userId },
+      },
+      data: {
+        status: INVITATION_STATUS.REMOVED,
+        isActive: false,
+        removedAt: new Date(),
       },
     });
 
@@ -798,6 +832,37 @@ export class TenantService {
     };
   }
 
+  /**
+   * Get available roles for a tenant (global + tenant-specific)
+   * Used for invitation role selection
+   */
+  async getAvailableRoles(tenantId: string) {
+    // Verify tenant exists
+    await this.findOne(tenantId);
+
+    // Get both global and tenant-specific roles
+    const roles = await this.prisma.role.findMany({
+      where: {
+        OR: [
+          { tenantId: tenantId },
+          { tenantId: null }, // Global/System roles
+        ],
+      },
+      select: {
+        id: true,
+        name: true,
+        slug: true,
+        description: true,
+        isSystem: true,
+      },
+      orderBy: {
+        name: 'asc',
+      },
+    });
+
+    return roles;
+  }
+
   // ========================================
   // INVITATION METHODS
   // ========================================
@@ -811,7 +876,7 @@ export class TenantService {
 
   /**
    * Invite a user to a tenant by email
-   * Creates a pending TenantUser with an invitation code
+   * Creates User (if not exists), TenantUser with pending status, and TenantInvitation
    * Only the tenant owner can perform this action
    */
   async inviteUserToTenant(
@@ -824,17 +889,6 @@ export class TenantService {
 
     // Verify the requesting user is the owner
     await this.verifyOwnership(tenantId, requestingUserId);
-
-    // Find the user by email
-    const user = await this.prisma.user.findUnique({
-      where: { email: inviteDto.email },
-    });
-
-    if (!user) {
-      throw new NotFoundException(
-        `User with email '${inviteDto.email}' not found. The user must have an account first.`,
-      );
-    }
 
     // Verify the role exists and belongs to this tenant or is global
     const role = await this.prisma.role.findFirst({
@@ -860,148 +914,362 @@ export class TenantService {
       );
     }
 
-    // Check if user is already in this tenant
-    const existingTenantUser = await this.prisma.tenantUser.findUnique({
+    // Check if user already exists
+    let user = await this.prisma.user.findUnique({
+      where: { email: inviteDto.email.toLowerCase() },
+    });
+
+    // If user exists, check if already in tenant
+    if (user) {
+      const existingTenantUser = await this.prisma.tenantUser.findUnique({
+        where: {
+          tenantId_userId: { tenantId, userId: user.id },
+        },
+      });
+
+      if (existingTenantUser) {
+        // If user was previously removed, we can re-invite them
+        if (existingTenantUser.status === INVITATION_STATUS.REMOVED) {
+          // Reactivate the existing TenantUser with pending status
+          const invitationCode = this.generateInvitationCode();
+          const INVITATION_EXPIRY_DAYS = 7;
+          const expiresAt = new Date();
+          expiresAt.setDate(expiresAt.getDate() + INVITATION_EXPIRY_DAYS);
+
+          const reactivatedTenantUser = await this.prisma.tenantUser.update({
+            where: { id: existingTenantUser.id },
+            data: {
+              roleId: inviteDto.roleId,
+              permissions: inviteDto.permissions || undefined,
+              status: INVITATION_STATUS.PENDING,
+              isActive: false,
+              invitationCode,
+              invitationSentAt: new Date(),
+              invitedBy: requestingUserId,
+              removedAt: null, // Clear removal timestamp
+              acceptedAt: null, // Clear previous acceptance
+            },
+            include: {
+              role: { select: { id: true, name: true, slug: true } },
+            },
+          });
+
+          // Build invitation URL
+          const invitationUrl = `${process.env.FRONTEND_URL || 'http://localhost:3001'}/accept-invitation?code=${invitationCode}`;
+
+          console.log('\n========================================');
+          console.log('📧 RE-INVITATION SENT (Previously Removed User)');
+          console.log('========================================');
+          console.log(`To: ${user.email}`);
+          console.log(`Tenant: ${tenant.name}`);
+          console.log(`Role: ${role.name}`);
+          console.log(`Expires: ${expiresAt.toLocaleDateString()} (${INVITATION_EXPIRY_DAYS} days)`);
+          console.log(`Invitation URL: ${invitationUrl}`);
+          console.log('========================================\n');
+
+          // Send re-invitation email
+          await this.emailService.sendInvitationEmail({
+            to: user.email,
+            tenantName: tenant.name,
+            roleName: role.name,
+            invitationUrl,
+            expiresAt,
+          });
+
+          return {
+            message: `Re-invitation sent to ${user.email}`,
+            invitation: {
+              id: reactivatedTenantUser.id,
+              email: user.email,
+              status: INVITATION_STATUS.PENDING,
+              invitationSentAt: reactivatedTenantUser.invitationSentAt,
+              role: reactivatedTenantUser.role,
+            },
+            user: {
+              id: user.id,
+              email: user.email,
+            },
+            _debug: {
+              invitationCode,
+              invitationUrl,
+            },
+          };
+        }
+
+        if (existingTenantUser.status === INVITATION_STATUS.PENDING) {
+          throw new ConflictException(
+            'User already has a pending invitation to this tenant.',
+          );
+        }
+        if (existingTenantUser.status === INVITATION_STATUS.SUSPENDED) {
+          throw new ConflictException(
+            'This user is suspended from this tenant.',
+          );
+        }
+        throw new ConflictException(
+          'User is already a member of this tenant',
+        );
+      }
+    }
+
+    // Check for existing pending invitation
+    const existingInvitation = await this.prisma.tenantInvitation.findUnique({
       where: {
-        tenantId_userId: { tenantId, userId: user.id },
+        tenantId_email: { tenantId, email: inviteDto.email.toLowerCase() },
       },
     });
 
-    if (existingTenantUser) {
-      if (existingTenantUser.status === INVITATION_STATUS.PENDING) {
-        throw new ConflictException(
-          'User already has a pending invitation to this tenant. Use resend invitation instead.',
-        );
-      }
+    if (existingInvitation && existingInvitation.status === 'pending') {
       throw new ConflictException(
-        'User is already a member of this tenant',
+        'An invitation has already been sent to this email. Use resend invitation instead.',
       );
     }
 
-    // Generate invitation code
+    // Generate invitation code and expiration (7 days)
     const invitationCode = this.generateInvitationCode();
+    const INVITATION_EXPIRY_DAYS = 7;
+    const expiresAt = new Date();
+    expiresAt.setDate(expiresAt.getDate() + INVITATION_EXPIRY_DAYS);
 
-    // Create the tenant user with pending status
-    const tenantUser = await this.prisma.tenantUser.create({
-      data: {
-        tenantId,
-        userId: user.id,
-        roleId: inviteDto.roleId,
-        permissions: inviteDto.permissions || undefined,
-        status: INVITATION_STATUS.PENDING,
-        invitationCode,
-        invitationSentAt: new Date(),
-        invitedBy: requestingUserId,
-        isActive: false, // Not active until invitation is accepted
-      },
-      include: {
-        user: {
-          select: {
-            id: true,
-            email: true,
-            name: true,
-            firstName: true,
-            lastName: true,
+    // Create User, TenantUser, and TenantInvitation in a transaction
+    const result = await this.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+      // Create user if doesn't exist (without cognitoSub - will be set when they register)
+      if (!user) {
+        user = await tx.user.create({
+          data: {
+            email: inviteDto.email.toLowerCase(),
+            cognitoSub: null, // Will be set when user registers/accepts
+            isActive: true,
+            emailVerified: false,
+          },
+        });
+        this.logger.log(`Created pending user with ID: ${user.id} for email: ${inviteDto.email}`);
+      }
+
+      // Create TenantUser with pending status
+      const tenantUser = await tx.tenantUser.create({
+        data: {
+          tenantId,
+          userId: user.id,
+          roleId: inviteDto.roleId,
+          permissions: inviteDto.permissions || undefined,
+          status: INVITATION_STATUS.PENDING,
+          isActive: false, // Will be set to true when accepted
+          invitationCode,
+          invitationSentAt: new Date(),
+          invitedBy: requestingUserId,
+        },
+      });
+
+      // Create or update the invitation record for tracking
+      const invitation = await tx.tenantInvitation.upsert({
+        where: {
+          tenantId_email: { tenantId, email: inviteDto.email.toLowerCase() },
+        },
+        update: {
+          roleId: inviteDto.roleId,
+          permissions: inviteDto.permissions || undefined,
+          invitationCode,
+          invitationSentAt: new Date(),
+          expiresAt,
+          invitedBy: requestingUserId,
+          status: 'pending',
+          acceptedAt: null,
+        },
+        create: {
+          tenantId,
+          email: inviteDto.email.toLowerCase(),
+          roleId: inviteDto.roleId,
+          permissions: inviteDto.permissions || undefined,
+          invitationCode,
+          expiresAt,
+          invitedBy: requestingUserId,
+          status: 'pending',
+        },
+        include: {
+          role: {
+            select: {
+              id: true,
+              name: true,
+              slug: true,
+            },
           },
         },
-        role: {
-          select: {
-            id: true,
-            name: true,
-            slug: true,
-          },
-        },
-      },
+      });
+
+      return { user, tenantUser, invitation };
     });
 
-    // TODO: Send invitation email
-    // const invitationUrl = `${process.env.FRONTEND_URL}/accept-invitation?code=${invitationCode}`;
-    // await this.emailService.sendInvitationEmail({
-    //   to: user.email,
-    //   tenantName: tenant.name,
-    //   inviterName: requestingUser.name,
-    //   invitationUrl,
-    //   roleName: role.name,
-    // });
+    // Build invitation URL
+    const invitationUrl = `${process.env.FRONTEND_URL || 'http://localhost:3001'}/accept-invitation?code=${invitationCode}`;
+
+    // Log invitation URL to console (in production, this would be sent via email)
+    console.log('\n========================================');
+    console.log('📧 INVITATION SENT');
+    console.log('========================================');
+    console.log(`To: ${inviteDto.email}`);
+    console.log(`Tenant: ${tenant.name}`);
+    console.log(`Role: ${role.name}`);
+    console.log(`User ID: ${result.user.id}`);
+    console.log(`TenantUser Status: ${INVITATION_STATUS.PENDING}`);
+    console.log(`Expires: ${expiresAt.toLocaleDateString()} (${INVITATION_EXPIRY_DAYS} days)`);
+    console.log(`Invitation URL: ${invitationUrl}`);
+    console.log('========================================\n');
+
+    // Send invitation email
+    await this.emailService.sendInvitationEmail({
+      to: inviteDto.email,
+      tenantName: tenant.name,
+      roleName: role.name,
+      invitationUrl,
+      expiresAt,
+    });
 
     return {
-      message: `Invitation sent to ${user.email}`,
-      tenantUser: {
-        id: tenantUser.id,
-        status: tenantUser.status,
-        invitationSentAt: tenantUser.invitationSentAt,
-        user: tenantUser.user,
-        role: tenantUser.role,
+      message: `Invitation sent to ${inviteDto.email}`,
+      invitation: {
+        id: result.invitation.id,
+        email: result.invitation.email,
+        status: result.invitation.status,
+        invitationSentAt: result.invitation.invitationSentAt,
+        role: result.invitation.role,
+      },
+      user: {
+        id: result.user.id,
+        email: result.user.email,
       },
       // Include invitation code in response for testing purposes
       // In production, this should only be sent via email
       _debug: {
         invitationCode,
-        invitationUrl: `${process.env.FRONTEND_URL || 'https://app.htownautos.com'}/accept-invitation?code=${invitationCode}`,
+        invitationUrl,
       },
     };
   }
 
   /**
-   * Accept an invitation using the invitation code
-   * This endpoint is public (no auth required) - the code itself is the auth
+   * Get invitation details by code (public - no auth required)
+   * Used to show invitation info before accepting
    */
-  async acceptInvitation(code: string) {
-    // Find the tenant user by invitation code
+  async getInvitationByCode(code: string) {
+    // First check TenantUser table (primary source in new flow)
     const tenantUser = await this.prisma.tenantUser.findUnique({
       where: { invitationCode: code },
       include: {
-        tenant: true,
-        user: {
-          select: {
-            id: true,
-            email: true,
-            name: true,
-            firstName: true,
-            lastName: true,
-          },
+        tenant: { select: { id: true, name: true, slug: true } },
+        user: { select: { id: true, email: true, name: true, cognitoSub: true } },
+        role: { select: { id: true, name: true, slug: true } },
+      },
+    });
+
+    if (tenantUser) {
+      if (tenantUser.status === INVITATION_STATUS.ACTIVE) {
+        throw new BadRequestException('This invitation has already been accepted');
+      }
+      if (tenantUser.status === INVITATION_STATUS.SUSPENDED) {
+        throw new GoneException('This invitation has been revoked');
+      }
+
+      // Check if user has Cognito account (cognitoSub set)
+      // If not, they need to register
+      const requiresRegistration = !tenantUser.user.cognitoSub;
+
+      return {
+        type: 'tenantUser',
+        id: tenantUser.id,
+        email: tenantUser.user.email,
+        tenant: tenantUser.tenant,
+        role: tenantUser.role,
+        userExists: true, // User record exists (created during invitation)
+        requiresRegistration, // But may need to create Cognito account
+      };
+    }
+
+    // Fallback: check TenantInvitation table (for backward compatibility)
+    const invitation = await this.prisma.tenantInvitation.findUnique({
+      where: { invitationCode: code },
+      include: {
+        tenant: {
+          select: { id: true, name: true, slug: true },
         },
         role: {
-          select: {
-            id: true,
-            name: true,
-            slug: true,
-          },
+          select: { id: true, name: true, slug: true },
         },
       },
     });
 
+    if (invitation) {
+      if (invitation.status === 'accepted') {
+        throw new BadRequestException('This invitation has already been accepted');
+      }
+      if (invitation.status === 'revoked') {
+        throw new GoneException('This invitation has been revoked');
+      }
+      // Check expiration
+      if (invitation.expiresAt && new Date() > invitation.expiresAt) {
+        throw new GoneException('This invitation has expired');
+      }
+
+      // Check if user exists and has Cognito account
+      const user = await this.prisma.user.findUnique({
+        where: { email: invitation.email },
+      });
+
+      return {
+        type: 'invitation',
+        id: invitation.id,
+        email: invitation.email,
+        tenant: invitation.tenant,
+        role: invitation.role,
+        userExists: !!user,
+        requiresRegistration: !user || !user.cognitoSub,
+      };
+    }
+
+    throw new NotFoundException('Invalid or expired invitation code');
+  }
+
+  /**
+   * Accept an invitation using the invitation code
+   * User must already have a Cognito account (cognitoSub set)
+   * Updates TenantUser status from pending to active
+   */
+  async acceptInvitation(code: string) {
+    // Find TenantUser by invitation code
+    const tenantUser = await this.prisma.tenantUser.findUnique({
+      where: { invitationCode: code },
+      include: {
+        tenant: true,
+        user: true,
+        role: { select: { id: true, name: true, slug: true } },
+      },
+    });
+
     if (!tenantUser) {
-      throw new NotFoundException(
-        'Invalid or expired invitation code',
-      );
+      throw new NotFoundException('Invalid or expired invitation code');
     }
 
-    // Check if already accepted
     if (tenantUser.status === INVITATION_STATUS.ACTIVE) {
-      throw new BadRequestException(
-        'This invitation has already been accepted',
-      );
+      throw new BadRequestException('This invitation has already been accepted');
     }
 
-    // Check if suspended
     if (tenantUser.status === INVITATION_STATUS.SUSPENDED) {
-      throw new GoneException(
-        'This invitation has been revoked',
-      );
+      throw new GoneException('This invitation has been revoked');
     }
 
-    // Optional: Check invitation expiration (e.g., 7 days)
-    // const INVITATION_EXPIRY_DAYS = 7;
-    // if (tenantUser.invitationSentAt) {
-    //   const expiryDate = new Date(tenantUser.invitationSentAt);
-    //   expiryDate.setDate(expiryDate.getDate() + INVITATION_EXPIRY_DAYS);
-    //   if (new Date() > expiryDate) {
-    //     throw new GoneException('This invitation has expired');
-    //   }
-    // }
+    // Check if user has Cognito account (cognitoSub set)
+    // If not, they need to register first
+    if (!tenantUser.user.cognitoSub) {
+      return {
+        requiresRegistration: true,
+        email: tenantUser.user.email,
+        tenant: { id: tenantUser.tenant.id, name: tenantUser.tenant.name },
+        role: tenantUser.role,
+        message: 'Please create an account to accept this invitation',
+      };
+    }
 
-    // Accept the invitation
+    // Accept invitation - update TenantUser status to active
     const updatedTenantUser = await this.prisma.tenantUser.update({
       where: { id: tenantUser.id },
       data: {
@@ -1011,29 +1279,26 @@ export class TenantService {
         invitationCode: null, // Clear the code after use
       },
       include: {
-        tenant: {
-          select: {
-            id: true,
-            name: true,
-            slug: true,
-          },
-        },
-        user: {
-          select: {
-            id: true,
-            email: true,
-            name: true,
-          },
-        },
-        role: {
-          select: {
-            id: true,
-            name: true,
-            slug: true,
-          },
-        },
+        tenant: { select: { id: true, name: true, slug: true } },
+        user: { select: { id: true, email: true, name: true } },
+        role: { select: { id: true, name: true, slug: true } },
       },
     });
+
+    // Also update TenantInvitation status if exists
+    await this.prisma.tenantInvitation.updateMany({
+      where: {
+        tenantId: tenantUser.tenantId,
+        email: tenantUser.user.email,
+        status: 'pending',
+      },
+      data: {
+        status: 'accepted',
+        acceptedAt: new Date(),
+      },
+    });
+
+    this.logger.log(`Invitation accepted for ${tenantUser.user.email} in tenant ${updatedTenantUser.tenant.name}`);
 
     return {
       message: `Welcome to ${updatedTenantUser.tenant.name}!`,
@@ -1044,6 +1309,144 @@ export class TenantService {
         tenant: updatedTenantUser.tenant,
         user: updatedTenantUser.user,
         role: updatedTenantUser.role,
+      },
+    };
+  }
+
+  /**
+   * Register a new user and accept invitation in one step
+   * User record already exists (created during invitation with cognitoSub: null)
+   * TenantUser record already exists with pending status
+   * This method:
+   * 1. Creates user in Cognito
+   * 2. Updates existing User with cognitoSub and profile info
+   * 3. Updates existing TenantUser status from pending to active
+   */
+  async registerAndAcceptInvitation(registerDto: RegisterWithInvitationDto) {
+    const { code, email, password, firstName, lastName } = registerDto;
+
+    this.logger.log('========================================');
+    this.logger.log('REGISTERING NEW USER VIA INVITATION');
+    this.logger.log('========================================');
+    this.logger.log(`Email: ${email}`);
+    this.logger.log(`Name: ${firstName} ${lastName}`);
+
+    // Step 1: Find the TenantUser by invitation code
+    const tenantUser = await this.prisma.tenantUser.findUnique({
+      where: { invitationCode: code },
+      include: {
+        tenant: true,
+        user: true,
+        role: { select: { id: true, name: true, slug: true } },
+      },
+    });
+
+    if (!tenantUser) {
+      throw new NotFoundException('Invalid invitation code');
+    }
+
+    if (tenantUser.status === INVITATION_STATUS.ACTIVE) {
+      throw new BadRequestException('This invitation has already been accepted');
+    }
+
+    if (tenantUser.status === INVITATION_STATUS.SUSPENDED) {
+      throw new GoneException('This invitation has been revoked');
+    }
+
+    // Verify email matches the user associated with the invitation
+    if (email.toLowerCase() !== tenantUser.user.email.toLowerCase()) {
+      throw new BadRequestException(
+        'Email does not match the invitation. Please use the email the invitation was sent to.',
+      );
+    }
+
+    // Step 2: Check if user already has a Cognito account
+    if (tenantUser.user.cognitoSub) {
+      throw new ConflictException(
+        'This user already has an account. Please log in to accept the invitation.',
+      );
+    }
+
+    // Step 3: Create user in Cognito
+    const cognitoResult = await this.cognitoService.createUser({
+      email,
+      password,
+      firstName,
+      lastName,
+    });
+
+    this.logger.log(`Cognito user created with sub: ${cognitoResult.cognitoSub}`);
+
+    // Step 4: Update existing User and TenantUser in a transaction
+    const result = await this.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+      // Update existing user with Cognito sub and profile info
+      const updatedUser = await tx.user.update({
+        where: { id: tenantUser.user.id },
+        data: {
+          cognitoSub: cognitoResult.cognitoSub,
+          firstName,
+          lastName,
+          name: `${firstName} ${lastName}`,
+          emailVerified: true,
+          isActive: true,
+        },
+      });
+
+      this.logger.log(`User updated in database with ID: ${updatedUser.id}`);
+
+      // Update TenantUser status from pending to active
+      const updatedTenantUser = await tx.tenantUser.update({
+        where: { id: tenantUser.id },
+        data: {
+          status: INVITATION_STATUS.ACTIVE,
+          isActive: true,
+          acceptedAt: new Date(),
+          invitationCode: null, // Clear the code after use
+        },
+        include: {
+          tenant: { select: { id: true, name: true, slug: true } },
+          user: { select: { id: true, email: true, name: true, firstName: true, lastName: true } },
+          role: { select: { id: true, name: true, slug: true } },
+        },
+      });
+
+      // Also update TenantInvitation status if exists
+      await tx.tenantInvitation.updateMany({
+        where: {
+          tenantId: tenantUser.tenantId,
+          email: tenantUser.user.email,
+          status: 'pending',
+        },
+        data: {
+          status: 'accepted',
+          acceptedAt: new Date(),
+        },
+      });
+
+      return { user: updatedUser, tenantUser: updatedTenantUser };
+    });
+
+    this.logger.log('========================================');
+    this.logger.log('REGISTRATION COMPLETE');
+    this.logger.log(`User ID: ${result.user.id}`);
+    this.logger.log(`Tenant: ${result.tenantUser.tenant.name}`);
+    this.logger.log(`Role: ${result.tenantUser.role.name}`);
+    this.logger.log('========================================');
+
+    return {
+      message: `Account created! Welcome to ${result.tenantUser.tenant.name}!`,
+      user: {
+        id: result.user.id,
+        email: result.user.email,
+        firstName: result.user.firstName,
+        lastName: result.user.lastName,
+      },
+      tenantUser: {
+        id: result.tenantUser.id,
+        status: result.tenantUser.status,
+        acceptedAt: result.tenantUser.acceptedAt,
+        tenant: result.tenantUser.tenant,
+        role: result.tenantUser.role,
       },
     };
   }
@@ -1087,8 +1490,11 @@ export class TenantService {
       );
     }
 
-    // Generate new invitation code
+    // Generate new invitation code and expiration (7 days)
     const invitationCode = this.generateInvitationCode();
+    const INVITATION_EXPIRY_DAYS = 7;
+    const expiresAt = new Date();
+    expiresAt.setDate(expiresAt.getDate() + INVITATION_EXPIRY_DAYS);
 
     // Update with new code
     const updatedTenantUser = await this.prisma.tenantUser.update({
@@ -1109,15 +1515,28 @@ export class TenantService {
       },
     });
 
-    // TODO: Send invitation email
-    // const invitationUrl = `${process.env.FRONTEND_URL}/accept-invitation?code=${invitationCode}`;
-    // await this.emailService.sendInvitationEmail({
-    //   to: tenantUser.user.email,
-    //   tenantName: tenant.name,
-    //   inviterName: requestingUser.name,
-    //   invitationUrl,
-    //   roleName: tenantUser.role.name,
-    // });
+    // Build invitation URL
+    const invitationUrl = `${process.env.FRONTEND_URL || 'http://localhost:3001'}/accept-invitation?code=${invitationCode}`;
+
+    // Log invitation URL to console (in production, this would be sent via email)
+    console.log('\n========================================');
+    console.log('📧 INVITATION RESENT');
+    console.log('========================================');
+    console.log(`To: ${updatedTenantUser.user.email}`);
+    console.log(`Tenant: ${tenant.name}`);
+    console.log(`Role: ${tenantUser.role.name}`);
+    console.log(`Expires: ${expiresAt.toLocaleDateString()} (${INVITATION_EXPIRY_DAYS} days)`);
+    console.log(`Invitation URL: ${invitationUrl}`);
+    console.log('========================================\n');
+
+    // Send resend invitation email
+    await this.emailService.sendInvitationEmail({
+      to: updatedTenantUser.user.email,
+      tenantName: tenant.name,
+      roleName: tenantUser.role.name,
+      invitationUrl,
+      expiresAt,
+    });
 
     return {
       message: `Invitation resent to ${updatedTenantUser.user.email}`,
@@ -1125,7 +1544,7 @@ export class TenantService {
       // Include invitation code in response for testing purposes
       _debug: {
         invitationCode,
-        invitationUrl: `${process.env.FRONTEND_URL || 'https://app.htownautos.com'}/accept-invitation?code=${invitationCode}`,
+        invitationUrl,
       },
     };
   }

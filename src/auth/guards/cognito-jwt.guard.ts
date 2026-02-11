@@ -156,13 +156,14 @@ export class CognitoJwtGuard implements CanActivate {
   ): Promise<AuthenticatedUser> {
     const startTime = Date.now();
     const cognitoSub = accessPayload.sub;
+    const email = idTokenPayload?.email || '';
 
-    // Try to find existing user
+    // Try to find existing user by cognitoSub first
     let user = await this.prisma.user.findUnique({
       where: { cognitoSub },
       include: {
         tenants: {
-          where: { isActive: true },
+          where: { isActive: true, status: 'active' },
           include: {
             tenant: {
               select: {
@@ -176,9 +177,97 @@ export class CognitoJwtGuard implements CanActivate {
       },
     });
 
-    // If user doesn't exist, create them
+    // If not found by cognitoSub, try to find by email (for invited users)
+    if (!user && email) {
+      const existingUserByEmail = await this.prisma.user.findUnique({
+        where: { email },
+        include: {
+          tenants: {
+            where: { isActive: true },
+            include: {
+              tenant: {
+                select: {
+                  id: true,
+                  name: true,
+                  slug: true,
+                },
+              },
+            },
+          },
+        },
+      });
+
+      // If user exists by email but has no cognitoSub, link them to this Cognito account
+      if (existingUserByEmail) {
+        const name = idTokenPayload?.name || null;
+        const firstName = idTokenPayload?.given_name || existingUserByEmail.firstName;
+        const lastName = idTokenPayload?.family_name || existingUserByEmail.lastName;
+        const avatar = idTokenPayload?.picture || existingUserByEmail.avatar;
+        const emailVerified = idTokenPayload?.email_verified ?? existingUserByEmail.emailVerified;
+
+        this.logger.log('========================================');
+        this.logger.log('LINKING EXISTING USER TO COGNITO');
+        this.logger.log('========================================');
+        this.logger.log(`Email: ${email}`);
+        this.logger.log(`Cognito Sub: ${cognitoSub}`);
+        this.logger.log(`Existing User ID: ${existingUserByEmail.id}`);
+        this.logger.log(`Previous Cognito Sub: ${existingUserByEmail.cognitoSub || 'None'}`);
+
+        // Update the existing user with the Cognito sub and any new profile info
+        user = await this.prisma.user.update({
+          where: { id: existingUserByEmail.id },
+          data: {
+            cognitoSub,
+            name: name || existingUserByEmail.name,
+            firstName,
+            lastName,
+            avatar,
+            emailVerified,
+            isActive: true, // Activate user when they complete Cognito login
+          },
+          include: {
+            tenants: {
+              where: { isActive: true },
+              include: {
+                tenant: {
+                  select: {
+                    id: true,
+                    name: true,
+                    slug: true,
+                  },
+                },
+              },
+            },
+          },
+        });
+
+        this.logger.log(`User linked successfully to Cognito`);
+        this.logger.log('========================================');
+
+        // Save auth event to database
+        const duration = Date.now() - startTime;
+        await this.createAuthAuditLog({
+          userId: user.id,
+          userEmail: email,
+          cognitoSub,
+          action: 'user-linked',
+          status: 'success',
+          ipAddress: this.getClientIp(request),
+          userAgent: request.headers['user-agent'] || 'unknown',
+          duration,
+          metadata: {
+            previousCognitoSub: existingUserByEmail.cognitoSub,
+            name,
+            firstName,
+            lastName,
+            emailVerified,
+          },
+        });
+      }
+    }
+
+    // If user still doesn't exist, create them
     if (!user) {
-      const email = idTokenPayload?.email || '';
       const name = idTokenPayload?.name || null;
       const firstName = idTokenPayload?.given_name || null;
       const lastName = idTokenPayload?.family_name || null;
@@ -257,7 +346,7 @@ export class CognitoJwtGuard implements CanActivate {
 
     return {
       id: user.id,
-      cognitoSub: user.cognitoSub,
+      cognitoSub: user.cognitoSub!, // Non-null assertion: authenticated users must have cognitoSub
       email: user.email,
       name: user.name,
       firstName: user.firstName,

@@ -23,12 +23,12 @@ export class PartsService {
   constructor(private prisma: PrismaService) {}
 
   /**
-   * Generate a unique SKU with HTW-P prefix
+   * Generate a unique SKU with HTW-P- prefix
    */
   private async generateSku(tenantId: string): Promise<string> {
-    const prefix = 'HTW-P';
+    const prefix = 'HTW-P-';
 
-    // Get the highest SKU with HTW-P prefix for this tenant
+    // Get the highest SKU with HTW-P- prefix for this tenant
     const lastPart = await this.prisma.part.findFirst({
       where: {
         tenantId,
@@ -53,7 +53,7 @@ export class PartsService {
       }
     }
 
-    // Pad with zeros to 6 digits (e.g., HTW-P000001)
+    // Pad with zeros to 6 digits (e.g., HTW-P-000001)
     return `${prefix}${nextNumber.toString().padStart(6, '0')}`;
   }
 
@@ -104,19 +104,17 @@ export class PartsService {
     }
 
     // Auto-generate SKU with HTW-P prefix if not provided
-    let sku = createPartDto.sku;
-    if (!sku) {
-      sku = await this.generateSku(tenantId);
-    }
+    const sku = createPartDto.sku || (await this.generateSku(tenantId));
+
+    // Destructure to exclude sku from spread (to avoid undefined override)
+    const { sku: _sku, purchaseDate, ...restDto } = createPartDto;
 
     return this.prisma.part.create({
       data: {
         tenantId,
-        ...createPartDto,
+        ...restDto,
         sku,
-        purchaseDate: createPartDto.purchaseDate
-          ? new Date(createPartDto.purchaseDate)
-          : undefined,
+        purchaseDate: purchaseDate ? new Date(purchaseDate) : undefined,
       },
       include: this.getPartIncludes(),
     });
@@ -398,6 +396,33 @@ export class PartsService {
     `;
 
     return parts;
+  }
+
+  /**
+   * Backfill SKUs for existing parts that don't have one
+   */
+  async backfillMissingSKUs(tenantId: string): Promise<{ updated: number }> {
+    // Get all parts without SKU for this tenant
+    const partsWithoutSku = await this.prisma.part.findMany({
+      where: {
+        tenantId,
+        OR: [{ sku: null }, { sku: '' }],
+      },
+      select: { id: true },
+      orderBy: { createdAt: 'asc' },
+    });
+
+    let updated = 0;
+    for (const part of partsWithoutSku) {
+      const sku = await this.generateSku(tenantId);
+      await this.prisma.part.update({
+        where: { id: part.id },
+        data: { sku },
+      });
+      updated++;
+    }
+
+    return { updated };
   }
 
   private getPartIncludes() {

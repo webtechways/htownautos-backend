@@ -3,12 +3,14 @@ import { APP_GUARD } from '@nestjs/core';
 import { CognitoJwtGuard } from './guards/cognito-jwt.guard';
 import { TenantGuard } from './guards/tenant.guard';
 import { AuthService } from './auth.service';
+import { CognitoService } from './cognito.service';
 import { PrismaModule } from '../prisma.module';
 
 @Module({
   imports: [PrismaModule],
   providers: [
     AuthService,
+    CognitoService,
     // CognitoJwtGuard runs first - handles authentication
     {
       provide: APP_GUARD,
@@ -20,6 +22,6 @@ import { PrismaModule } from '../prisma.module';
       useClass: TenantGuard,
     },
   ],
-  exports: [AuthService],
+  exports: [AuthService, CognitoService],
 })
 export class AuthModule { }
