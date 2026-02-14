@@ -477,6 +477,7 @@ model Tenant {
   id                  String               @id @default(uuid())
   name                String
   slug                String               @unique
+  subdomain           String?              @unique // subdomain.htownautos.com (nullable for migration)
   businessName        String?
   taxId               String?
   phone               String?
@@ -488,6 +489,7 @@ model Tenant {
   zipCode             String?
   country             String               @default("USA")
   settings            Json?
+  twilioMessagingServiceSid String? // Twilio Messaging Service ID for SMS
   logo                String?
   isActive            Boolean              @default(true)
   createdAt           DateTime             @default(now())
@@ -521,8 +523,14 @@ model Tenant {
   invitations         TenantInvitation[]
   tasks               Task[]
   notes               Note[]
+  phoneCalls          PhoneCall[]
+  smsMessages         SmsMessage[]
+  emailMessages       EmailMessage[]
+  twilioPhoneNumbers  TwilioPhoneNumber[]
+  callFlows           CallFlow[]
 
   @@index([slug])
+  @@index([subdomain])
   @@index([isActive])
   @@map("tenants")
 }
@@ -541,8 +549,10 @@ model User {
   isActive       Boolean      @default(true)
   lastActivityAt DateTime?
   lastLoginAt    DateTime?
+  lastSeenAt     DateTime?
   lastName       String?
   phoneNumber    String?
+  isOnline       Boolean      @default(false)
   tenants          TenantUser[]
   vehiclesCreated  Vehicle[]    @relation("VehicleCreatedBy")
   sentInvitations  TenantInvitation[]
@@ -599,6 +609,9 @@ model TenantUser {
   id               String    @id @default(uuid())
   tenantId         String
   userId           String
+  username         String?   // username for tenant email: username@subdomain.htownautos.com (nullable for migration)
+  tenantEmail      String?   // computed: username@subdomain.htownautos.com
+  extension        String?   // Phone extension number (e.g., "101", "102")
   permissions      Json?
   isActive         Boolean   @default(true)
   createdAt        DateTime  @default(now())
@@ -618,14 +631,22 @@ model TenantUser {
   tasksAssigned       Task[]  @relation("TaskAssignedTo")
   tasksCreated        Task[]  @relation("TaskCreatedBy")
   notesCreated        Note[]  @relation("NoteCreatedBy")
+  phoneCalls          PhoneCall[] @relation("PhoneCallCaller")
+  smsMessages         SmsMessage[] @relation("SmsMessageSender")
+  emailMessages       EmailMessage[] @relation("EmailMessageSender")
+  twilioPhoneNumber   TwilioPhoneNumber?
 
   @@unique([tenantId, userId])
+  @@unique([tenantId, username])
+  @@unique([tenantId, extension])
+  @@unique([tenantEmail])
   @@index([tenantId])
   @@index([userId])
   @@index([roleId])
   @@index([status])
   @@index([invitationCode])
   @@index([invitedBy])
+  @@index([username])
   @@map("tenant_users")
 }
 
@@ -804,6 +825,9 @@ model Buyer {
   media                    Media[]            @relation("BuyerMedia")
   tasks                    Task[]
   buyerNotes               Note[]
+  phoneCalls               PhoneCall[]
+  smsMessages              SmsMessage[]
+  emailMessages            EmailMessage[]
 
   @@index([tenantId])
   @@index([email])
@@ -1196,6 +1220,7 @@ model Vehicle {
   vehicleType           VehicleType?      @relation(fields: [vehicleTypeId], references: [id])
   year                  VehicleYear       @relation(fields: [yearId], references: [id])
   usedParts             VehiclePart[]
+  tasks                 Task[]
 
   @@index([tenantId])
   @@index([createdById])
@@ -1932,11 +1957,13 @@ model Task {
   assignedTo   TenantUser @relation("TaskAssignedTo", fields: [assignedToId], references: [id])
   createdBy    TenantUser @relation("TaskCreatedBy", fields: [createdById], references: [id])
   buyer        Buyer?     @relation(fields: [buyerId], references: [id], onDelete: SetNull)
+  vehicle      Vehicle?   @relation(fields: [vehicleId], references: [id], onDelete: SetNull)
 
   @@index([tenantId])
   @@index([assignedToId])
   @@index([createdById])
   @@index([buyerId])
+  @@index([vehicleId])
   @@index([status])
   @@index([priority])
   @@index([dueDate])
@@ -1970,4 +1997,261 @@ model Note {
   @@index([buyerId])
   @@index([createdAt])
   @@map("notes")
+}
+
+model PhoneCall {
+  id            String    @id @default(uuid())
+  tenantId      String
+
+  // Call participants
+  callerId      String    // TenantUser who made/received the call
+  buyerId       String    // Buyer involved in the call
+
+  // Call details
+  direction     String    // inbound, outbound
+  status        String    @default("completed") // completed, missed, no_answer, busy, voicemail, cancelled
+  phoneNumber   String    // The phone number called/received from
+
+  // Timing
+  startedAt     DateTime
+  endedAt       DateTime?
+  duration      Int?      // Duration in seconds
+
+  // Call outcome
+  outcome       String?   // interested, not_interested, callback_requested, wrong_number, left_voicemail, etc.
+  notes         String?   // Call notes/summary
+
+  // Optional - for integrations
+  externalId    String?   // External system call ID (e.g., from VoIP provider)
+  recordingUrl  String?   // URL to call recording if available
+
+  // Twilio transcription and AI analysis
+  transcription String?   // Full transcription text from Twilio
+  transcriptionSid String? // Twilio transcription SID
+  transcriptionStatus String? // pending, completed, failed
+  aiSummary     String?   // AI-generated summary of the call
+  aiSentiment   String?   // AI-detected sentiment: positive, neutral, negative
+  aiKeyPoints   Json?     // AI-extracted key points as JSON array
+  aiNextSteps   Json?     // AI-suggested next steps as JSON array
+
+  metaValue     Json?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  tenant        Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  caller        TenantUser @relation("PhoneCallCaller", fields: [callerId], references: [id])
+  buyer         Buyer      @relation(fields: [buyerId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([callerId])
+  @@index([buyerId])
+  @@index([direction])
+  @@index([status])
+  @@index([startedAt])
+  @@index([createdAt])
+  @@map("phone_calls")
+}
+
+// SMS Messages - tracks SMS messages between users and buyers
+model SmsMessage {
+  id            String    @id @default(uuid())
+  tenantId      String
+
+  // Participants
+  senderId      String?   // TenantUser who sent (null for inbound from buyer)
+  buyerId       String
+
+  // Message details
+  direction     String    // inbound, outbound
+  status        String    @default("sent") // sent, delivered, failed, received, queued
+  phoneNumber   String    // Phone number of the buyer
+  fromNumber    String    // Sender phone number (Twilio number for outbound)
+  toNumber      String    // Recipient phone number
+  body          String    // Message content
+
+  // Twilio integration
+  messageSid    String?   // Twilio Message SID
+  errorCode     String?   // Twilio error code if failed
+  errorMessage  String?   // Twilio error message if failed
+
+  // Media (MMS support)
+  mediaUrls     Json?     // Array of media URLs for MMS
+  numMedia      Int       @default(0) // Number of media attachments
+
+  // Pricing
+  price         Decimal?  @db.Decimal(10, 4) // Cost of the message
+  priceUnit     String?   // Currency (e.g., "USD")
+
+  // Metadata
+  segmentCount  Int       @default(1) // Number of SMS segments
+  isRead        Boolean   @default(false) // Has the message been read
+
+  metaValue     Json?
+  sentAt        DateTime? // When the message was sent
+  deliveredAt   DateTime? // When the message was delivered
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  tenant        Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  sender        TenantUser? @relation("SmsMessageSender", fields: [senderId], references: [id])
+  buyer         Buyer      @relation(fields: [buyerId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([senderId])
+  @@index([buyerId])
+  @@index([direction])
+  @@index([status])
+  @@index([messageSid])
+  @@index([sentAt])
+  @@index([createdAt])
+  @@map("sms_messages")
+}
+
+// Email Messages - tracks emails between users and buyers
+model EmailMessage {
+  id            String    @id @default(uuid())
+  tenantId      String
+
+  // Participants
+  senderId      String?   // TenantUser who sent (null for inbound from buyer)
+  buyerId       String
+
+  // Email details
+  direction     String    // inbound, outbound
+  status        String    @default("sent") // draft, queued, sent, delivered, bounced, failed, opened, clicked
+
+  // Addresses
+  fromEmail     String    // Sender email address
+  toEmail       String    // Recipient email address
+  replyTo       String?   // Reply-to address
+  ccEmails      Json?     // Array of CC email addresses
+  bccEmails     Json?     // Array of BCC email addresses
+
+  // Content
+  subject       String
+  bodyHtml      String?   // HTML body
+  bodyText      String?   // Plain text body
+
+  // Threading
+  threadId      String?   // For grouping email threads
+  inReplyTo     String?   // Message-ID of the email being replied to
+  references    Json?     // Array of Message-IDs in the thread
+
+  // Attachments
+  attachments   Json?     // Array of attachment metadata [{name, url, size, mimeType}]
+  attachmentCount Int     @default(0)
+
+  // AWS SES integration
+  messageId     String?   // SES Message ID
+  sesStatus     String?   // SES delivery status
+  bounceType    String?   // hard, soft, transient
+  bounceSubType String?   // e.g., "General", "NoEmail", "Suppressed"
+  complaintType String?   // abuse, auth-failure, fraud, etc.
+
+  // Tracking
+  isRead        Boolean   @default(false)
+  readAt        DateTime?
+  openCount     Int       @default(0)
+  clickCount    Int       @default(0)
+  lastOpenedAt  DateTime?
+  lastClickedAt DateTime?
+
+  // Metadata
+  priority      String?   // high, normal, low
+  labels        Json?     // Array of labels/tags
+  metaValue     Json?
+
+  // Timestamps
+  scheduledAt   DateTime? // For scheduled emails
+  sentAt        DateTime?
+  deliveredAt   DateTime?
+  bouncedAt     DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  tenant        Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  sender        TenantUser? @relation("EmailMessageSender", fields: [senderId], references: [id])
+  buyer         Buyer      @relation(fields: [buyerId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([senderId])
+  @@index([buyerId])
+  @@index([direction])
+  @@index([status])
+  @@index([threadId])
+  @@index([messageId])
+  @@index([sentAt])
+  @@index([createdAt])
+  @@map("email_messages")
+}
+
+// Twilio Phone Numbers - manages phone numbers purchased from Twilio
+model TwilioPhoneNumber {
+  id            String      @id @default(uuid())
+  tenantId      String
+
+  // Twilio data
+  phoneNumber   String      @unique  // E.164 format: +15551234567
+  twilioSid     String      @unique  // Twilio Phone Number SID (PN...)
+  friendlyName  String?              // "Main Sales Line", "Support", etc.
+
+  // Capabilities
+  canVoice      Boolean     @default(true)
+  canSms        Boolean     @default(true)
+  canMms        Boolean     @default(false)
+
+  // Assignment (optional - a number can be unassigned)
+  assignedToId  String?     @unique  // TenantUser id - @unique ensures 1:1
+
+  // Call Flow association
+  callFlowId    String?              // CallFlow to use for incoming calls
+
+  // Status
+  isActive      Boolean     @default(true)
+  isPrimary     Boolean     @default(false)  // Primary number for tenant
+
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+
+  // Relations
+  tenant        Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  assignedTo    TenantUser? @relation(fields: [assignedToId], references: [id], onDelete: SetNull)
+  callFlow      CallFlow?   @relation(fields: [callFlowId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId])
+  @@index([phoneNumber])
+  @@index([isActive])
+  @@index([callFlowId])
+  @@map("twilio_phone_numbers")
+}
+
+// Call Flows - IVR/call routing configuration
+// Steps are stored as JSON array, processed sequentially
+// Menu and Schedule steps can have nested sub-flows (branches)
+model CallFlow {
+  id                 String      @id @default(uuid())
+  tenantId           String
+
+  name               String                // "Main IVR", "After Hours", etc.
+  description        String?
+
+  // Flow configuration
+  isActive           Boolean     @default(true)
+  recordInboundCalls Boolean     @default(false)  // Record all calls using this flow
+
+  // Steps stored as JSON array
+  // Each step: { type, config, nextStepIndex?, branches? }
+  // Step types: greeting, dial, simulcall, round_robin, menu, schedule, keypad_entry, tag, voicemail, hangup
+  steps              Json        @default("[]")
+
+  createdAt          DateTime    @default(now())
+  updatedAt          DateTime    @updatedAt
+
+  // Relations
+  tenant             Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  phoneNumbers       TwilioPhoneNumber[]
+
+  @@index([tenantId])
+  @@index([isActive])
+  @@map("call_flows")
 }

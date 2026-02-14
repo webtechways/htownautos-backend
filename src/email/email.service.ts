@@ -4,6 +4,7 @@ import { SESClient, SendEmailCommand } from '@aws-sdk/client-ses';
 export interface InvitationEmailData {
   to: string;
   tenantName: string;
+  ownerEmail: string;
   roleName: string;
   invitationUrl: string;
   expiresAt: Date;
@@ -30,7 +31,7 @@ export class EmailService {
    * Send invitation email to a user
    */
   async sendInvitationEmail(data: InvitationEmailData): Promise<boolean> {
-    const { to, tenantName, roleName, invitationUrl, expiresAt, inviterName } = data;
+    const { to, tenantName, ownerEmail } = data;
 
     const subject = `You've been invited to join ${tenantName}`;
     const htmlBody = this.getInvitationHtmlTemplate(data);
@@ -41,6 +42,8 @@ export class EmailService {
       subject,
       htmlBody,
       textBody,
+      fromName: `Welcome to ${tenantName}`,
+      fromEmail: ownerEmail,
     });
   }
 
@@ -52,17 +55,27 @@ export class EmailService {
     subject: string;
     htmlBody: string;
     textBody: string;
+    fromName?: string;
+    fromEmail?: string;
   }): Promise<boolean> {
-    const { to, subject, htmlBody, textBody } = params;
+    const { to, subject, htmlBody, textBody, fromName, fromEmail } = params;
 
     if (!this.isEnabled) {
       this.logger.warn(`Email sending disabled. Would have sent to: ${to}`);
       return false;
     }
 
+    // Use provided fromEmail or fall back to default
+    const emailAddress = fromEmail || this.fromEmail;
+
+    // Format source with display name if provided
+    const source = fromName
+      ? `"${fromName}" <${emailAddress}>`
+      : emailAddress;
+
     try {
       const command = new SendEmailCommand({
-        Source: this.fromEmail,
+        Source: source,
         Destination: {
           ToAddresses: [to],
         },

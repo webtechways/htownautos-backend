@@ -340,6 +340,10 @@ export class TasksService {
     return this.findAll(tenantId, { ...query, buyerId });
   }
 
+  async findByVehicle(tenantId: string, vehicleId: string, query: QueryTaskDto) {
+    return this.findAll(tenantId, { ...query, vehicleId });
+  }
+
   async getMyTasks(tenantId: string, tenantUserId: string, query: QueryTaskDto) {
     return this.findAll(tenantId, { ...query, assignedToId: tenantUserId });
   }

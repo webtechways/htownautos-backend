@@ -29,6 +29,13 @@ import { BuyersModule } from './buyers/buyers.module';
 import { EmailModule } from './email/email.module';
 import { TasksModule } from './tasks/tasks.module';
 import { NotesModule } from './notes/notes.module';
+import { PhoneCallsModule } from './phone-calls/phone-calls.module';
+import { SmsModule } from './sms/sms.module';
+import { EmailMessagesModule } from './email-messages/email-messages.module';
+import { RedisModule } from './redis/redis.module';
+import { PresenceModule } from './presence/presence.module';
+import { TwilioModule } from './twilio/twilio.module';
+import { CallFlowModule } from './call-flow/call-flow.module';
 
 /**
  * App Module con seguridad RouteOne/DealerTrack
@@ -62,8 +69,12 @@ import { NotesModule } from './notes/notes.module';
 
     // Módulos de infraestructura
     PrismaModule,
+    RedisModule, // Global Redis connection
     AuditModule, // Global audit logging for RouteOne/DealerTrack compliance
     EmailModule, // SES email service
+    PresenceModule, // User presence tracking
+    TwilioModule, // Twilio phone number management
+    CallFlowModule, // IVR call flow builder
 
     // Módulos de negocio
     VehicleYearModule,
@@ -88,6 +99,9 @@ import { NotesModule } from './notes/notes.module';
     BuyersModule,
     TasksModule,
     NotesModule,
+    PhoneCallsModule,
+    SmsModule,
+    EmailMessagesModule,
   ],
   controllers: [AppController],
   providers: [

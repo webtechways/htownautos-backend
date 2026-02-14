@@ -4,6 +4,7 @@ import { ValidationPipe, Logger } from '@nestjs/common';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import helmet from 'helmet';
 import { AppModule } from './app.module';
+import { RedisIoAdapter } from './websocket/redis-io.adapter';
 
 /**
  * Bootstrap application with RouteOne and DealerTrack security compliance
@@ -168,6 +169,13 @@ async function bootstrap() {
   });
 
   // ===========================================
+  // WEBSOCKET ADAPTER - Redis for scalability
+  // ===========================================
+  const redisIoAdapter = new RedisIoAdapter(app);
+  await redisIoAdapter.connectToRedis();
+  app.useWebSocketAdapter(redisIoAdapter);
+
+  // ===========================================
   // STARTUP
   // ===========================================
   const port = process.env.PORT ?? 3000;
@@ -178,6 +186,7 @@ async function bootstrap() {
   // ===========================================
   logger.log(`🚀 Application is running on: http://localhost:${port}`);
   logger.log(`📚 Swagger documentation: http://localhost:${port}/api/docs`);
+  logger.log(`🔌 WebSocket: Socket.io with Redis adapter enabled`);
   logger.log(`🔒 Security: Helmet enabled, CORS configured, Rate limiting active`);
   logger.log(`✅ Compliance: RouteOne, DealerTrack, GLBA, OFAC`);
   logger.log(`📊 Audit logging: ENABLED`);

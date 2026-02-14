@@ -32,6 +32,12 @@ import {
   ResendInvitationDto,
   RegisterWithInvitationDto,
 } from './dto/add-user-to-tenant.dto';
+import {
+  SearchPhoneNumbersDto,
+  PurchasePhoneNumberDto,
+  UpdatePhoneNumberDto,
+  SearchType,
+} from './dto/phone-number.dto';
 import { Public } from '../auth/decorators/public.decorator';
 import { TenantOptional } from '../auth/decorators/tenant-optional.decorator';
 import {
@@ -86,7 +92,8 @@ export class TenantController {
     @Body() createTenantDto: CreateTenantDto,
     @CurrentUser() user: { id: string },
   ) {
-    return this.tenantService.create(createTenantDto, user.id);
+    const { ownerUsername, ...tenantData } = createTenantDto;
+    return this.tenantService.create(tenantData as any, user.id, ownerUsername);
   }
 
   @Get()
@@ -126,6 +133,63 @@ export class TenantController {
   })
   checkSlugAvailability(@Param('slug') slug: string) {
     return this.tenantService.checkSlugAvailability(slug);
+  }
+
+  @Get('check-subdomain/:subdomain')
+  @TenantOptional()
+  @ApiOperation({
+    summary: 'Check subdomain availability',
+    description: 'Checks if a subdomain is available for use',
+  })
+  @ApiParam({
+    name: 'subdomain',
+    description: 'Subdomain to check',
+    example: 'houston',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Availability status',
+    schema: {
+      type: 'object',
+      properties: {
+        available: { type: 'boolean', example: true },
+      },
+    },
+  })
+  checkSubdomainAvailability(@Param('subdomain') subdomain: string) {
+    return this.tenantService.checkSubdomainAvailability(subdomain);
+  }
+
+  @Get(':id/check-username/:username')
+  @ApiOperation({
+    summary: 'Check username availability in tenant',
+    description: 'Checks if a username is available within a specific tenant',
+  })
+  @ApiParam({
+    name: 'id',
+    description: 'Tenant UUID',
+    example: '123e4567-e89b-12d3-a456-426614174000',
+  })
+  @ApiParam({
+    name: 'username',
+    description: 'Username to check',
+    example: 'john.doe',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Availability status',
+    schema: {
+      type: 'object',
+      properties: {
+        available: { type: 'boolean', example: true },
+      },
+    },
+  })
+  checkUsernameAvailability(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('username') username: string,
+  ) {
+    return this.tenantService.checkUsernameAvailability(id, username);
   }
 
   @Get('by-slug/:slug')
@@ -230,6 +294,205 @@ export class TenantController {
   ) {
     const roleSlugs = roles ? roles.split(',').map((r) => r.trim()) : undefined;
     return this.tenantService.getUsers(id, roleSlugs);
+  }
+
+  @Get(':id/staff')
+  @ApiOperation({
+    summary: 'Get tenant staff for assignment',
+    description: 'Retrieves active staff members for task/lead assignment. Any tenant member can access this endpoint.',
+  })
+  @ApiParam({
+    name: 'id',
+    description: 'Tenant UUID',
+    example: '123e4567-e89b-12d3-a456-426614174000',
+  })
+  @ApiQuery({
+    name: 'roles',
+    required: false,
+    description: 'Comma-separated list of role slugs to filter by (e.g., "salesperson,bdc")',
+    example: 'salesperson,bdc',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'List of active staff members',
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'Tenant not found',
+  })
+  getStaff(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Query('roles') roles?: string,
+  ) {
+    const roleSlugs = roles ? roles.split(',').map((r) => r.trim()) : undefined;
+    return this.tenantService.getUsers(id, roleSlugs);
+  }
+
+  @Get(':id/phone-numbers')
+  @UseGuards(RolesGuard)
+  @RequireRoles(...ADMIN_ROLES)
+  @ApiOperation({
+    summary: 'Get tenant phone numbers',
+    description: 'Retrieves all Twilio phone numbers for the tenant. Requires admin role.',
+  })
+  @ApiParam({
+    name: 'id',
+    description: 'Tenant UUID',
+    example: '123e4567-e89b-12d3-a456-426614174000',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'List of phone numbers',
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'Tenant not found',
+  })
+  getPhoneNumbers(@Param('id', ParseUUIDPipe) id: string) {
+    return this.tenantService.getPhoneNumbers(id);
+  }
+
+  @Get(':id/phone-numbers/available')
+  @UseGuards(RolesGuard)
+  @RequireRoles(...ADMIN_ROLES)
+  @ApiOperation({
+    summary: 'Search available phone numbers',
+    description: 'Search for available Twilio phone numbers by state, area code, or toll-free. Requires admin role.',
+  })
+  @ApiParam({
+    name: 'id',
+    description: 'Tenant UUID',
+    example: '123e4567-e89b-12d3-a456-426614174000',
+  })
+  @ApiQuery({
+    name: 'type',
+    description: 'Search type: state, areaCode, or tollFree',
+    example: 'state',
+  })
+  @ApiQuery({
+    name: 'value',
+    description: 'State code (e.g., TX) or area code (e.g., 713). Not required for toll-free.',
+    example: 'TX',
+    required: false,
+  })
+  @ApiQuery({
+    name: 'numberType',
+    description: 'Type of number: local or tollFree',
+    example: 'local',
+    required: false,
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'List of available phone numbers',
+  })
+  searchAvailablePhoneNumbers(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Query() query: SearchPhoneNumbersDto,
+  ) {
+    // If numberType is tollFree, use tollFree search type
+    const searchType = query.numberType === 'tollFree' ? SearchType.TOLL_FREE : query.type;
+    return this.tenantService.searchAvailablePhoneNumbers(searchType, query.value);
+  }
+
+  @Post(':id/phone-numbers')
+  @UseGuards(RolesGuard)
+  @RequireRoles(...ADMIN_ROLES)
+  @ApiOperation({
+    summary: 'Purchase and add a phone number',
+    description: 'Purchases a phone number from Twilio and adds it to the tenant. Requires admin role.',
+  })
+  @ApiParam({
+    name: 'id',
+    description: 'Tenant UUID',
+    example: '123e4567-e89b-12d3-a456-426614174000',
+  })
+  @ApiResponse({
+    status: 201,
+    description: 'Phone number purchased and added successfully',
+  })
+  @ApiResponse({
+    status: 400,
+    description: 'Invalid phone number or Twilio error',
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'Tenant or user not found',
+  })
+  @ApiResponse({
+    status: 409,
+    description: 'User already has a phone number assigned',
+  })
+  purchasePhoneNumber(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: PurchasePhoneNumberDto,
+  ) {
+    return this.tenantService.purchasePhoneNumber(id, dto);
+  }
+
+  @Patch(':id/phone-numbers/:phoneNumberId')
+  @UseGuards(RolesGuard)
+  @RequireRoles(...ADMIN_ROLES)
+  @ApiOperation({
+    summary: 'Update a phone number',
+    description: 'Updates phone number settings including assignment. Requires admin role.',
+  })
+  @ApiParam({
+    name: 'id',
+    description: 'Tenant UUID',
+    example: '123e4567-e89b-12d3-a456-426614174000',
+  })
+  @ApiParam({
+    name: 'phoneNumberId',
+    description: 'Phone number UUID',
+    example: '123e4567-e89b-12d3-a456-426614174001',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Phone number updated successfully',
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'Phone number not found',
+  })
+  updatePhoneNumber(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('phoneNumberId', ParseUUIDPipe) phoneNumberId: string,
+    @Body() dto: UpdatePhoneNumberDto,
+  ) {
+    return this.tenantService.updatePhoneNumber(id, phoneNumberId, dto);
+  }
+
+  @Delete(':id/phone-numbers/:phoneNumberId')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(RolesGuard)
+  @RequireRoles(...ADMIN_ROLES)
+  @ApiOperation({
+    summary: 'Delete a phone number',
+    description: 'Releases a phone number back to Twilio and removes it from the tenant. Requires admin role.',
+  })
+  @ApiParam({
+    name: 'id',
+    description: 'Tenant UUID',
+    example: '123e4567-e89b-12d3-a456-426614174000',
+  })
+  @ApiParam({
+    name: 'phoneNumberId',
+    description: 'Phone number UUID',
+    example: '123e4567-e89b-12d3-a456-426614174001',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Phone number released successfully',
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'Phone number not found',
+  })
+  deletePhoneNumber(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('phoneNumberId', ParseUUIDPipe) phoneNumberId: string,
+  ) {
+    return this.tenantService.deletePhoneNumber(id, phoneNumberId);
   }
 
   @Get(':id/roles')

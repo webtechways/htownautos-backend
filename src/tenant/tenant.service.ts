@@ -7,7 +7,7 @@ import {
   GoneException,
   Logger,
 } from '@nestjs/common';
-import { randomBytes } from 'crypto';
+import { randomBytes, randomUUID } from 'crypto';
 import { PrismaService } from '../prisma.service';
 import { CreateTenantDto } from './dto/create-tenant.dto';
 import { UpdateTenantDto } from './dto/update-tenant.dto';
@@ -21,6 +21,8 @@ import {
 import { Prisma } from '@prisma/client';
 import { CognitoService } from '../auth/cognito.service';
 import { EmailService } from '../email/email.service';
+import { TwilioService } from '../twilio/twilio.service';
+import { SearchType, PurchasePhoneNumberDto, UpdatePhoneNumberDto } from './dto/phone-number.dto';
 
 // Invitation status constants
 export const INVITATION_STATUS = {
@@ -38,9 +40,10 @@ export class TenantService {
     private prisma: PrismaService,
     private cognitoService: CognitoService,
     private emailService: EmailService,
+    private twilioService: TwilioService,
   ) {}
 
-  async create(createTenantDto: CreateTenantDto, creatorUserId: string) {
+  async create(createTenantDto: CreateTenantDto, creatorUserId: string, ownerUsername: string) {
     // Check if slug already exists
     const existingSlug = await this.prisma.tenant.findUnique({
       where: { slug: createTenantDto.slug },
@@ -49,6 +52,17 @@ export class TenantService {
     if (existingSlug) {
       throw new ConflictException(
         `Tenant with slug '${createTenantDto.slug}' already exists`,
+      );
+    }
+
+    // Check if subdomain already exists
+    const existingSubdomain = await this.prisma.tenant.findUnique({
+      where: { subdomain: createTenantDto.subdomain },
+    });
+
+    if (existingSubdomain) {
+      throw new ConflictException(
+        `Subdomain '${createTenantDto.subdomain}' is already taken`,
       );
     }
 
@@ -91,12 +105,17 @@ export class TenantService {
         data: createTenantDto,
       });
 
+      // Generate tenant email for the owner
+      const tenantEmail = `${ownerUsername}@${newTenant.subdomain}.htownautos.com`;
+
       // Create the TenantUser relationship with owner role
       await tx.tenantUser.create({
         data: {
           tenantId: newTenant.id,
           userId: creatorUserId,
           roleId: ownerRole.id,
+          username: ownerUsername,
+          tenantEmail,
           status: 'active',
           isActive: true,
           acceptedAt: new Date(),
@@ -256,10 +275,46 @@ export class TenantService {
       }
     }
 
-    return this.prisma.tenant.update({
+    // Check if subdomain is being changed
+    if (updateTenantDto.subdomain) {
+      const existingSubdomain = await this.prisma.tenant.findFirst({
+        where: {
+          subdomain: updateTenantDto.subdomain,
+          id: { not: id },
+        },
+      });
+
+      if (existingSubdomain) {
+        throw new ConflictException(
+          `Subdomain '${updateTenantDto.subdomain}' is already taken`,
+        );
+      }
+    }
+
+    // Update tenant
+    const updatedTenant = await this.prisma.tenant.update({
       where: { id },
       data: updateTenantDto,
     });
+
+    // If subdomain changed, update all tenantEmails for users in this tenant
+    if (updateTenantDto.subdomain) {
+      const tenantUsers = await this.prisma.tenantUser.findMany({
+        where: { tenantId: id },
+        select: { id: true, username: true },
+      });
+
+      for (const tu of tenantUsers) {
+        await this.prisma.tenantUser.update({
+          where: { id: tu.id },
+          data: {
+            tenantEmail: `${tu.username}@${updateTenantDto.subdomain}.htownautos.com`,
+          },
+        });
+      }
+    }
+
+    return updatedTenant;
   }
 
   async updateSettings(id: string, settings: Record<string, any>) {
@@ -384,9 +439,55 @@ export class TenantService {
     });
   }
 
+  async getPhoneNumbers(id: string) {
+    await this.findOne(id);
+
+    return this.prisma.twilioPhoneNumber.findMany({
+      where: { tenantId: id },
+      include: {
+        assignedTo: {
+          select: {
+            id: true,
+            user: {
+              select: {
+                id: true,
+                name: true,
+                firstName: true,
+                lastName: true,
+                email: true,
+              },
+            },
+          },
+        },
+      },
+      orderBy: [
+        { isPrimary: 'desc' },
+        { createdAt: 'asc' },
+      ],
+    });
+  }
+
   async checkSlugAvailability(slug: string): Promise<{ available: boolean }> {
     const existing = await this.prisma.tenant.findUnique({
       where: { slug },
+    });
+
+    return { available: !existing };
+  }
+
+  async checkSubdomainAvailability(subdomain: string): Promise<{ available: boolean }> {
+    const existing = await this.prisma.tenant.findUnique({
+      where: { subdomain },
+    });
+
+    return { available: !existing };
+  }
+
+  async checkUsernameAvailability(tenantId: string, username: string): Promise<{ available: boolean }> {
+    const existing = await this.prisma.tenantUser.findUnique({
+      where: {
+        tenantId_username: { tenantId, username },
+      },
     });
 
     return { available: !existing };
@@ -408,6 +509,7 @@ export class TenantService {
             id: true,
             name: true,
             slug: true,
+            subdomain: true,
             businessName: true,
             logo: true,
             address: true,
@@ -435,6 +537,7 @@ export class TenantService {
       id: tu.tenant.id,
       name: tu.tenant.name,
       slug: tu.tenant.slug,
+      subdomain: tu.tenant.subdomain,
       businessName: tu.tenant.businessName,
       logo: tu.tenant.logo,
       address: tu.tenant.address,
@@ -557,12 +660,40 @@ export class TenantService {
       );
     }
 
+    // Check if username is already taken in this tenant
+    const existingUsername = await this.prisma.tenantUser.findUnique({
+      where: {
+        tenantId_username: { tenantId, username: addUserDto.username },
+      },
+    });
+
+    if (existingUsername) {
+      throw new ConflictException(
+        `Username '${addUserDto.username}' is already taken in this tenant`,
+      );
+    }
+
+    // Get tenant for subdomain
+    const tenantForSubdomain = await this.prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: { subdomain: true },
+    });
+
+    if (!tenantForSubdomain?.subdomain) {
+      throw new BadRequestException('Tenant subdomain is not configured');
+    }
+
+    // Generate tenant email
+    const tenantEmail = `${addUserDto.username}@${tenantForSubdomain.subdomain}.htownautos.com`;
+
     // Add user to tenant
     return this.prisma.tenantUser.create({
       data: {
         tenantId,
         userId: addUserDto.userId,
         roleId: addUserDto.roleId,
+        username: addUserDto.username,
+        tenantEmail,
         permissions: addUserDto.permissions || undefined,
         isActive: addUserDto.isActive ?? true,
       },
@@ -618,11 +749,35 @@ export class TenantService {
       );
     }
 
-    // Prevent modifying the owner
+    // For owner, only allow updating extension field
     if (tenantUser.role.slug === 'owner') {
-      throw new BadRequestException(
-        'Cannot modify the tenant owner',
+      const allowedFieldsForOwner = ['extension'];
+      const requestedFields = Object.keys(updateDto).filter(
+        (key) => updateDto[key] !== undefined,
       );
+      const disallowedFields = requestedFields.filter(
+        (field) => !allowedFieldsForOwner.includes(field),
+      );
+
+      if (disallowedFields.length > 0) {
+        throw new BadRequestException(
+          `Cannot modify the tenant owner (only extension can be updated)`,
+        );
+      }
+
+      // Only update extension for owner
+      return this.prisma.tenantUser.update({
+        where: {
+          tenantId_userId: { tenantId, userId },
+        },
+        data: {
+          extension: updateDto.extension,
+        },
+        include: {
+          user: true,
+          role: true,
+        },
+      });
     }
 
     // If updating role, verify it exists and is valid
@@ -651,11 +806,42 @@ export class TenantService {
       }
     }
 
+    // If updating username, check uniqueness and regenerate tenantEmail
+    let updateData: any = { ...updateDto };
+    if (updateDto.username) {
+      // Check if username is already taken by another user
+      const existingUsername = await this.prisma.tenantUser.findFirst({
+        where: {
+          tenantId,
+          username: updateDto.username,
+          userId: { not: userId },
+        },
+      });
+
+      if (existingUsername) {
+        throw new ConflictException(
+          `Username '${updateDto.username}' is already taken in this tenant`,
+        );
+      }
+
+      // Get tenant for subdomain to regenerate tenantEmail
+      const tenantForSubdomain = await this.prisma.tenant.findUnique({
+        where: { id: tenantId },
+        select: { subdomain: true },
+      });
+
+      if (!tenantForSubdomain?.subdomain) {
+        throw new BadRequestException('Tenant subdomain is not configured');
+      }
+
+      updateData.tenantEmail = `${updateDto.username}@${tenantForSubdomain.subdomain}.htownautos.com`;
+    }
+
     return this.prisma.tenantUser.update({
       where: {
         tenantId_userId: { tenantId, userId },
       },
-      data: updateDto,
+      data: updateData,
       include: {
         user: {
           select: {
@@ -914,6 +1100,22 @@ export class TenantService {
       );
     }
 
+    // Check if username is already taken in this tenant
+    const existingUsername = await this.prisma.tenantUser.findUnique({
+      where: {
+        tenantId_username: { tenantId, username: inviteDto.username },
+      },
+    });
+
+    if (existingUsername) {
+      throw new ConflictException(
+        `Username '${inviteDto.username}' is already taken in this tenant`,
+      );
+    }
+
+    // Generate tenant email
+    const tenantEmail = `${inviteDto.username}@${tenant.subdomain}.htownautos.com`;
+
     // Check if user already exists
     let user = await this.prisma.user.findUnique({
       where: { email: inviteDto.email.toLowerCase() },
@@ -940,6 +1142,8 @@ export class TenantService {
             where: { id: existingTenantUser.id },
             data: {
               roleId: inviteDto.roleId,
+              username: inviteDto.username,
+              tenantEmail,
               permissions: inviteDto.permissions || undefined,
               status: INVITATION_STATUS.PENDING,
               isActive: false,
@@ -967,10 +1171,20 @@ export class TenantService {
           console.log(`Invitation URL: ${invitationUrl}`);
           console.log('========================================\n');
 
+          // Get owner's tenant email for the sender
+          const ownerTenantUser = await this.prisma.tenantUser.findFirst({
+            where: {
+              tenantId,
+              role: { slug: 'owner' },
+            },
+            select: { tenantEmail: true },
+          });
+
           // Send re-invitation email
           await this.emailService.sendInvitationEmail({
             to: user.email,
             tenantName: tenant.name,
+            ownerEmail: ownerTenantUser?.tenantEmail || `notify@${tenant.subdomain}.htownautos.com`,
             roleName: role.name,
             invitationUrl,
             expiresAt,
@@ -1052,6 +1266,8 @@ export class TenantService {
           tenantId,
           userId: user.id,
           roleId: inviteDto.roleId,
+          username: inviteDto.username,
+          tenantEmail,
           permissions: inviteDto.permissions || undefined,
           status: INVITATION_STATUS.PENDING,
           isActive: false, // Will be set to true when accepted
@@ -1116,10 +1332,20 @@ export class TenantService {
     console.log(`Invitation URL: ${invitationUrl}`);
     console.log('========================================\n');
 
+    // Get owner's tenant email for the sender
+    const ownerTenantUser = await this.prisma.tenantUser.findFirst({
+      where: {
+        tenantId,
+        role: { slug: 'owner' },
+      },
+      select: { tenantEmail: true },
+    });
+
     // Send invitation email
     await this.emailService.sendInvitationEmail({
       to: inviteDto.email,
       tenantName: tenant.name,
+      ownerEmail: ownerTenantUser?.tenantEmail || `notify@${tenant.subdomain}.htownautos.com`,
       roleName: role.name,
       invitationUrl,
       expiresAt,
@@ -1529,10 +1755,20 @@ export class TenantService {
     console.log(`Invitation URL: ${invitationUrl}`);
     console.log('========================================\n');
 
+    // Get owner's tenant email for the sender
+    const ownerTenantUser = await this.prisma.tenantUser.findFirst({
+      where: {
+        tenantId,
+        role: { slug: 'owner' },
+      },
+      select: { tenantEmail: true },
+    });
+
     // Send resend invitation email
     await this.emailService.sendInvitationEmail({
       to: updatedTenantUser.user.email,
       tenantName: tenant.name,
+      ownerEmail: ownerTenantUser?.tenantEmail || `notify@${tenant.subdomain}.htownautos.com`,
       roleName: tenantUser.role.name,
       invitationUrl,
       expiresAt,
@@ -1635,5 +1871,120 @@ export class TenantService {
         invitationSentAt: 'desc',
       },
     });
+  }
+
+  // ========================================
+  // PHONE NUMBER MANAGEMENT
+  // ========================================
+
+  async searchAvailablePhoneNumbers(type: SearchType, value?: string) {
+    if (type === SearchType.TOLL_FREE) {
+      return this.twilioService.searchTollFree();
+    } else if (type === SearchType.STATE && value) {
+      return this.twilioService.searchByState(value);
+    } else if (type === SearchType.AREA_CODE && value) {
+      return this.twilioService.searchByAreaCode(value);
+    } else {
+      throw new BadRequestException('Invalid search type or missing value');
+    }
+  }
+
+  async purchasePhoneNumber(tenantId: string, dto: PurchasePhoneNumberDto) {
+    const tenant = await this.findOne(tenantId);
+
+    // Use custom friendly name or tenant subdomain as default
+    const tenantDomain = tenant.subdomain || tenant.slug;
+    const friendlyName = dto.friendlyName || `${tenantDomain}.htownautos.com`;
+
+    // Generate phone ID first so we can set up webhooks
+    const phoneId = randomUUID();
+
+    // Purchase from Twilio with the generated friendly name and webhook URLs
+    // Also associate with messaging service if tenant has one configured
+    const purchased = await this.twilioService.purchaseNumber(
+      dto.phoneNumber,
+      friendlyName,
+      tenantId,
+      phoneId,
+      tenant.twilioMessagingServiceSid || undefined,
+    );
+
+    // If setting as primary, unset other primary numbers
+    if (dto.isPrimary) {
+      await this.prisma.twilioPhoneNumber.updateMany({
+        where: { tenantId, isPrimary: true },
+        data: { isPrimary: false },
+      });
+    }
+
+    // Save to database with the pre-generated ID
+    return this.prisma.twilioPhoneNumber.create({
+      data: {
+        id: phoneId,
+        tenantId,
+        phoneNumber: purchased.phoneNumber,
+        twilioSid: purchased.sid,
+        friendlyName,
+        canVoice: purchased.capabilities.voice,
+        canSms: purchased.capabilities.sms,
+        canMms: purchased.capabilities.mms,
+        isPrimary: dto.isPrimary || false,
+        isActive: true,
+      },
+    });
+  }
+
+  async updatePhoneNumber(tenantId: string, phoneNumberId: string, dto: UpdatePhoneNumberDto) {
+    const phoneNumber = await this.prisma.twilioPhoneNumber.findFirst({
+      where: { id: phoneNumberId, tenantId },
+    });
+
+    if (!phoneNumber) {
+      throw new NotFoundException('Phone number not found');
+    }
+
+    // Update Twilio friendly name if changed
+    if (dto.friendlyName && dto.friendlyName !== phoneNumber.friendlyName) {
+      await this.twilioService.updateNumber(phoneNumber.twilioSid, {
+        friendlyName: dto.friendlyName,
+      });
+    }
+
+    // If setting as primary, unset other primary numbers
+    if (dto.isPrimary) {
+      await this.prisma.twilioPhoneNumber.updateMany({
+        where: { tenantId, isPrimary: true, id: { not: phoneNumberId } },
+        data: { isPrimary: false },
+      });
+    }
+
+    return this.prisma.twilioPhoneNumber.update({
+      where: { id: phoneNumberId },
+      data: {
+        friendlyName: dto.friendlyName,
+        isPrimary: dto.isPrimary,
+        isActive: dto.isActive,
+      },
+    });
+  }
+
+  async deletePhoneNumber(tenantId: string, phoneNumberId: string) {
+    const phoneNumber = await this.prisma.twilioPhoneNumber.findFirst({
+      where: { id: phoneNumberId, tenantId },
+    });
+
+    if (!phoneNumber) {
+      throw new NotFoundException('Phone number not found');
+    }
+
+    // Release from Twilio
+    await this.twilioService.releaseNumber(phoneNumber.twilioSid);
+
+    // Delete from database
+    await this.prisma.twilioPhoneNumber.delete({
+      where: { id: phoneNumberId },
+    });
+
+    return { message: 'Phone number released successfully' };
   }
 }

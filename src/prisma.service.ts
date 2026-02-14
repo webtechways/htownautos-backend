@@ -170,6 +170,26 @@ export class PrismaService implements OnModuleInit, OnModuleDestroy {
     return this.prisma.note;
   }
 
+  get phoneCall() {
+    return this.prisma.phoneCall;
+  }
+
+  get smsMessage() {
+    return this.prisma.smsMessage;
+  }
+
+  get emailMessage() {
+    return this.prisma.emailMessage;
+  }
+
+  get twilioPhoneNumber() {
+    return this.prisma.twilioPhoneNumber;
+  }
+
+  get callFlow() {
+    return this.prisma.callFlow;
+  }
+
   get $transaction() {
     return this.prisma.$transaction.bind(this.prisma);
   }

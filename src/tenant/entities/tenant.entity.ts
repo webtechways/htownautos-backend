@@ -21,6 +21,12 @@ export class TenantEntity implements Tenant {
   slug: string;
 
   @ApiPropertyOptional({
+    description: 'Subdomain for tenant emails (subdomain.htownautos.com)',
+    example: 'houston',
+  })
+  subdomain: string | null;
+
+  @ApiPropertyOptional({
     description: 'Legal business name',
     example: 'HTown Autos LLC',
   })
@@ -85,6 +91,12 @@ export class TenantEntity implements Tenant {
     example: { theme: 'dark', timezone: 'America/Chicago' },
   })
   settings: any;
+
+  @ApiPropertyOptional({
+    description: 'Twilio Messaging Service ID for SMS',
+    example: 'MGxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx',
+  })
+  twilioMessagingServiceSid: string | null;
 
   @ApiPropertyOptional({
     description: 'URL to tenant logo',

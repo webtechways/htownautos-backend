@@ -96,6 +96,21 @@ export class TasksController {
     return this.tasksService.findByBuyer(tenantId, buyerId, query);
   }
 
+  @Get('by-vehicle/:vehicleId')
+  @ApiOperation({
+    summary: 'Get tasks by vehicle',
+    description: 'Retrieves all tasks related to a specific vehicle',
+  })
+  @ApiParam({ name: 'vehicleId', description: 'Vehicle UUID' })
+  @ApiResponse({ status: 200, description: 'List of tasks for the vehicle' })
+  findByVehicle(
+    @CurrentTenant() tenantId: string,
+    @Param('vehicleId', ParseUUIDPipe) vehicleId: string,
+    @Query() query: QueryTaskDto,
+  ) {
+    return this.tasksService.findByVehicle(tenantId, vehicleId, query);
+  }
+
   @Get(':id')
   @ApiOperation({
     summary: 'Get task by ID',

@@ -33,6 +33,30 @@ export class CreateTenantDto {
   })
   slug: string;
 
+  @ApiProperty({
+    description: 'Subdomain for tenant emails (subdomain.htownautos.com)',
+    example: 'houston',
+  })
+  @IsString()
+  @MinLength(2)
+  @MaxLength(30)
+  @Matches(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, {
+    message: 'Subdomain must be lowercase alphanumeric with hyphens only',
+  })
+  subdomain: string;
+
+  @ApiProperty({
+    description: 'Username for the owner (owner@subdomain.htownautos.com)',
+    example: 'admin',
+  })
+  @IsString()
+  @MinLength(2)
+  @MaxLength(30)
+  @Matches(/^[a-z0-9]+(?:[._-][a-z0-9]+)*$/, {
+    message: 'Username must be lowercase alphanumeric with dots, underscores, or hyphens only',
+  })
+  ownerUsername: string;
+
   @ApiPropertyOptional({
     description: 'Legal business name',
     example: 'HTown Autos LLC',
@@ -129,6 +153,15 @@ export class CreateTenantDto {
   @IsOptional()
   @IsObject()
   settings?: Record<string, any>;
+
+  @ApiPropertyOptional({
+    description: 'Twilio Messaging Service ID for SMS',
+    example: 'MGxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(50)
+  twilioMessagingServiceSid?: string;
 
   @ApiPropertyOptional({
     description: 'URL to tenant logo',

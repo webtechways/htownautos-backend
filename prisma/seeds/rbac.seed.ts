@@ -60,6 +60,13 @@ const ROLES = [
         isSystem: false,
         permissions: ['vehicle:read', 'deal:create', 'deal:read', 'deal:update'],
     },
+    {
+        name: 'BDC',
+        slug: 'bdc',
+        description: 'Business Development Center - Inventory view only',
+        isSystem: false,
+        permissions: ['vehicle:read'],
+    },
 ];
 
 export async function seedRBAC(prisma: PrismaClient) {

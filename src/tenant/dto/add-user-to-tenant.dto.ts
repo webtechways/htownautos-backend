@@ -6,6 +6,9 @@ import {
   IsBoolean,
   IsObject,
   IsEmail,
+  MinLength,
+  MaxLength,
+  Matches,
 } from 'class-validator';
 
 export class AddUserToTenantDto {
@@ -15,6 +18,18 @@ export class AddUserToTenantDto {
   })
   @IsUUID()
   userId: string;
+
+  @ApiProperty({
+    description: 'Username for tenant email (username@subdomain.htownautos.com)',
+    example: 'john.doe',
+  })
+  @IsString()
+  @MinLength(2)
+  @MaxLength(30)
+  @Matches(/^[a-z0-9]+(?:[._-][a-z0-9]+)*$/, {
+    message: 'Username must be lowercase alphanumeric with dots, underscores, or hyphens only',
+  })
+  username: string;
 
   @ApiProperty({
     description: 'Role ID to assign to the user in this tenant',
@@ -49,6 +64,18 @@ export class InviteUserToTenantDto {
   email: string;
 
   @ApiProperty({
+    description: 'Username for tenant email (username@subdomain.htownautos.com)',
+    example: 'john.doe',
+  })
+  @IsString()
+  @MinLength(2)
+  @MaxLength(30)
+  @Matches(/^[a-z0-9]+(?:[._-][a-z0-9]+)*$/, {
+    message: 'Username must be lowercase alphanumeric with dots, underscores, or hyphens only',
+  })
+  username: string;
+
+  @ApiProperty({
     description: 'Role ID to assign to the user in this tenant',
     example: '123e4567-e89b-12d3-a456-426614174002',
   })
@@ -65,6 +92,30 @@ export class InviteUserToTenantDto {
 }
 
 export class UpdateTenantUserDto {
+  @ApiPropertyOptional({
+    description: 'Username for tenant email (username@subdomain.htownautos.com)',
+    example: 'john.doe',
+  })
+  @IsOptional()
+  @IsString()
+  @MinLength(2)
+  @MaxLength(30)
+  @Matches(/^[a-z0-9]+(?:[._-][a-z0-9]+)*$/, {
+    message: 'Username must be lowercase alphanumeric with dots, underscores, or hyphens only',
+  })
+  username?: string;
+
+  @ApiPropertyOptional({
+    description: 'Phone extension number (100-999)',
+    example: '101',
+  })
+  @IsOptional()
+  @IsString()
+  @Matches(/^[1-9]\d{2}$/, {
+    message: 'Extension must be between 100 and 999',
+  })
+  extension?: string | null;
+
   @ApiPropertyOptional({
     description: 'New role ID for the user',
     example: '123e4567-e89b-12d3-a456-426614174002',
