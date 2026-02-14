@@ -46,14 +46,20 @@ export enum MessageType {
   RECORDING = 'recording',
 }
 
+// OpenAI TTS voices (gpt-4o-mini-tts model)
 export enum TtsVoice {
-  ALICE = 'alice',
-  MAN = 'man',
-  WOMAN = 'woman',
-  POLLY_JOANNA = 'Polly.Joanna',
-  POLLY_MATTHEW = 'Polly.Matthew',
-  POLLY_AMY = 'Polly.Amy',
-  POLLY_BRIAN = 'Polly.Brian',
+  ALLOY = 'alloy',
+  ASH = 'ash',
+  BALLAD = 'ballad',
+  CEDAR = 'cedar',
+  CORAL = 'coral',
+  ECHO = 'echo',
+  FABLE = 'fable',
+  MARIN = 'marin',
+  NOVA = 'nova',
+  ONYX = 'onyx',
+  SAGE = 'sage',
+  SHIMMER = 'shimmer',
 }
 
 export enum TtsLanguage {
@@ -79,7 +85,7 @@ export class MessageConfig {
   @IsString()
   recordingUrl?: string;
 
-  @ApiPropertyOptional({ enum: TtsVoice, default: TtsVoice.ALICE })
+  @ApiPropertyOptional({ enum: TtsVoice, default: TtsVoice.ECHO })
   @IsOptional()
   @IsEnum(TtsVoice)
   voice?: TtsVoice;
@@ -88,6 +94,11 @@ export class MessageConfig {
   @IsOptional()
   @IsEnum(TtsLanguage)
   language?: TtsLanguage;
+
+  @ApiPropertyOptional({ description: 'Cached TTS audio URL (generated from text+voice)' })
+  @IsOptional()
+  @IsString()
+  generatedAudioUrl?: string;
 }
 
 // ============================================

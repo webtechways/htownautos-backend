@@ -2225,6 +2225,24 @@ model TwilioPhoneNumber {
   @@map("twilio_phone_numbers")
 }
 
+// TTS Audio Cache - caches generated TTS audio to avoid regenerating
+model TtsCache {
+  id          String   @id @default(uuid())
+  textHash    String   // SHA-256 hash of the text
+  voice       String   // OpenAI voice name (alloy, echo, etc.)
+  text        String   // Original text (for debugging)
+  audioUrl    String   // S3 URL of the generated audio
+  s3Key       String   // S3 key for potential cleanup
+  durationMs  Int?     // Audio duration in milliseconds
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([textHash, voice])
+  @@index([textHash])
+  @@index([voice])
+  @@map("tts_cache")
+}
+
 // Call Flows - IVR/call routing configuration
 // Steps are stored as JSON array, processed sequentially
 // Menu and Schedule steps can have nested sub-flows (branches)

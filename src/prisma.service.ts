@@ -190,6 +190,10 @@ export class PrismaService implements OnModuleInit, OnModuleDestroy {
     return this.prisma.callFlow;
   }
 
+  get ttsCache() {
+    return this.prisma.ttsCache;
+  }
+
   get $transaction() {
     return this.prisma.$transaction.bind(this.prisma);
   }

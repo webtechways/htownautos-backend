@@ -147,6 +147,42 @@ export class S3Service {
     }
   }
 
+  /** Upload a buffer directly to S3 (for generated content like TTS audio) */
+  async uploadBuffer(
+    buffer: Buffer,
+    folder: string,
+    fileExtension: string,
+    contentType: string,
+  ): Promise<UploadResult> {
+    try {
+      const key = this.generateKey(folder, fileExtension);
+
+      const command = new PutObjectCommand({
+        Bucket: this.bucket,
+        Key: key,
+        Body: buffer,
+        ContentType: contentType,
+      });
+
+      await this.s3Client.send(command);
+
+      const url = this.buildPublicUrl(key);
+
+      this.logger.log(`Buffer uploaded successfully: ${key}`);
+
+      return {
+        url,
+        key,
+        bucket: this.bucket,
+        size: buffer.length,
+        mimeType: contentType,
+      };
+    } catch (error) {
+      this.logger.error('Error uploading buffer to S3', error);
+      throw error;
+    }
+  }
+
   async deleteFile(key: string): Promise<void> {
     try {
       const command = new DeleteObjectCommand({

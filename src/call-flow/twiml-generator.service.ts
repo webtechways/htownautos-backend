@@ -5,7 +5,6 @@ import {
   CallFlowStepType,
   MessageConfig,
   MessageType,
-  TtsVoice,
   GreetingStepConfig,
   DialStepConfig,
   SimulcallStepConfig,
@@ -73,18 +72,26 @@ export class TwimlGeneratorService {
 
   /**
    * Generate <Say> or <Play> based on message config
+   * If generatedAudioUrl is available (from OpenAI TTS), use <Play>
+   * Otherwise, fall back to Twilio's native TTS
    */
   private addMessage(response: twilio.twiml.VoiceResponse, message: MessageConfig): void {
     if (message.type === MessageType.RECORDING && message.recordingUrl) {
       response.play(message.recordingUrl);
-    } else if (message.type === MessageType.TTS && message.text) {
-      response.say(
-        {
-          voice: message.voice || TtsVoice.ALICE,
-          language: message.language || 'en-US',
-        },
-        message.text,
-      );
+    } else if (message.type === MessageType.TTS) {
+      // Prefer pre-generated audio URL (from OpenAI TTS)
+      if (message.generatedAudioUrl) {
+        response.play(message.generatedAudioUrl);
+      } else if (message.text) {
+        // Fall back to Twilio's native TTS with default voice
+        response.say(
+          {
+            voice: 'alice' as any,
+            language: message.language || 'en-US',
+          },
+          message.text,
+        );
+      }
     }
   }
 
@@ -204,7 +211,7 @@ export class TwimlGeneratorService {
     } else if (config.message.type === MessageType.TTS && config.message.text) {
       gather.say(
         {
-          voice: config.message.voice || TtsVoice.ALICE,
+          voice: 'alice' as any,
           language: config.message.language || 'en-US',
         },
         config.message.text,
@@ -339,7 +346,7 @@ export class TwimlGeneratorService {
     } else if (config.message.type === MessageType.TTS && config.message.text) {
       gather.say(
         {
-          voice: config.message.voice || TtsVoice.ALICE,
+          voice: 'alice' as any,
           language: config.message.language || 'en-US',
         },
         config.message.text,
@@ -366,7 +373,7 @@ export class TwimlGeneratorService {
       this.addMessage(response, config.greeting);
     } else {
       response.say(
-        { voice: TtsVoice.ALICE },
+        { voice: 'alice' as any },
         'Please leave a message after the beep.',
       );
     }
@@ -410,7 +417,7 @@ export class TwimlGeneratorService {
 
     if (stepIndex >= steps.length) {
       // No more steps, hangup
-      response.say({ voice: TtsVoice.ALICE }, 'Goodbye.');
+      response.say({ voice: 'alice' as any }, 'Goodbye.');
       response.hangup();
       return response.toString();
     }
@@ -629,7 +636,7 @@ export class TwimlGeneratorService {
   generateDefaultTwiml(tenantId: string): string {
     const response = new VoiceResponse();
     response.say(
-      { voice: TtsVoice.ALICE },
+      { voice: 'alice' as any },
       'Thank you for calling. We are currently unavailable. Please try again later.',
     );
     response.hangup();

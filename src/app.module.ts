@@ -36,6 +36,7 @@ import { RedisModule } from './redis/redis.module';
 import { PresenceModule } from './presence/presence.module';
 import { TwilioModule } from './twilio/twilio.module';
 import { CallFlowModule } from './call-flow/call-flow.module';
+import { TtsModule } from './tts/tts.module';
 
 /**
  * App Module con seguridad RouteOne/DealerTrack
@@ -75,6 +76,7 @@ import { CallFlowModule } from './call-flow/call-flow.module';
     PresenceModule, // User presence tracking
     TwilioModule, // Twilio phone number management
     CallFlowModule, // IVR call flow builder
+    TtsModule, // OpenAI TTS audio generation
 
     // Módulos de negocio
     VehicleYearModule,
