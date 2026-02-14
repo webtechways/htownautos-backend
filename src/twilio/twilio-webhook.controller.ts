@@ -221,13 +221,24 @@ export class TwilioWebhookController {
               context,
             );
           } else {
-            // No digit received, retry menu
-            twiml = await this.twimlGenerator.executeStep(
-              callFlow.steps,
-              currentStep,
-              context,
-              { retry: (parseInt(queryParams.retry || '0', 10) + 1).toString() },
-            );
+            // No digit received (timeout) - go to invalid input steps or hangup
+            const step = callFlow.steps[currentStep];
+            if (step?.type === CallFlowStepType.MENU) {
+              const config = step.config as MenuStepConfig;
+              if (config.invalidInputSteps?.length) {
+                // Execute nested invalid input steps (inlined, no redirects back to main flow)
+                twiml = await this.twimlGenerator.executeNestedSteps(
+                  config.invalidInputSteps as CallFlowStep[],
+                  0,
+                  context,
+                );
+              } else {
+                // No invalid input steps (Do nothing) = just hangup
+                twiml = this.twimlGenerator.generateHangupTwiml();
+              }
+            } else {
+              twiml = this.twimlGenerator.generateHangupTwiml();
+            }
           }
           break;
         }
@@ -245,30 +256,23 @@ export class TwilioWebhookController {
         }
 
         case 'menu_invalid': {
-          // Max retries reached, handle invalid input
+          // Handle invalid input (timeout via redirect fallback)
           const step = callFlow.steps[currentStep];
           if (step?.type === CallFlowStepType.MENU) {
             const config = step.config as MenuStepConfig;
             if (config.invalidInputSteps?.length) {
-              twiml = await this.twimlGenerator.executeStep(
+              // Execute nested invalid input steps (inlined, no redirects back to main flow)
+              twiml = await this.twimlGenerator.executeNestedSteps(
                 config.invalidInputSteps as CallFlowStep[],
                 0,
                 context,
               );
             } else {
-              // Continue to next step
-              twiml = await this.twimlGenerator.executeStep(
-                callFlow.steps,
-                currentStep + 1,
-                context,
-              );
+              // No invalid input steps (Do nothing) = just hangup
+              twiml = this.twimlGenerator.generateHangupTwiml();
             }
           } else {
-            twiml = await this.twimlGenerator.executeStep(
-              callFlow.steps,
-              currentStep + 1,
-              context,
-            );
+            twiml = this.twimlGenerator.generateHangupTwiml();
           }
           break;
         }

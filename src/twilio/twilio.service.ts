@@ -1,5 +1,6 @@
 import { Injectable, Logger, BadRequestException } from '@nestjs/common';
 import { Twilio } from 'twilio';
+import { jwt } from 'twilio';
 
 export interface AvailablePhoneNumber {
   phoneNumber: string;
@@ -316,5 +317,97 @@ export class TwilioService {
 
     const twilio = require('twilio');
     return twilio.validateRequest(authToken, signature, url, params);
+  }
+
+  /**
+   * Generate a Twilio Access Token for Voice Client (WebRTC)
+   * This allows users to receive calls in their browser
+   */
+  generateVoiceToken(identity: string, tenantId: string): { token: string; identity: string } {
+    const accountSid = process.env.TWILIO_ACCOUNT_SID;
+    const apiKeySid = process.env.TWILIO_SID;
+    const apiKeySecret = process.env.TWILIO_SECRET;
+    const twimlAppSid = process.env.TWILIO_TWIML_APP_SID;
+
+    if (!accountSid || !apiKeySid || !apiKeySecret) {
+      throw new BadRequestException(
+        'Twilio API credentials not configured. Set TWILIO_ACCOUNT_SID, TWILIO_SID, and TWILIO_SECRET.',
+      );
+    }
+
+    if (!twimlAppSid) {
+      throw new BadRequestException(
+        'TWILIO_TWIML_APP_SID not configured. Create a TwiML App in Twilio console.',
+      );
+    }
+
+    // Create a unique client identity using email/userId + tenantId
+    // This ensures the same user in different tenants has different identities
+    const clientIdentity = `${identity}_${tenantId}`.replace(/[^a-zA-Z0-9_-]/g, '_');
+    this.logger.log(`Voice token - input identity: "${identity}", tenantId: "${tenantId}", computed clientIdentity: "${clientIdentity}"`);
+
+    // Create access token
+    const AccessToken = jwt.AccessToken;
+    const VoiceGrant = AccessToken.VoiceGrant;
+
+    const token = new AccessToken(accountSid, apiKeySid, apiKeySecret, {
+      identity: clientIdentity,
+      ttl: 3600, // 1 hour
+    });
+
+    // Create a Voice grant for this token
+    const voiceGrant = new VoiceGrant({
+      outgoingApplicationSid: twimlAppSid,
+      incomingAllow: true, // Allow incoming calls
+    });
+
+    token.addGrant(voiceGrant);
+
+    this.logger.log(`Generated voice token for identity: ${clientIdentity}`);
+
+    return {
+      token: token.toJwt(),
+      identity: clientIdentity,
+    };
+  }
+
+  /**
+   * Create or get TwiML App SID
+   * This creates a TwiML App if one doesn't exist for voice client
+   */
+  async getOrCreateTwimlApp(): Promise<string> {
+    this.ensureClient();
+
+    const appName = 'HTown Autos CRM Voice Client';
+    const baseUrl = process.env.API_BASE_URL || 'https://api.htownautos.com';
+    const voiceUrl = `${baseUrl}/api/v1/twilio/voice/client`;
+
+    try {
+      // Check if app already exists
+      const existingApps = await this.client.applications.list({ friendlyName: appName });
+
+      if (existingApps.length > 0) {
+        // Update existing app with current URL
+        const app = await this.client.applications(existingApps[0].sid).update({
+          voiceUrl,
+          voiceMethod: 'POST',
+        });
+        this.logger.log(`Updated existing TwiML App: ${app.sid}`);
+        return app.sid;
+      }
+
+      // Create new app
+      const app = await this.client.applications.create({
+        friendlyName: appName,
+        voiceUrl,
+        voiceMethod: 'POST',
+      });
+
+      this.logger.log(`Created new TwiML App: ${app.sid}`);
+      return app.sid;
+    } catch (error) {
+      this.logger.error(`Error managing TwiML App: ${error.message}`);
+      throw new BadRequestException(`Failed to manage TwiML App: ${error.message}`);
+    }
   }
 }

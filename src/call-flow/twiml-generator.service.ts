@@ -106,14 +106,56 @@ export class TwimlGeneratorService {
   }
 
   /**
-   * Process a dial step - ring one number
+   * Check if destination is a user identity (email) or phone number
    */
-  private processDial(
+  private isUserIdentity(destination: string): boolean {
+    // If it contains @ it's likely an email (user identity)
+    return destination.includes('@');
+  }
+
+  /**
+   * Check if destination is a UUID (user ID)
+   */
+  private isUUID(destination: string): boolean {
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    return uuidRegex.test(destination);
+  }
+
+  /**
+   * Look up user email by user ID
+   */
+  private async getUserEmailById(userId: string): Promise<string | null> {
+    try {
+      const user = await this.prisma.user.findUnique({
+        where: { id: userId },
+        select: { email: true },
+      });
+      return user?.email || null;
+    } catch (error) {
+      this.logger.error(`Failed to lookup user ${userId}: ${error.message}`);
+      return null;
+    }
+  }
+
+  /**
+   * Build client identity for Twilio Client
+   * Must match the format used in TwilioService.generateVoiceToken
+   */
+  private buildClientIdentity(userIdentity: string, tenantId: string): string {
+    return `${userIdentity}_${tenantId}`.replace(/[^a-zA-Z0-9_-]/g, '_');
+  }
+
+  /**
+   * Process a dial step - ring one number or browser client
+   */
+  private async processDial(
     response: twilio.twiml.VoiceResponse,
     config: DialStepConfig,
     context: CallContext,
     stepIndex: number,
-  ): void {
+  ): Promise<void> {
+    this.logger.log(`processDial - destination: "${config.destination}", isUserIdentity: ${this.isUserIdentity(config.destination)}, isUUID: ${this.isUUID(config.destination)}, isExtension: ${config.isExtension}`);
+
     const dial = response.dial({
       timeout: config.timeout || 30,
       callerId: config.callerId || context.to,
@@ -122,24 +164,39 @@ export class TwimlGeneratorService {
       ...(config.record && { record: 'record-from-answer-dual' }),
     });
 
-    if (config.isExtension) {
-      // Dial by extension - look up user's phone number
-      // For now, treat extension as direct number
-      dial.number(config.destination);
+    // Check if destination is a user ID (UUID) - need to look up their email
+    if (this.isUUID(config.destination)) {
+      const userEmail = await this.getUserEmailById(config.destination);
+      if (userEmail) {
+        const clientIdentity = this.buildClientIdentity(userEmail, context.tenantId);
+        this.logger.log(`Dialing browser client by user ID - userId: "${config.destination}", email: "${userEmail}", computed identity: "${clientIdentity}"`);
+        dial.client(clientIdentity);
+      } else {
+        this.logger.warn(`User not found for ID ${config.destination}, cannot dial browser client`);
+        // Fallback: maybe they want to dial the UUID as a number? Unlikely to work but prevents crash
+        response.say({ voice: 'alice' as any }, 'The requested user is not available.');
+      }
+    } else if (this.isUserIdentity(config.destination)) {
+      // Destination is a user email - dial their browser client
+      const clientIdentity = this.buildClientIdentity(config.destination, context.tenantId);
+      this.logger.log(`Dialing browser client by email - email: "${config.destination}", computed identity: "${clientIdentity}"`);
+      dial.client(clientIdentity);
     } else {
+      // Dial phone number
+      this.logger.log(`Dialing phone number: ${config.destination}`);
       dial.number(config.destination);
     }
   }
 
   /**
-   * Process a simulcall step - ring multiple numbers simultaneously
+   * Process a simulcall step - ring multiple numbers/users simultaneously
    */
-  private processSimulcall(
+  private async processSimulcall(
     response: twilio.twiml.VoiceResponse,
     config: SimulcallStepConfig,
     context: CallContext,
     stepIndex: number,
-  ): void {
+  ): Promise<void> {
     const dial = response.dial({
       timeout: config.timeout || 30,
       callerId: config.callerId || context.to,
@@ -149,22 +206,41 @@ export class TwimlGeneratorService {
 
     // Add all destinations - they will ring simultaneously
     for (const destination of config.destinations) {
-      dial.number(destination);
+      if (this.isUUID(destination)) {
+        // It's a user ID - look up their email and dial browser client
+        const userEmail = await this.getUserEmailById(destination);
+        if (userEmail) {
+          const clientIdentity = this.buildClientIdentity(userEmail, context.tenantId);
+          this.logger.log(`Simulcall: Dialing browser client for user ${destination} -> ${clientIdentity}`);
+          dial.client(clientIdentity);
+        } else {
+          this.logger.warn(`Simulcall: User not found for ID ${destination}, skipping`);
+        }
+      } else if (this.isUserIdentity(destination)) {
+        // It's an email - dial browser client
+        const clientIdentity = this.buildClientIdentity(destination, context.tenantId);
+        this.logger.log(`Simulcall: Dialing browser client for email ${destination} -> ${clientIdentity}`);
+        dial.client(clientIdentity);
+      } else {
+        // It's a phone number
+        this.logger.log(`Simulcall: Dialing phone number ${destination}`);
+        dial.number(destination);
+      }
     }
   }
 
   /**
    * Process a round robin step - handled specially with sequential callbacks
    */
-  private processRoundRobin(
+  private async processRoundRobin(
     response: twilio.twiml.VoiceResponse,
     config: RoundRobinStepConfig,
     context: CallContext,
     stepIndex: number,
     attemptIndex = 0,
-  ): void {
+  ): Promise<void> {
     if (attemptIndex >= config.destinations.length) {
-      // All numbers tried, continue to next step
+      // All destinations tried, continue to next step
       response.redirect(
         { method: 'POST' },
         this.buildFlowUrl(context.tenantId, context.phoneNumberId, stepIndex + 1),
@@ -182,7 +258,36 @@ export class TwimlGeneratorService {
       method: 'POST',
     });
 
-    dial.number(config.destinations[attemptIndex]);
+    const destination = config.destinations[attemptIndex];
+
+    if (this.isUUID(destination)) {
+      // It's a user ID - look up their email and dial browser client
+      const userEmail = await this.getUserEmailById(destination);
+      if (userEmail) {
+        const clientIdentity = this.buildClientIdentity(userEmail, context.tenantId);
+        this.logger.log(`RoundRobin: Dialing browser client for user ${destination} -> ${clientIdentity}`);
+        dial.client(clientIdentity);
+      } else {
+        this.logger.warn(`RoundRobin: User not found for ID ${destination}, skipping to next`);
+        // Skip to next destination by redirecting
+        response.redirect(
+          { method: 'POST' },
+          this.buildFlowUrl(context.tenantId, context.phoneNumberId, stepIndex, {
+            action: 'round_robin',
+            attempt: (attemptIndex + 1).toString(),
+          }),
+        );
+      }
+    } else if (this.isUserIdentity(destination)) {
+      // It's an email - dial browser client
+      const clientIdentity = this.buildClientIdentity(destination, context.tenantId);
+      this.logger.log(`RoundRobin: Dialing browser client for email ${destination} -> ${clientIdentity}`);
+      dial.client(clientIdentity);
+    } else {
+      // It's a phone number
+      this.logger.log(`RoundRobin: Dialing phone number ${destination}`);
+      dial.number(destination);
+    }
   }
 
   /**
@@ -193,12 +298,11 @@ export class TwimlGeneratorService {
     config: MenuStepConfig,
     context: CallContext,
     stepIndex: number,
-    retryCount = 0,
   ): void {
     const gather = response.gather({
       input: ['dtmf'],
       numDigits: config.numDigits || 1,
-      timeout: config.timeout || 5,
+      timeout: config.timeout || 20,
       action: this.buildFlowUrl(context.tenantId, context.phoneNumberId, stepIndex, {
         action: 'menu',
       }),
@@ -208,35 +312,29 @@ export class TwimlGeneratorService {
     // Add the prompt message inside gather
     if (config.message.type === MessageType.RECORDING && config.message.recordingUrl) {
       gather.play(config.message.recordingUrl);
-    } else if (config.message.type === MessageType.TTS && config.message.text) {
-      gather.say(
-        {
-          voice: 'alice' as any,
-          language: config.message.language || 'en-US',
-        },
-        config.message.text,
-      );
+    } else if (config.message.type === MessageType.TTS) {
+      // Prefer pre-generated audio URL (from OpenAI TTS)
+      if (config.message.generatedAudioUrl) {
+        gather.play(config.message.generatedAudioUrl);
+      } else if (config.message.text) {
+        // Fall back to Twilio's native TTS
+        gather.say(
+          {
+            voice: 'alice' as any,
+            language: config.message.language || 'en-US',
+          },
+          config.message.text,
+        );
+      }
     }
 
-    // If no input, handle retry or invalid input steps
-    const maxRetries = config.retries ?? 2;
-    if (retryCount < maxRetries) {
-      response.redirect(
-        { method: 'POST' },
-        this.buildFlowUrl(context.tenantId, context.phoneNumberId, stepIndex, {
-          action: 'menu_retry',
-          retry: (retryCount + 1).toString(),
-        }),
-      );
-    } else {
-      // Max retries reached, go to invalid input steps or next step
-      response.redirect(
-        { method: 'POST' },
-        this.buildFlowUrl(context.tenantId, context.phoneNumberId, stepIndex, {
-          action: 'menu_invalid',
-        }),
-      );
-    }
+    // If no input after timeout, go directly to invalid input steps (no retry loop)
+    response.redirect(
+      { method: 'POST' },
+      this.buildFlowUrl(context.tenantId, context.phoneNumberId, stepIndex, {
+        action: 'menu_invalid',
+      }),
+    );
   }
 
   /**
@@ -343,14 +441,20 @@ export class TwimlGeneratorService {
     // Add prompt message
     if (config.message.type === MessageType.RECORDING && config.message.recordingUrl) {
       gather.play(config.message.recordingUrl);
-    } else if (config.message.type === MessageType.TTS && config.message.text) {
-      gather.say(
-        {
-          voice: 'alice' as any,
-          language: config.message.language || 'en-US',
-        },
-        config.message.text,
-      );
+    } else if (config.message.type === MessageType.TTS) {
+      // Prefer pre-generated audio URL (from OpenAI TTS)
+      if (config.message.generatedAudioUrl) {
+        gather.play(config.message.generatedAudioUrl);
+      } else if (config.message.text) {
+        // Fall back to Twilio's native TTS
+        gather.say(
+          {
+            voice: 'alice' as any,
+            language: config.message.language || 'en-US',
+          },
+          config.message.text,
+        );
+      }
     }
 
     // If no input, continue to next step
@@ -437,18 +541,18 @@ export class TwimlGeneratorService {
       }
 
       case CallFlowStepType.DIAL: {
-        this.processDial(response, step.config as DialStepConfig, context, stepIndex);
+        await this.processDial(response, step.config as DialStepConfig, context, stepIndex);
         break;
       }
 
       case CallFlowStepType.SIMULCALL: {
-        this.processSimulcall(response, step.config as SimulcallStepConfig, context, stepIndex);
+        await this.processSimulcall(response, step.config as SimulcallStepConfig, context, stepIndex);
         break;
       }
 
       case CallFlowStepType.ROUND_ROBIN: {
         const attempt = parseInt(webhookParams.attempt || '0', 10);
-        this.processRoundRobin(
+        await this.processRoundRobin(
           response,
           step.config as RoundRobinStepConfig,
           context,
@@ -459,8 +563,7 @@ export class TwimlGeneratorService {
       }
 
       case CallFlowStepType.MENU: {
-        const retry = parseInt(webhookParams.retry || '0', 10);
-        this.processMenu(response, step.config as MenuStepConfig, context, stepIndex, retry);
+        this.processMenu(response, step.config as MenuStepConfig, context, stepIndex);
         break;
       }
 
@@ -529,9 +632,19 @@ export class TwimlGeneratorService {
   }
 
   /**
-   * Execute nested steps (for branches in menu/schedule)
+   * Generate a simple hangup TwiML
    */
-  private async executeNestedSteps(
+  generateHangupTwiml(): string {
+    const response = new VoiceResponse();
+    response.hangup();
+    return response.toString();
+  }
+
+  /**
+   * Execute nested steps (for branches in menu/schedule)
+   * This method inlines all TwiML without creating redirect URLs
+   */
+  async executeNestedSteps(
     steps: CallFlowStep[],
     stepIndex: number,
     context: CallContext,
@@ -593,12 +706,12 @@ export class TwimlGeneratorService {
     const selectedOption = config.options.find(o => o.digit === digit);
 
     if (!selectedOption) {
-      // Invalid option, handle as invalid input
+      // Invalid option - go to invalid input steps or hangup
       if (config.invalidInputSteps?.length) {
         return this.executeNestedSteps(config.invalidInputSteps, 0, context);
       }
-      // Replay menu
-      return this.executeStep(steps, stepIndex, context, { retry: '1' });
+      // No invalid input steps defined (Do nothing) = hangup
+      return this.generateHangupTwiml();
     }
 
     // Execute the selected option's steps

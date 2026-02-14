@@ -58,6 +58,7 @@ export class TtsService {
         voice: voice,
         input: text,
         response_format: 'mp3',
+        speed: 1.25,
       });
 
       // Get the audio as a buffer

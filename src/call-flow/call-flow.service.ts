@@ -16,12 +16,26 @@ import {
   MenuStepConfig,
   ScheduleStepConfig,
 } from './dto/call-flow.dto';
+import { TtsService } from '../tts/tts.service';
+import { TtsVoice } from '../tts/dto/tts.dto';
+
+// MessageConfig interface for TTS generation
+interface MessageConfig {
+  type: 'tts' | 'recording';
+  text?: string;
+  recordingUrl?: string;
+  voice?: string;
+  generatedAudioUrl?: string;
+}
 
 @Injectable()
 export class CallFlowService {
   private readonly logger = new Logger(CallFlowService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly ttsService: TtsService,
+  ) {}
 
   /**
    * Validate that terminal steps (voicemail, hangup) are at the end
@@ -121,6 +135,86 @@ export class CallFlowService {
   }
 
   /**
+   * Generate TTS audio for a MessageConfig if needed
+   * Returns true if audio was generated, false if already exists or not TTS
+   */
+  private async generateTtsForMessage(message: MessageConfig): Promise<boolean> {
+    // Skip if not TTS type
+    if (message.type !== 'tts') return false;
+
+    // Skip if no text
+    if (!message.text?.trim()) return false;
+
+    // Skip if already has generated audio
+    if (message.generatedAudioUrl) return false;
+
+    // Generate TTS
+    const voice = (message.voice as TtsVoice) || TtsVoice.ECHO;
+    const result = await this.ttsService.generateTts(message.text, voice);
+    message.generatedAudioUrl = result.audioUrl;
+
+    this.logger.log(`Generated TTS audio for text: "${message.text.slice(0, 50)}..." -> ${result.audioUrl}`);
+    return true;
+  }
+
+  /**
+   * Recursively process all steps and generate missing TTS audio
+   */
+  private async generateMissingTtsForSteps(steps: CallFlowStep[]): Promise<number> {
+    let generatedCount = 0;
+
+    for (const step of steps) {
+      const config = step.config as Record<string, unknown>;
+
+      // Check for message property (Greeting, Menu, KeypadEntry, Hangup)
+      if (config.message && typeof config.message === 'object') {
+        if (await this.generateTtsForMessage(config.message as MessageConfig)) {
+          generatedCount++;
+        }
+      }
+
+      // Check for greeting property (Voicemail)
+      if (config.greeting && typeof config.greeting === 'object') {
+        if (await this.generateTtsForMessage(config.greeting as MessageConfig)) {
+          generatedCount++;
+        }
+      }
+
+      // Process nested steps in Menu options
+      if (step.type === CallFlowStepType.MENU) {
+        const menuConfig = config as unknown as MenuStepConfig;
+        if (menuConfig.options) {
+          for (const option of menuConfig.options) {
+            if (option.steps?.length) {
+              generatedCount += await this.generateMissingTtsForSteps(option.steps);
+            }
+          }
+        }
+        if (menuConfig.invalidInputSteps?.length) {
+          generatedCount += await this.generateMissingTtsForSteps(menuConfig.invalidInputSteps);
+        }
+      }
+
+      // Process nested steps in Schedule branches
+      if (step.type === CallFlowStepType.SCHEDULE) {
+        const scheduleConfig = config as unknown as ScheduleStepConfig;
+        if (scheduleConfig.branches) {
+          for (const branch of scheduleConfig.branches) {
+            if (branch.steps?.length) {
+              generatedCount += await this.generateMissingTtsForSteps(branch.steps);
+            }
+          }
+        }
+        if (scheduleConfig.fallbackSteps?.length) {
+          generatedCount += await this.generateMissingTtsForSteps(scheduleConfig.fallbackSteps);
+        }
+      }
+    }
+
+    return generatedCount;
+  }
+
+  /**
    * Convert Prisma result to response DTO
    */
   private toResponseDto(
@@ -158,6 +252,12 @@ export class CallFlowService {
     // Validate steps if provided
     if (dto.steps?.length) {
       this.validateSteps(dto.steps);
+
+      // Generate TTS audio for any steps that don't have it
+      const generatedCount = await this.generateMissingTtsForSteps(dto.steps);
+      if (generatedCount > 0) {
+        this.logger.log(`Generated ${generatedCount} TTS audio file(s) for new call flow`);
+      }
     }
 
     const callFlow = await this.prisma.callFlow.create({
@@ -253,6 +353,12 @@ export class CallFlowService {
     // Validate steps if provided
     if (dto.steps?.length) {
       this.validateSteps(dto.steps);
+
+      // Generate TTS audio for any steps that don't have it
+      const generatedCount = await this.generateMissingTtsForSteps(dto.steps);
+      if (generatedCount > 0) {
+        this.logger.log(`Generated ${generatedCount} TTS audio file(s) for call flow update`);
+      }
     }
 
     // Build update data
