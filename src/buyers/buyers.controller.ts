@@ -70,6 +70,30 @@ export class BuyersController {
     return this.service.create(dto, tenantId);
   }
 
+  @Get('check-duplicate')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Check if buyer with email or phone already exists' })
+  @ApiQuery({ name: 'email', required: false, type: String })
+  @ApiQuery({ name: 'phoneMain', required: false, type: String })
+  @ApiResponse({
+    status: HttpStatus.OK,
+    description: 'Returns whether email or phone already exists',
+    schema: {
+      type: 'object',
+      properties: {
+        emailExists: { type: 'boolean' },
+        phoneExists: { type: 'boolean' },
+      },
+    },
+  })
+  checkDuplicate(
+    @CurrentTenant() tenantId: string,
+    @Query('email') email?: string,
+    @Query('phoneMain') phoneMain?: string,
+  ): Promise<{ emailExists: boolean; phoneExists: boolean }> {
+    return this.service.checkDuplicate(tenantId, email, phoneMain);
+  }
+
   @Get()
   @AuditLog({
     action: 'read',

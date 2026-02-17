@@ -365,11 +365,11 @@ export class VoicemailStepConfig {
   @IsString()
   notificationEmail?: string;
 
-  @ApiPropertyOptional({ description: 'Max recording length in seconds', default: 120 })
+  @ApiPropertyOptional({ description: 'Max recording length in seconds (default 20 to prevent bot spam)', default: 20 })
   @IsOptional()
   @IsNumber()
-  @Min(10)
-  @Max(600)
+  @Min(5)
+  @Max(120)
   maxLength?: number;
 
   @ApiPropertyOptional({ description: 'Transcribe voicemail', default: true })

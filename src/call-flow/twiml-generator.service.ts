@@ -29,6 +29,15 @@ export interface CallContext {
   callFlowId: string;
   variables: Record<string, string>;
   tags: string[];
+  recordCalls: boolean;
+  segmentNumber?: number; // For tracking transfer segments
+}
+
+/**
+ * Generate a unique conference name for a call segment
+ */
+export function generateConferenceName(callSid: string, segmentNumber: number): string {
+  return `call_${callSid}_seg_${segmentNumber}`;
 }
 
 export interface StepExecutionResult {
@@ -140,13 +149,15 @@ export class TwimlGeneratorService {
   /**
    * Build client identity for Twilio Client
    * Must match the format used in TwilioService.generateVoiceToken
+   * Format: tenantId:userId
    */
-  private buildClientIdentity(userIdentity: string, tenantId: string): string {
-    return `${userIdentity}_${tenantId}`.replace(/[^a-zA-Z0-9_-]/g, '_');
+  private buildClientIdentity(userId: string, tenantId: string): string {
+    return `${tenantId}:${userId}`;
   }
 
   /**
-   * Process a dial step - ring one number or browser client
+   * Process a dial step - uses conference for better recording control
+   * Each call segment gets its own conference with separate recording
    */
   private async processDial(
     response: twilio.twiml.VoiceResponse,
@@ -156,40 +167,108 @@ export class TwimlGeneratorService {
   ): Promise<void> {
     this.logger.log(`processDial - destination: "${config.destination}", isUserIdentity: ${this.isUserIdentity(config.destination)}, isUUID: ${this.isUUID(config.destination)}, isExtension: ${config.isExtension}`);
 
-    const dial = response.dial({
+    // Determine if we should record this call (either step-level or call flow level)
+    const shouldRecord = config.record || context.recordCalls;
+    const segmentNumber = context.segmentNumber || 0;
+    const conferenceName = generateConferenceName(context.callSid, segmentNumber);
+
+    this.logger.log(`Using conference: ${conferenceName}, segment: ${segmentNumber}, recording: ${shouldRecord}`);
+
+    // Conference options for the caller (external party)
+    const conferenceOptions: any = {
+      startConferenceOnEnter: true,
+      endConferenceOnExit: true, // End conference when caller hangs up
+      beep: false,
+      waitUrl: `${this.baseUrl}/api/v1/twilio/voice/ring`, // Play ringing while waiting for agent
+      waitMethod: 'GET',
+      statusCallback: `${this.baseUrl}/api/v1/twilio/voice/conference/${context.tenantId}/${context.callSid}/${segmentNumber}`,
+      statusCallbackEvent: ['start', 'end', 'join', 'leave'],
+      statusCallbackMethod: 'POST',
+    };
+
+    // Add recording at conference level if enabled
+    if (shouldRecord) {
+      conferenceOptions.record = 'record-from-start';
+      conferenceOptions.recordingStatusCallback = `${this.baseUrl}/api/v1/twilio/voice/recording/${context.tenantId}/${context.callSid}/${segmentNumber}`;
+      conferenceOptions.recordingStatusCallbackMethod = 'POST';
+      this.logger.log(`Conference recording enabled for segment ${segmentNumber}`);
+    }
+
+    // Dial options with action callback for when conference ends
+    const dialOptions: any = {
       timeout: config.timeout || 30,
-      callerId: config.callerId || context.to,
       action: this.buildDialStatusUrl(context.tenantId, context.phoneNumberId, stepIndex),
       method: 'POST',
-      ...(config.record && { record: 'record-from-answer-dual' }),
-    });
+    };
 
-    // Check if destination is a user ID (UUID) - need to look up their email
-    if (this.isUUID(config.destination)) {
-      const userEmail = await this.getUserEmailById(config.destination);
-      if (userEmail) {
-        const clientIdentity = this.buildClientIdentity(userEmail, context.tenantId);
-        this.logger.log(`Dialing browser client by user ID - userId: "${config.destination}", email: "${userEmail}", computed identity: "${clientIdentity}"`);
-        dial.client(clientIdentity);
-      } else {
-        this.logger.warn(`User not found for ID ${config.destination}, cannot dial browser client`);
-        // Fallback: maybe they want to dial the UUID as a number? Unlikely to work but prevents crash
-        response.say({ voice: 'alice' as any }, 'The requested user is not available.');
+    const dial = response.dial(dialOptions);
+
+    // Add conference element - caller joins this conference
+    dial.conference(conferenceOptions, conferenceName);
+
+    // Now we need to dial the agent into the same conference
+    // This is done via a separate outbound call to the agent
+    // The agent call will be initiated by the conference status callback when the conference starts
+    // Store the target info for the callback to use
+    await this.storeConferenceTarget(context, conferenceName, config.destination, segmentNumber, stepIndex, undefined, config.timeout);
+  }
+
+  /**
+   * Store conference target info for callback to dial the agent
+   */
+  private async storeConferenceTarget(
+    context: CallContext,
+    conferenceName: string,
+    destination: string,
+    segmentNumber: number,
+    stepIndex?: number,
+    attemptIndex?: number,
+    timeout?: number,
+  ): Promise<void> {
+    // Update the phone call record with conference info and target
+    try {
+      this.logger.log(`storeConferenceTarget: callSid=${context.callSid}, destination=${destination}, segmentNumber=${segmentNumber}, timeout=${timeout}`);
+
+      // First, find the call record to get existing metaValue
+      const existingCall = await this.prisma.phoneCall.findFirst({
+        where: { twilioCallSid: context.callSid },
+      });
+
+      if (!existingCall) {
+        this.logger.warn(`storeConferenceTarget: No call record found for callSid=${context.callSid} - call record may not exist yet`);
+        return;
       }
-    } else if (this.isUserIdentity(config.destination)) {
-      // Destination is a user email - dial their browser client
-      const clientIdentity = this.buildClientIdentity(config.destination, context.tenantId);
-      this.logger.log(`Dialing browser client by email - email: "${config.destination}", computed identity: "${clientIdentity}"`);
-      dial.client(clientIdentity);
-    } else {
-      // Dial phone number
-      this.logger.log(`Dialing phone number: ${config.destination}`);
-      dial.number(config.destination);
+
+      // Merge with existing metaValue to avoid overwriting other data
+      const existingMetaValue = (existingCall.metaValue as any) || {};
+      const newMetaValue = {
+        ...existingMetaValue,
+        conferenceTarget: destination,
+        conferenceCallerId: context.from,
+        phoneNumberId: context.phoneNumberId,
+        stepIndex,
+        attemptIndex,
+        dialTimeout: timeout,
+      };
+
+      // Use update with id for more reliable update
+      await this.prisma.phoneCall.update({
+        where: { id: existingCall.id },
+        data: {
+          conferenceName,
+          segmentNumber,
+          metaValue: newMetaValue,
+        },
+      });
+
+      this.logger.log(`storeConferenceTarget: updated call ${existingCall.id} with conferenceTarget=${destination}`);
+    } catch (error) {
+      this.logger.error(`Failed to store conference target: ${error.message}`);
     }
   }
 
   /**
-   * Process a simulcall step - ring multiple numbers/users simultaneously
+   * Process a simulcall step - uses conference, multiple agents join simultaneously
    */
   private async processSimulcall(
     response: twilio.twiml.VoiceResponse,
@@ -197,40 +276,46 @@ export class TwimlGeneratorService {
     context: CallContext,
     stepIndex: number,
   ): Promise<void> {
-    const dial = response.dial({
+    const segmentNumber = context.segmentNumber || 0;
+    const conferenceName = generateConferenceName(context.callSid, segmentNumber);
+
+    this.logger.log(`Simulcall using conference: ${conferenceName}, segment: ${segmentNumber}`);
+
+    // Conference options for the caller
+    const conferenceOptions: any = {
+      startConferenceOnEnter: true,
+      endConferenceOnExit: true,
+      beep: false,
+      waitUrl: `${this.baseUrl}/api/v1/twilio/voice/ring`,
+      waitMethod: 'GET',
+      statusCallback: `${this.baseUrl}/api/v1/twilio/voice/conference/${context.tenantId}/${context.callSid}/${segmentNumber}`,
+      statusCallbackEvent: ['start', 'end', 'join', 'leave'],
+      statusCallbackMethod: 'POST',
+    };
+
+    // Add recording if enabled at call flow level
+    if (context.recordCalls) {
+      conferenceOptions.record = 'record-from-start';
+      conferenceOptions.recordingStatusCallback = `${this.baseUrl}/api/v1/twilio/voice/recording/${context.tenantId}/${context.callSid}/${segmentNumber}`;
+      conferenceOptions.recordingStatusCallbackMethod = 'POST';
+      this.logger.log(`Conference recording enabled for simulcall segment ${segmentNumber}`);
+    }
+
+    const dialOptions: any = {
       timeout: config.timeout || 30,
-      callerId: config.callerId || context.to,
       action: this.buildDialStatusUrl(context.tenantId, context.phoneNumberId, stepIndex),
       method: 'POST',
-    });
+    };
 
-    // Add all destinations - they will ring simultaneously
-    for (const destination of config.destinations) {
-      if (this.isUUID(destination)) {
-        // It's a user ID - look up their email and dial browser client
-        const userEmail = await this.getUserEmailById(destination);
-        if (userEmail) {
-          const clientIdentity = this.buildClientIdentity(userEmail, context.tenantId);
-          this.logger.log(`Simulcall: Dialing browser client for user ${destination} -> ${clientIdentity}`);
-          dial.client(clientIdentity);
-        } else {
-          this.logger.warn(`Simulcall: User not found for ID ${destination}, skipping`);
-        }
-      } else if (this.isUserIdentity(destination)) {
-        // It's an email - dial browser client
-        const clientIdentity = this.buildClientIdentity(destination, context.tenantId);
-        this.logger.log(`Simulcall: Dialing browser client for email ${destination} -> ${clientIdentity}`);
-        dial.client(clientIdentity);
-      } else {
-        // It's a phone number
-        this.logger.log(`Simulcall: Dialing phone number ${destination}`);
-        dial.number(destination);
-      }
-    }
+    const dial = response.dial(dialOptions);
+    dial.conference(conferenceOptions, conferenceName);
+
+    // Store all targets for the conference callback to dial
+    await this.storeConferenceTarget(context, conferenceName, config.destinations.join(','), segmentNumber, stepIndex, undefined, config.timeout);
   }
 
   /**
-   * Process a round robin step - handled specially with sequential callbacks
+   * Process a round robin step - uses conference, tries agents sequentially
    */
   private async processRoundRobin(
     response: twilio.twiml.VoiceResponse,
@@ -248,46 +333,46 @@ export class TwimlGeneratorService {
       return;
     }
 
-    const dial = response.dial({
+    const segmentNumber = context.segmentNumber || 0;
+    const conferenceName = generateConferenceName(context.callSid, segmentNumber);
+    const destination = config.destinations[attemptIndex];
+
+    this.logger.log(`RoundRobin using conference: ${conferenceName}, attempt: ${attemptIndex}, destination: ${destination}`);
+
+    // Conference options
+    const conferenceOptions: any = {
+      startConferenceOnEnter: true,
+      endConferenceOnExit: true,
+      beep: false,
+      waitUrl: `${this.baseUrl}/api/v1/twilio/voice/ring`,
+      waitMethod: 'GET',
+      statusCallback: `${this.baseUrl}/api/v1/twilio/voice/conference/${context.tenantId}/${context.callSid}/${segmentNumber}?attempt=${attemptIndex}`,
+      statusCallbackEvent: ['start', 'end', 'join', 'leave'],
+      statusCallbackMethod: 'POST',
+    };
+
+    // Add recording if enabled at call flow level
+    if (context.recordCalls) {
+      conferenceOptions.record = 'record-from-start';
+      conferenceOptions.recordingStatusCallback = `${this.baseUrl}/api/v1/twilio/voice/recording/${context.tenantId}/${context.callSid}/${segmentNumber}`;
+      conferenceOptions.recordingStatusCallbackMethod = 'POST';
+      this.logger.log(`Conference recording enabled for round robin segment ${segmentNumber}`);
+    }
+
+    const dialOptions: any = {
       timeout: config.timeoutPerDestination || 20,
-      callerId: config.callerId || context.to,
       action: this.buildFlowUrl(context.tenantId, context.phoneNumberId, stepIndex, {
         action: 'round_robin',
         attempt: (attemptIndex + 1).toString(),
       }),
       method: 'POST',
-    });
+    };
 
-    const destination = config.destinations[attemptIndex];
+    const dial = response.dial(dialOptions);
+    dial.conference(conferenceOptions, conferenceName);
 
-    if (this.isUUID(destination)) {
-      // It's a user ID - look up their email and dial browser client
-      const userEmail = await this.getUserEmailById(destination);
-      if (userEmail) {
-        const clientIdentity = this.buildClientIdentity(userEmail, context.tenantId);
-        this.logger.log(`RoundRobin: Dialing browser client for user ${destination} -> ${clientIdentity}`);
-        dial.client(clientIdentity);
-      } else {
-        this.logger.warn(`RoundRobin: User not found for ID ${destination}, skipping to next`);
-        // Skip to next destination by redirecting
-        response.redirect(
-          { method: 'POST' },
-          this.buildFlowUrl(context.tenantId, context.phoneNumberId, stepIndex, {
-            action: 'round_robin',
-            attempt: (attemptIndex + 1).toString(),
-          }),
-        );
-      }
-    } else if (this.isUserIdentity(destination)) {
-      // It's an email - dial browser client
-      const clientIdentity = this.buildClientIdentity(destination, context.tenantId);
-      this.logger.log(`RoundRobin: Dialing browser client for email ${destination} -> ${clientIdentity}`);
-      dial.client(clientIdentity);
-    } else {
-      // It's a phone number
-      this.logger.log(`RoundRobin: Dialing phone number ${destination}`);
-      dial.number(destination);
-    }
+    // Store target for conference callback (include step and attempt for round robin retry)
+    await this.storeConferenceTarget(context, conferenceName, destination, segmentNumber, stepIndex, attemptIndex, config.timeoutPerDestination);
   }
 
   /**
@@ -482,14 +567,16 @@ export class TwimlGeneratorService {
       );
     }
 
-    // Record voicemail
+    // Record voicemail with 20-second limit to prevent bot spam
     response.record({
-      maxLength: config.maxLength || 120,
+      maxLength: config.maxLength || 20, // Default 20 seconds to prevent bots
+      timeout: 3, // End recording after 3 seconds of silence
       transcribe: config.transcribe !== false,
       transcribeCallback: `${this.baseUrl}/api/v1/twilio/voice/transcription/${context.tenantId}/${context.callSid}`,
       action: `${this.baseUrl}/api/v1/twilio/voice/voicemail/${context.tenantId}/${context.callSid}`,
       method: 'POST',
       playBeep: true,
+      finishOnKey: '#', // Allow caller to press # to finish early
     });
 
     response.hangup();
@@ -642,7 +729,8 @@ export class TwimlGeneratorService {
 
   /**
    * Execute nested steps (for branches in menu/schedule)
-   * This method inlines all TwiML without creating redirect URLs
+   * For simple steps (greeting, hangup, voicemail), we inline the TwiML
+   * For dial steps, we use the conference mechanism with callback URLs
    */
   async executeNestedSteps(
     steps: CallFlowStep[],
@@ -658,8 +746,6 @@ export class TwimlGeneratorService {
 
     const step = steps[stepIndex];
 
-    // For nested steps, we inline the TwiML generation
-    // This is simpler than creating callback URLs for nested flows
     switch (step.type) {
       case CallFlowStepType.GREETING: {
         this.processGreeting(response, step.config as GreetingStepConfig);
@@ -679,11 +765,363 @@ export class TwimlGeneratorService {
         break;
       }
 
-      // For other step types in nested flows, we'd need more complex handling
+      case CallFlowStepType.DIAL: {
+        // For nested DIAL, use conference mechanism
+        // Store remaining steps in metadata for fallback handling
+        const remainingSteps = steps.slice(stepIndex + 1);
+        await this.storeNestedFlowContext(context, remainingSteps);
+        await this.processNestedDial(response, step.config as DialStepConfig, context);
+        break;
+      }
+
+      case CallFlowStepType.SIMULCALL: {
+        // For nested SIMULCALL, use conference mechanism
+        const remainingSteps = steps.slice(stepIndex + 1);
+        await this.storeNestedFlowContext(context, remainingSteps);
+        await this.processNestedSimulcall(response, step.config as SimulcallStepConfig, context);
+        break;
+      }
+
+      case CallFlowStepType.ROUND_ROBIN: {
+        // For nested ROUND_ROBIN, use conference mechanism
+        const remainingSteps = steps.slice(stepIndex + 1);
+        await this.storeNestedFlowContext(context, remainingSteps);
+        await this.processNestedRoundRobin(response, step.config as RoundRobinStepConfig, context, 0);
+        break;
+      }
+
       default:
         this.logger.warn(`Nested step type ${step.type} not fully supported yet`);
         response.hangup();
     }
+
+    return response.toString();
+  }
+
+  /**
+   * Store nested flow context in call metadata for callback handling
+   */
+  private async storeNestedFlowContext(
+    context: CallContext,
+    remainingSteps: CallFlowStep[],
+  ): Promise<void> {
+    try {
+      const call = await this.prisma.phoneCall.findFirst({
+        where: { twilioCallSid: context.callSid },
+      });
+
+      if (call) {
+        const metaValue = (call.metaValue as any) || {};
+        await this.prisma.phoneCall.update({
+          where: { id: call.id },
+          data: {
+            metaValue: {
+              ...metaValue,
+              nestedFlowSteps: remainingSteps,
+              isNestedFlow: true,
+            },
+          },
+        });
+        this.logger.log(`Stored nested flow context with ${remainingSteps.length} remaining steps`);
+      }
+    } catch (error) {
+      this.logger.error(`Failed to store nested flow context: ${error.message}`);
+    }
+  }
+
+  /**
+   * Process a dial step within a nested flow (menu option or schedule branch)
+   */
+  private async processNestedDial(
+    response: twilio.twiml.VoiceResponse,
+    config: DialStepConfig,
+    context: CallContext,
+  ): Promise<void> {
+    const shouldRecord = config.record || context.recordCalls;
+    const segmentNumber = context.segmentNumber || 0;
+    const conferenceName = generateConferenceName(context.callSid, segmentNumber);
+
+    this.logger.log(`processNestedDial - destination: "${config.destination}", conference: ${conferenceName}`);
+
+    const conferenceOptions: any = {
+      startConferenceOnEnter: true,
+      endConferenceOnExit: true,
+      beep: false,
+      waitUrl: `${this.baseUrl}/api/v1/twilio/voice/ring`,
+      waitMethod: 'GET',
+      statusCallback: `${this.baseUrl}/api/v1/twilio/voice/conference/${context.tenantId}/${context.callSid}/${segmentNumber}`,
+      statusCallbackEvent: ['start', 'end', 'join', 'leave'],
+      statusCallbackMethod: 'POST',
+    };
+
+    if (shouldRecord) {
+      conferenceOptions.record = 'record-from-start';
+      conferenceOptions.recordingStatusCallback = `${this.baseUrl}/api/v1/twilio/voice/recording/${context.tenantId}/${context.callSid}/${segmentNumber}`;
+      conferenceOptions.recordingStatusCallbackMethod = 'POST';
+    }
+
+    // For nested flows, use a special dial-status URL that indicates nested context
+    const dialOptions: any = {
+      timeout: config.timeout || 30,
+      action: `${this.baseUrl}/api/v1/twilio/voice/flow/${context.tenantId}/${context.phoneNumberId}/nested-dial-status`,
+      method: 'POST',
+    };
+
+    const dial = response.dial(dialOptions);
+    dial.conference(conferenceOptions, conferenceName);
+
+    // Store target for conference callback to dial
+    await this.storeConferenceTarget(context, conferenceName, config.destination, segmentNumber, undefined, undefined, config.timeout);
+  }
+
+  /**
+   * Process a simulcall step within a nested flow
+   */
+  private async processNestedSimulcall(
+    response: twilio.twiml.VoiceResponse,
+    config: SimulcallStepConfig,
+    context: CallContext,
+  ): Promise<void> {
+    const shouldRecord = context.recordCalls;
+    const segmentNumber = context.segmentNumber || 0;
+    const conferenceName = generateConferenceName(context.callSid, segmentNumber);
+
+    this.logger.log(`processNestedSimulcall - destinations: ${config.destinations.join(', ')}`);
+
+    const conferenceOptions: any = {
+      startConferenceOnEnter: true,
+      endConferenceOnExit: true,
+      beep: false,
+      waitUrl: `${this.baseUrl}/api/v1/twilio/voice/ring`,
+      waitMethod: 'GET',
+      statusCallback: `${this.baseUrl}/api/v1/twilio/voice/conference/${context.tenantId}/${context.callSid}/${segmentNumber}`,
+      statusCallbackEvent: ['start', 'end', 'join', 'leave'],
+      statusCallbackMethod: 'POST',
+    };
+
+    if (shouldRecord) {
+      conferenceOptions.record = 'record-from-start';
+      conferenceOptions.recordingStatusCallback = `${this.baseUrl}/api/v1/twilio/voice/recording/${context.tenantId}/${context.callSid}/${segmentNumber}`;
+      conferenceOptions.recordingStatusCallbackMethod = 'POST';
+    }
+
+    const dialOptions: any = {
+      timeout: config.timeout || 30,
+      action: `${this.baseUrl}/api/v1/twilio/voice/flow/${context.tenantId}/${context.phoneNumberId}/nested-dial-status`,
+      method: 'POST',
+    };
+
+    const dial = response.dial(dialOptions);
+    dial.conference(conferenceOptions, conferenceName);
+
+    await this.storeConferenceTarget(context, conferenceName, config.destinations.join(','), segmentNumber, undefined, undefined, config.timeout);
+  }
+
+  /**
+   * Process a round robin step within a nested flow
+   */
+  private async processNestedRoundRobin(
+    response: twilio.twiml.VoiceResponse,
+    config: RoundRobinStepConfig,
+    context: CallContext,
+    attemptIndex: number,
+  ): Promise<void> {
+    if (attemptIndex >= config.destinations.length) {
+      // All destinations tried, execute remaining nested steps or hangup
+      const call = await this.prisma.phoneCall.findFirst({
+        where: { twilioCallSid: context.callSid },
+      });
+      const metaValue = (call?.metaValue as any) || {};
+      const remainingSteps = metaValue.nestedFlowSteps as CallFlowStep[] | undefined;
+
+      if (remainingSteps?.length) {
+        // Return early - let executeNestedSteps handle remaining steps
+        // This case shouldn't normally happen as attemptIndex starts at 0
+        response.hangup();
+        return;
+      }
+      response.hangup();
+      return;
+    }
+
+    const destination = config.destinations[attemptIndex];
+    const shouldRecord = context.recordCalls;
+    const segmentNumber = context.segmentNumber || 0;
+    const conferenceName = generateConferenceName(context.callSid, segmentNumber);
+
+    this.logger.log(`processNestedRoundRobin - attempt ${attemptIndex + 1}/${config.destinations.length}, destination: ${destination}`);
+
+    const conferenceOptions: any = {
+      startConferenceOnEnter: true,
+      endConferenceOnExit: true,
+      beep: false,
+      waitUrl: `${this.baseUrl}/api/v1/twilio/voice/ring`,
+      waitMethod: 'GET',
+      statusCallback: `${this.baseUrl}/api/v1/twilio/voice/conference/${context.tenantId}/${context.callSid}/${segmentNumber}`,
+      statusCallbackEvent: ['start', 'end', 'join', 'leave'],
+      statusCallbackMethod: 'POST',
+    };
+
+    if (shouldRecord) {
+      conferenceOptions.record = 'record-from-start';
+      conferenceOptions.recordingStatusCallback = `${this.baseUrl}/api/v1/twilio/voice/recording/${context.tenantId}/${context.callSid}/${segmentNumber}`;
+      conferenceOptions.recordingStatusCallbackMethod = 'POST';
+    }
+
+    // Store round robin config for retry handling
+    await this.storeNestedRoundRobinContext(context, config.destinations, attemptIndex);
+
+    const dialOptions: any = {
+      timeout: config.timeoutPerDestination || 20,
+      action: `${this.baseUrl}/api/v1/twilio/voice/flow/${context.tenantId}/${context.phoneNumberId}/nested-dial-status?rrAttempt=${attemptIndex}`,
+      method: 'POST',
+    };
+
+    const dial = response.dial(dialOptions);
+    dial.conference(conferenceOptions, conferenceName);
+
+    await this.storeConferenceTarget(context, conferenceName, destination, segmentNumber, undefined, attemptIndex, config.timeoutPerDestination);
+  }
+
+  /**
+   * Store round robin context for nested flows
+   */
+  private async storeNestedRoundRobinContext(
+    context: CallContext,
+    destinations: string[],
+    currentAttempt: number,
+  ): Promise<void> {
+    try {
+      const call = await this.prisma.phoneCall.findFirst({
+        where: { twilioCallSid: context.callSid },
+      });
+
+      if (call) {
+        const metaValue = (call.metaValue as any) || {};
+        await this.prisma.phoneCall.update({
+          where: { id: call.id },
+          data: {
+            metaValue: {
+              ...metaValue,
+              nestedRoundRobin: {
+                destinations,
+                currentAttempt,
+                timeoutPerDestination: 20, // Default
+              },
+            },
+          },
+        });
+      }
+    } catch (error) {
+      this.logger.error(`Failed to store nested round robin context: ${error.message}`);
+    }
+  }
+
+  /**
+   * Handle nested dial status (when dial in nested flow completes)
+   */
+  async handleNestedDialStatus(
+    callSid: string,
+    context: CallContext,
+    callWasAnswered: boolean,
+    rrAttempt?: number,
+  ): Promise<string> {
+    const response = new VoiceResponse();
+
+    // If call was answered, just hangup (call is done)
+    if (callWasAnswered) {
+      response.hangup();
+      return response.toString();
+    }
+
+    // Call wasn't answered - check for round robin retry or remaining nested steps
+    const call = await this.prisma.phoneCall.findFirst({
+      where: { twilioCallSid: callSid },
+    });
+
+    if (!call) {
+      response.hangup();
+      return response.toString();
+    }
+
+    const metaValue = (call.metaValue as any) || {};
+
+    // Check if this is a round robin with more attempts
+    if (rrAttempt !== undefined && metaValue.nestedRoundRobin) {
+      const { destinations, timeoutPerDestination } = metaValue.nestedRoundRobin;
+      const nextAttempt = rrAttempt + 1;
+
+      if (nextAttempt < destinations.length) {
+        // Try next destination
+        this.logger.log(`Nested round robin: trying next destination (attempt ${nextAttempt + 1}/${destinations.length})`);
+        return this.processNestedRoundRobinRetry(
+          context,
+          destinations,
+          nextAttempt,
+          timeoutPerDestination,
+        );
+      }
+    }
+
+    // No more round robin attempts - check for remaining nested steps
+    const remainingSteps = metaValue.nestedFlowSteps as CallFlowStep[] | undefined;
+
+    if (remainingSteps?.length) {
+      this.logger.log(`Executing ${remainingSteps.length} remaining nested steps`);
+      return this.executeNestedSteps(remainingSteps, 0, context);
+    }
+
+    // Nothing left to do - hangup
+    response.hangup();
+    return response.toString();
+  }
+
+  /**
+   * Process a round robin retry in nested flow
+   */
+  private async processNestedRoundRobinRetry(
+    context: CallContext,
+    destinations: string[],
+    attemptIndex: number,
+    timeoutPerDestination: number,
+  ): Promise<string> {
+    const response = new VoiceResponse();
+    const destination = destinations[attemptIndex];
+    const segmentNumber = context.segmentNumber || 0;
+    const conferenceName = generateConferenceName(context.callSid, segmentNumber);
+
+    this.logger.log(`processNestedRoundRobinRetry - attempt ${attemptIndex + 1}/${destinations.length}, destination: ${destination}`);
+
+    const conferenceOptions: any = {
+      startConferenceOnEnter: true,
+      endConferenceOnExit: true,
+      beep: false,
+      waitUrl: `${this.baseUrl}/api/v1/twilio/voice/ring`,
+      waitMethod: 'GET',
+      statusCallback: `${this.baseUrl}/api/v1/twilio/voice/conference/${context.tenantId}/${context.callSid}/${segmentNumber}`,
+      statusCallbackEvent: ['start', 'end', 'join', 'leave'],
+      statusCallbackMethod: 'POST',
+    };
+
+    if (context.recordCalls) {
+      conferenceOptions.record = 'record-from-start';
+      conferenceOptions.recordingStatusCallback = `${this.baseUrl}/api/v1/twilio/voice/recording/${context.tenantId}/${context.callSid}/${segmentNumber}`;
+      conferenceOptions.recordingStatusCallbackMethod = 'POST';
+    }
+
+    // Update round robin context
+    await this.storeNestedRoundRobinContext(context, destinations, attemptIndex);
+
+    const dialOptions: any = {
+      timeout: timeoutPerDestination,
+      action: `${this.baseUrl}/api/v1/twilio/voice/flow/${context.tenantId}/${context.phoneNumberId}/nested-dial-status?rrAttempt=${attemptIndex}`,
+      method: 'POST',
+    };
+
+    const dial = response.dial(dialOptions);
+    dial.conference(conferenceOptions, conferenceName);
+
+    await this.storeConferenceTarget(context, conferenceName, destination, segmentNumber, undefined, attemptIndex, timeoutPerDestination);
 
     return response.toString();
   }
@@ -762,23 +1200,76 @@ export class TwimlGeneratorService {
   async startCallFlow(
     steps: CallFlowStep[],
     context: CallContext,
-    recordCall: boolean,
   ): Promise<string> {
-    const response = new VoiceResponse();
-
-    if (recordCall) {
-      // Start recording the entire call
-      response.record({
-        recordingStatusCallback: `${this.baseUrl}/api/v1/twilio/voice/recording/${context.tenantId}/${context.callSid}`,
-        recordingStatusCallbackMethod: 'POST',
-      });
-    }
-
     if (!steps || steps.length === 0) {
       return this.generateDefaultTwiml(context.tenantId);
     }
 
     // Start with first step
+    // Recording is handled at the Dial step level via context.recordCalls
     return this.executeStep(steps, 0, context);
+  }
+
+  /**
+   * Generate TwiML for an agent to join a conference
+   * This is used when dialing agents into an existing conference
+   */
+  generateJoinConferenceTwiml(
+    conferenceName: string,
+    options: {
+      endConferenceOnExit?: boolean;
+      muted?: boolean;
+      startConferenceOnEnter?: boolean;
+    } = {},
+  ): string {
+    const response = new VoiceResponse();
+    const dial = response.dial();
+
+    dial.conference(
+      {
+        startConferenceOnEnter: options.startConferenceOnEnter ?? true,
+        endConferenceOnExit: options.endConferenceOnExit ?? false, // Agent leaving doesn't end conference by default
+        muted: options.muted ?? false,
+        beep: 'false' as const,
+      },
+      conferenceName,
+    );
+
+    return response.toString();
+  }
+
+  /**
+   * Generate TwiML for transferring caller to a new conference
+   * Used when transferring a call to a new agent
+   */
+  generateTransferToConferenceTwiml(
+    conferenceName: string,
+    tenantId: string,
+    callSid: string,
+    segmentNumber: number,
+    shouldRecord: boolean,
+  ): string {
+    const response = new VoiceResponse();
+
+    const conferenceOptions: any = {
+      startConferenceOnEnter: true,
+      endConferenceOnExit: true,
+      beep: false,
+      waitUrl: '',
+      statusCallback: `${this.baseUrl}/api/v1/twilio/voice/conference/${tenantId}/${callSid}/${segmentNumber}`,
+      statusCallbackEvent: ['start', 'end', 'join', 'leave'],
+      statusCallbackMethod: 'POST',
+    };
+
+    if (shouldRecord) {
+      conferenceOptions.record = 'record-from-start';
+      conferenceOptions.recordingStatusCallback = `${this.baseUrl}/api/v1/twilio/voice/recording/${tenantId}/${callSid}/${segmentNumber}`;
+      conferenceOptions.recordingStatusCallbackMethod = 'POST';
+    }
+
+    const dial = response.dial();
+    dial.conference(conferenceOptions, conferenceName);
+
+    return response.toString();
   }
 }

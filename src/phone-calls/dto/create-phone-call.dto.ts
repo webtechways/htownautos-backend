@@ -24,6 +24,7 @@ export enum CallStatus {
   BUSY = 'busy',
   VOICEMAIL = 'voicemail',
   CANCELLED = 'cancelled',
+  TRANSFERRED = 'transferred',
 }
 
 export enum CallOutcome {
@@ -66,10 +67,15 @@ export class CreatePhoneCallDto {
   @IsOptional()
   status?: CallStatus;
 
-  @ApiProperty({ description: 'Phone number called/received from' })
+  @ApiProperty({ description: 'Phone number that initiated the call' })
   @IsString()
   @IsNotEmpty()
-  phoneNumber: string;
+  fromNumber: string;
+
+  @ApiProperty({ description: 'Phone number that received the call' })
+  @IsString()
+  @IsNotEmpty()
+  toNumber: string;
 
   @ApiProperty({ description: 'Call start time' })
   @IsDateString()
@@ -97,26 +103,16 @@ export class CreatePhoneCallDto {
   @IsOptional()
   notes?: string;
 
-  @ApiPropertyOptional({ description: 'External system call ID' })
-  @IsString()
-  @IsOptional()
-  externalId?: string;
-
   @ApiPropertyOptional({ description: 'URL to call recording' })
   @IsUrl()
   @IsOptional()
   recordingUrl?: string;
 
-  // Twilio transcription fields
-  @ApiPropertyOptional({ description: 'Full transcription text from Twilio' })
+  // Transcription fields
+  @ApiPropertyOptional({ description: 'Full transcription text' })
   @IsString()
   @IsOptional()
   transcription?: string;
-
-  @ApiPropertyOptional({ description: 'Twilio transcription SID' })
-  @IsString()
-  @IsOptional()
-  transcriptionSid?: string;
 
   @ApiPropertyOptional({ enum: TranscriptionStatus, description: 'Transcription status' })
   @IsEnum(TranscriptionStatus)

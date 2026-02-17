@@ -21,6 +21,7 @@ import {
 } from '@nestjs/swagger';
 import { SmsService } from './sms.service';
 import { CreateSmsDto, UpdateSmsDto } from './dto/create-sms.dto';
+import { SendSmsDto } from './dto/send-sms.dto';
 import { QuerySmsDto } from './dto/query-sms.dto';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { CurrentTenant } from '../auth/decorators/current-tenant.decorator';
@@ -44,8 +45,8 @@ export class SmsController {
 
   @Post()
   @ApiOperation({
-    summary: 'Send an SMS message',
-    description: 'Records an SMS message sent to a buyer',
+    summary: 'Create SMS record',
+    description: 'Creates an SMS message record (does not send via Twilio)',
   })
   @ApiResponse({ status: 201, description: 'SMS message created successfully' })
   @ApiResponse({ status: 404, description: 'Buyer not found' })
@@ -56,6 +57,23 @@ export class SmsController {
   ) {
     const tenantUserId = this.getTenantUserId(user, tenantId);
     return this.smsService.create(tenantId, createSmsDto, tenantUserId);
+  }
+
+  @Post('send')
+  @ApiOperation({
+    summary: 'Send an SMS message',
+    description: 'Sends an SMS message to a buyer via Twilio and stores the record',
+  })
+  @ApiResponse({ status: 201, description: 'SMS sent successfully' })
+  @ApiResponse({ status: 400, description: 'Failed to send SMS' })
+  @ApiResponse({ status: 404, description: 'Buyer not found' })
+  sendSms(
+    @CurrentTenant() tenantId: string,
+    @Body() sendSmsDto: SendSmsDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    const tenantUserId = this.getTenantUserId(user, tenantId);
+    return this.smsService.sendSms(tenantId, tenantUserId, sendSmsDto);
   }
 
   @Get()

@@ -495,4 +495,23 @@ export class CallFlowService {
         : null,
     };
   }
+
+  /**
+   * Find a TenantUser by their User ID and Tenant ID
+   * Used to associate users with calls they answered
+   */
+  async findTenantUserByUserId(
+    tenantId: string,
+    userId: string,
+  ): Promise<{ id: string } | null> {
+    const tenantUser = await this.prisma.tenantUser.findFirst({
+      where: {
+        tenantId,
+        userId,
+      },
+      select: { id: true },
+    });
+
+    return tenantUser;
+  }
 }

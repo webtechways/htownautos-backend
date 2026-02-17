@@ -11,6 +11,8 @@ import {
 import { Server, Socket } from 'socket.io';
 import { Logger } from '@nestjs/common';
 import { PresenceService } from './presence.service';
+import { PhoneCallEventsService } from './phone-call-events.service';
+import { SmsEventsService } from './sms-events.service';
 import { CognitoJwtVerifier } from 'aws-jwt-verify';
 
 interface AuthenticatedSocket extends Socket {
@@ -36,7 +38,11 @@ export class PresenceGateway
   private verifier: ReturnType<typeof CognitoJwtVerifier.create>;
   private socketUserMap = new Map<string, { userId: string; tenantId: string }>();
 
-  constructor(private readonly presenceService: PresenceService) {
+  constructor(
+    private readonly presenceService: PresenceService,
+    private readonly phoneCallEventsService: PhoneCallEventsService,
+    private readonly smsEventsService: SmsEventsService,
+  ) {
     this.verifier = CognitoJwtVerifier.create({
       userPoolId: process.env.COGNITO_USER_POOL_ID!,
       tokenUse: 'access',
@@ -46,6 +52,9 @@ export class PresenceGateway
 
   afterInit() {
     this.logger.log('Presence WebSocket Gateway initialized');
+    // Share the Socket.IO server with event services
+    this.phoneCallEventsService.setServer(this.server);
+    this.smsEventsService.setServer(this.server);
   }
 
   async handleConnection(client: AuthenticatedSocket) {

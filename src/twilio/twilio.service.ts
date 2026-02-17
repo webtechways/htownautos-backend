@@ -322,8 +322,11 @@ export class TwilioService {
   /**
    * Generate a Twilio Access Token for Voice Client (WebRTC)
    * This allows users to receive calls in their browser
+   *
+   * Client identity format: tenantId:userId
+   * This makes it easy to parse on the server when handling outbound calls
    */
-  generateVoiceToken(identity: string, tenantId: string): { token: string; identity: string } {
+  generateVoiceToken(userId: string, tenantId: string): { token: string; identity: string } {
     const accountSid = process.env.TWILIO_ACCOUNT_SID;
     const apiKeySid = process.env.TWILIO_SID;
     const apiKeySecret = process.env.TWILIO_SECRET;
@@ -341,10 +344,10 @@ export class TwilioService {
       );
     }
 
-    // Create a unique client identity using email/userId + tenantId
-    // This ensures the same user in different tenants has different identities
-    const clientIdentity = `${identity}_${tenantId}`.replace(/[^a-zA-Z0-9_-]/g, '_');
-    this.logger.log(`Voice token - input identity: "${identity}", tenantId: "${tenantId}", computed clientIdentity: "${clientIdentity}"`);
+    // Create a unique client identity using tenantId:userId format
+    // This makes parsing simple and reliable on the server side
+    const clientIdentity = `${tenantId}:${userId}`;
+    this.logger.log(`Voice token - userId: "${userId}", tenantId: "${tenantId}", clientIdentity: "${clientIdentity}"`);
 
     // Create access token
     const AccessToken = jwt.AccessToken;
@@ -372,6 +375,200 @@ export class TwilioService {
   }
 
   /**
+   * Transfer an active call to another number or client
+   * Uses Twilio's call update API to redirect the call
+   */
+  async transferCall(
+    callSid: string,
+    targetNumber: string,
+    callerId: string,
+    options?: {
+      announce?: string; // Message to play before connecting
+      timeout?: number; // Ring timeout in seconds
+      record?: boolean; // Whether to record the transferred call
+      recordingStatusCallback?: string;
+    },
+  ): Promise<void> {
+    this.ensureClient();
+
+    const { announce, timeout = 30, record = false, recordingStatusCallback } = options || {};
+
+    // Build TwiML for the transfer
+    const twilio = require('twilio');
+    const twiml = new twilio.twiml.VoiceResponse();
+
+    // Optionally play an announcement
+    if (announce) {
+      twiml.say({ voice: 'Polly.Joanna' }, announce);
+    }
+
+    // Create dial with proper settings
+    const dialOptions: any = {
+      callerId,
+      timeout,
+      action: '', // Empty action means hangup after dial completes
+    };
+
+    if (record) {
+      dialOptions.record = 'record-from-answer';
+      if (recordingStatusCallback) {
+        dialOptions.recordingStatusCallback = recordingStatusCallback;
+      }
+    }
+
+    const dial = twiml.dial(dialOptions);
+
+    // Check if target is a client identity or phone number
+    if (targetNumber.startsWith('client:')) {
+      // Pass the original CallSid as ParentCallSid so subsequent transfers can find the call record
+      const client = dial.client({}, targetNumber.replace('client:', ''));
+      client.parameter({ name: 'ParentCallSid', value: callSid });
+    } else {
+      dial.number(targetNumber);
+    }
+
+    try {
+      await this.client.calls(callSid).update({
+        twiml: twiml.toString(),
+      });
+      this.logger.log(`Call ${callSid} transferred to ${targetNumber}`);
+    } catch (error) {
+      this.logger.error(`Failed to transfer call ${callSid}: ${error.message}`);
+      throw new BadRequestException(`Failed to transfer call: ${error.message}`);
+    }
+  }
+
+  /**
+   * Get a TenantUser's phone number or client identity for transfer
+   */
+  async getTransferDestination(tenantUserId: string): Promise<{
+    type: 'client' | 'phone';
+    destination: string;
+  } | null> {
+    // This will be implemented in the phone-call service
+    // which has access to PrismaService
+    return null;
+  }
+
+  /**
+   * Make an outbound call to a Twilio Client (browser/app)
+   * Used to dial agents into conferences
+   */
+  async callClient(
+    clientIdentity: string,
+    callerId: string,
+    twiml: string,
+    options?: { statusCallback?: string; timeout?: number; customParameters?: Record<string, string> },
+  ): Promise<string> {
+    this.ensureClient();
+
+    try {
+      // Build the 'to' field with custom parameters if provided
+      // Format: client:identity?param1=value1&param2=value2
+      let toField = `client:${clientIdentity}`;
+      if (options?.customParameters && Object.keys(options.customParameters).length > 0) {
+        const params = new URLSearchParams(options.customParameters).toString();
+        toField = `client:${clientIdentity}?${params}`;
+      }
+
+      const callOptions: any = {
+        to: toField,
+        from: callerId,
+        twiml,
+      };
+
+      if (options?.statusCallback) {
+        callOptions.statusCallback = options.statusCallback;
+        callOptions.statusCallbackEvent = ['initiated', 'ringing', 'answered', 'completed'];
+        callOptions.statusCallbackMethod = 'POST';
+      }
+
+      if (options?.timeout) {
+        callOptions.timeout = options.timeout;
+      }
+
+      const call = await this.client.calls.create(callOptions);
+
+      this.logger.log(`Outbound call to client ${clientIdentity}: ${call.sid}`);
+      return call.sid;
+    } catch (error) {
+      this.logger.error(`Failed to call client ${clientIdentity}: ${error.message}`);
+      throw new BadRequestException(`Failed to call client: ${error.message}`);
+    }
+  }
+
+  /**
+   * Make an outbound call to a phone number
+   * Used to dial external numbers into conferences
+   */
+  async callNumber(
+    phoneNumber: string,
+    callerId: string,
+    twiml: string,
+    options?: { statusCallback?: string; timeout?: number },
+  ): Promise<string> {
+    this.ensureClient();
+
+    try {
+      const callOptions: any = {
+        to: phoneNumber,
+        from: callerId,
+        twiml,
+      };
+
+      if (options?.statusCallback) {
+        callOptions.statusCallback = options.statusCallback;
+        callOptions.statusCallbackEvent = ['initiated', 'ringing', 'answered', 'completed'];
+        callOptions.statusCallbackMethod = 'POST';
+      }
+
+      if (options?.timeout) {
+        callOptions.timeout = options.timeout;
+      }
+
+      const call = await this.client.calls.create(callOptions);
+
+      this.logger.log(`Outbound call to ${phoneNumber}: ${call.sid}`);
+      return call.sid;
+    } catch (error) {
+      this.logger.error(`Failed to call ${phoneNumber}: ${error.message}`);
+      throw new BadRequestException(`Failed to call number: ${error.message}`);
+    }
+  }
+
+  /**
+   * Update an active call with new TwiML
+   * Used for call transfers to redirect caller to new conference
+   */
+  async updateCallTwiml(callSid: string, twiml: string): Promise<void> {
+    this.ensureClient();
+
+    try {
+      await this.client.calls(callSid).update({ twiml });
+      this.logger.log(`Updated call ${callSid} with new TwiML`);
+    } catch (error) {
+      this.logger.error(`Failed to update call ${callSid}: ${error.message}`);
+      throw new BadRequestException(`Failed to update call: ${error.message}`);
+    }
+  }
+
+  /**
+   * Hang up an active call
+   * Used to terminate pending agent calls when caller hangs up
+   */
+  async hangupCall(callSid: string): Promise<void> {
+    this.ensureClient();
+
+    try {
+      await this.client.calls(callSid).update({ status: 'completed' });
+      this.logger.log(`Hung up call ${callSid}`);
+    } catch (error) {
+      this.logger.error(`Failed to hang up call ${callSid}: ${error.message}`);
+      throw new BadRequestException(`Failed to hang up call: ${error.message}`);
+    }
+  }
+
+  /**
    * Create or get TwiML App SID
    * This creates a TwiML App if one doesn't exist for voice client
    */
@@ -380,7 +577,7 @@ export class TwilioService {
 
     const appName = 'HTown Autos CRM Voice Client';
     const baseUrl = process.env.API_BASE_URL || 'https://api.htownautos.com';
-    const voiceUrl = `${baseUrl}/api/v1/twilio/voice/client`;
+    const voiceUrl = `${baseUrl}/api/v1/twilio/client/outgoing`;
 
     try {
       // Check if app already exists

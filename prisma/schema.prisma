@@ -631,7 +631,9 @@ model TenantUser {
   tasksAssigned       Task[]  @relation("TaskAssignedTo")
   tasksCreated        Task[]  @relation("TaskCreatedBy")
   notesCreated        Note[]  @relation("NoteCreatedBy")
-  phoneCalls          PhoneCall[] @relation("PhoneCallCaller")
+  phoneCalls              PhoneCall[] @relation("PhoneCallCaller")
+  phoneCallsTransferredTo   PhoneCall[] @relation("PhoneCallTransferredTo")
+  phoneCallsTransferredFrom PhoneCall[] @relation("PhoneCallTransferredFrom")
   smsMessages         SmsMessage[] @relation("SmsMessageSender")
   emailMessages       EmailMessage[] @relation("EmailMessageSender")
   twilioPhoneNumber   TwilioPhoneNumber?
@@ -836,6 +838,7 @@ model Buyer {
   @@index([dateOfBirth])
   @@index([salesPersonId])
   @@index([bdcAgentId])
+  @@unique([tenantId, phoneMain])
   @@map("buyers")
 }
 
@@ -2003,52 +2006,79 @@ model PhoneCall {
   id            String    @id @default(uuid())
   tenantId      String
 
-  // Call participants
-  callerId      String    // TenantUser who made/received the call
-  buyerId       String    // Buyer involved in the call
+  // Call participants (optional - may not always be known)
+  callerId      String?   // TenantUser who made/received the call
+  buyerId       String?   // Buyer involved in the call (matched by phone number)
 
   // Call details
   direction     String    // inbound, outbound
-  status        String    @default("completed") // completed, missed, no_answer, busy, voicemail, cancelled
-  phoneNumber   String    // The phone number called/received from
+  status        String    @default("initiated") // initiated, ringing, in-progress, completed, no-answer, busy, failed, canceled
+  fromNumber    String    // Phone number that initiated the call
+  toNumber      String    // Phone number that received the call
 
   // Timing
-  startedAt     DateTime
+  startedAt     DateTime  @default(now())
+  answeredAt    DateTime? // When the call was answered
   endedAt       DateTime?
-  duration      Int?      // Duration in seconds
+  duration      Int?      // Duration in seconds (from answeredAt to endedAt)
 
   // Call outcome
   outcome       String?   // interested, not_interested, callback_requested, wrong_number, left_voicemail, etc.
   notes         String?   // Call notes/summary
 
-  // Optional - for integrations
-  externalId    String?   // External system call ID (e.g., from VoIP provider)
-  recordingUrl  String?   // URL to call recording if available
+  // Twilio integration
+  twilioCallSid      String?   @unique // Twilio Call SID for tracking
+  twilioRecordingSid String?   // Twilio Recording SID
+  conferenceSid      String?   // Twilio Conference SID (for conference-based calls)
+  conferenceName     String?   // Conference name (unique per segment)
+  segmentNumber      Int       @default(0) // Segment number in call chain (0=original, 1+=transfers)
+  recordingUrl       String?   // S3 URL to call recording
+  recordingDuration  Int?      // Recording duration in seconds
 
-  // Twilio transcription and AI analysis
-  transcription String?   // Full transcription text from Twilio
-  transcriptionSid String? // Twilio transcription SID
-  transcriptionStatus String? // pending, completed, failed
+  // Transcription
+  transcription       String?   // Full transcription text
+  transcriptionStatus String?   // pending, processing, completed, failed
+
+  // AI analysis (for future use)
   aiSummary     String?   // AI-generated summary of the call
   aiSentiment   String?   // AI-detected sentiment: positive, neutral, negative
   aiKeyPoints   Json?     // AI-extracted key points as JSON array
   aiNextSteps   Json?     // AI-suggested next steps as JSON array
 
+  // Transfer tracking
+  transferredAt         DateTime?   // When the call was transferred
+  transferredToUserId   String?     // TenantUser ID the call was transferred to
+  transferredFromUserId String?     // TenantUser ID who transferred the call
+  transferReason        String?     // Optional reason for transfer
+  parentCallId          String?     // Reference to original call (for transfer segments)
+
   metaValue     Json?
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
-  tenant        Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  caller        TenantUser @relation("PhoneCallCaller", fields: [callerId], references: [id])
-  buyer         Buyer      @relation(fields: [buyerId], references: [id], onDelete: Cascade)
+  tenant            Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  caller            TenantUser? @relation("PhoneCallCaller", fields: [callerId], references: [id])
+  buyer             Buyer?      @relation(fields: [buyerId], references: [id], onDelete: Cascade)
+  transferredTo     TenantUser? @relation("PhoneCallTransferredTo", fields: [transferredToUserId], references: [id])
+  transferredFrom   TenantUser? @relation("PhoneCallTransferredFrom", fields: [transferredFromUserId], references: [id])
+  parentCall        PhoneCall?  @relation("CallTransferChain", fields: [parentCallId], references: [id])
+  transferSegments  PhoneCall[] @relation("CallTransferChain")
 
   @@index([tenantId])
+  @@index([parentCallId])
   @@index([callerId])
   @@index([buyerId])
   @@index([direction])
   @@index([status])
   @@index([startedAt])
   @@index([createdAt])
+  @@index([twilioCallSid])
+  @@index([conferenceSid])
+  @@index([conferenceName])
+  @@index([fromNumber])
+  @@index([toNumber])
+  @@index([transferredToUserId])
+  @@index([transferredFromUserId])
   @@map("phone_calls")
 }
 

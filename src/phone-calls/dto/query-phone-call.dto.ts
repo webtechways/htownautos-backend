@@ -1,5 +1,5 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { IsUUID, IsOptional, IsInt, Min, Max, IsEnum, IsDateString } from 'class-validator';
+import { IsUUID, IsOptional, IsInt, Min, Max, IsEnum, IsDateString, IsString } from 'class-validator';
 import { Type } from 'class-transformer';
 import { CallDirection, CallStatus, CallOutcome } from './create-phone-call.dto';
 
@@ -8,6 +8,11 @@ export class QueryPhoneCallDto {
   @IsUUID()
   @IsOptional()
   buyerId?: string;
+
+  @ApiPropertyOptional({ description: 'Comma-separated list of phone numbers to search' })
+  @IsString()
+  @IsOptional()
+  phones?: string;
 
   @ApiPropertyOptional({ description: 'Filter by caller (TenantUser) ID' })
   @IsUUID()

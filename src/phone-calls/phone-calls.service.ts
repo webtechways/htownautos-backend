@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma.service';
 import { CreatePhoneCallDto, UpdatePhoneCallDto, CallStatus } from './dto/create-phone-call.dto';
 import { QueryPhoneCallDto } from './dto/query-phone-call.dto';
@@ -6,7 +6,41 @@ import { Prisma } from '@prisma/client';
 
 @Injectable()
 export class PhoneCallsService {
+  private readonly logger = new Logger(PhoneCallsService.name);
+
   constructor(private prisma: PrismaService) {}
+
+  /**
+   * Check if a user can access call recordings (all roles except salesperson)
+   */
+  async canUserAccessRecordings(tenantId: string, userId: string): Promise<boolean> {
+    const tenantUser = await this.prisma.tenantUser.findUnique({
+      where: {
+        tenantId_userId: { tenantId, userId },
+      },
+      include: {
+        role: { select: { slug: true } },
+      },
+    });
+    const roleSlug = tenantUser?.role?.slug;
+    // Only salesperson is restricted from accessing recordings
+    return roleSlug !== undefined && roleSlug !== 'salesperson';
+  }
+
+  /**
+   * Filter out recording URLs and transcriptions from call data if user is salesperson
+   */
+  private filterSensitiveData<T extends { recordingUrl?: string | null; transcription?: string | null }>(
+    data: T[],
+    canAccessRecordings: boolean,
+  ): T[] {
+    if (canAccessRecordings) return data;
+    return data.map((call) => ({
+      ...call,
+      recordingUrl: null,
+      transcription: null,
+    }));
+  }
 
   private readonly includeRelations = {
     caller: {
@@ -30,6 +64,32 @@ export class PhoneCallsService {
         email: true,
         phoneMain: true,
         phoneMobile: true,
+      },
+    },
+    transferredTo: {
+      include: {
+        user: {
+          select: {
+            id: true,
+            email: true,
+            firstName: true,
+            lastName: true,
+            avatar: true,
+          },
+        },
+      },
+    },
+    transferredFrom: {
+      include: {
+        user: {
+          select: {
+            id: true,
+            email: true,
+            firstName: true,
+            lastName: true,
+            avatar: true,
+          },
+        },
       },
     },
   };
@@ -58,17 +118,16 @@ export class PhoneCallsService {
         buyerId: createPhoneCallDto.buyerId,
         direction: createPhoneCallDto.direction,
         status: createPhoneCallDto.status || CallStatus.COMPLETED,
-        phoneNumber: createPhoneCallDto.phoneNumber,
+        fromNumber: createPhoneCallDto.fromNumber,
+        toNumber: createPhoneCallDto.toNumber,
         startedAt: new Date(createPhoneCallDto.startedAt),
         endedAt: createPhoneCallDto.endedAt ? new Date(createPhoneCallDto.endedAt) : null,
         duration: createPhoneCallDto.duration,
         outcome: createPhoneCallDto.outcome,
         notes: createPhoneCallDto.notes,
-        externalId: createPhoneCallDto.externalId,
         recordingUrl: createPhoneCallDto.recordingUrl,
         // Transcription fields
         transcription: createPhoneCallDto.transcription,
-        transcriptionSid: createPhoneCallDto.transcriptionSid,
         transcriptionStatus: createPhoneCallDto.transcriptionStatus,
         // AI analysis fields
         aiSummary: createPhoneCallDto.aiSummary,
@@ -80,7 +139,7 @@ export class PhoneCallsService {
     });
   }
 
-  async findAll(tenantId: string, query: QueryPhoneCallDto) {
+  async findAll(tenantId: string, query: QueryPhoneCallDto, canAccessRecordings = true) {
     const {
       buyerId,
       callerId,
@@ -125,15 +184,16 @@ export class PhoneCallsService {
     ]);
 
     return {
-      data,
+      data: this.filterSensitiveData(data, canAccessRecordings),
       total,
       page,
       limit,
       totalPages: Math.ceil(total / limit),
+      canAccessRecordings,
     };
   }
 
-  async findOne(tenantId: string, id: string) {
+  async findOne(tenantId: string, id: string, canAccessRecordings = true) {
     const phoneCall = await this.prisma.phoneCall.findFirst({
       where: { id, tenantId },
       include: this.includeRelations,
@@ -141,6 +201,10 @@ export class PhoneCallsService {
 
     if (!phoneCall) {
       throw new NotFoundException('Phone call not found');
+    }
+
+    if (!canAccessRecordings) {
+      return { ...phoneCall, recordingUrl: null, transcription: null };
     }
 
     return phoneCall;
@@ -153,7 +217,8 @@ export class PhoneCallsService {
 
     if (updatePhoneCallDto.direction !== undefined) data.direction = updatePhoneCallDto.direction;
     if (updatePhoneCallDto.status !== undefined) data.status = updatePhoneCallDto.status;
-    if (updatePhoneCallDto.phoneNumber !== undefined) data.phoneNumber = updatePhoneCallDto.phoneNumber;
+    if (updatePhoneCallDto.fromNumber !== undefined) data.fromNumber = updatePhoneCallDto.fromNumber;
+    if (updatePhoneCallDto.toNumber !== undefined) data.toNumber = updatePhoneCallDto.toNumber;
     if (updatePhoneCallDto.startedAt !== undefined) data.startedAt = new Date(updatePhoneCallDto.startedAt);
     if (updatePhoneCallDto.endedAt !== undefined) {
       data.endedAt = updatePhoneCallDto.endedAt ? new Date(updatePhoneCallDto.endedAt) : null;
@@ -161,11 +226,9 @@ export class PhoneCallsService {
     if (updatePhoneCallDto.duration !== undefined) data.duration = updatePhoneCallDto.duration;
     if (updatePhoneCallDto.outcome !== undefined) data.outcome = updatePhoneCallDto.outcome;
     if (updatePhoneCallDto.notes !== undefined) data.notes = updatePhoneCallDto.notes;
-    if (updatePhoneCallDto.externalId !== undefined) data.externalId = updatePhoneCallDto.externalId;
     if (updatePhoneCallDto.recordingUrl !== undefined) data.recordingUrl = updatePhoneCallDto.recordingUrl;
     // Transcription fields
     if (updatePhoneCallDto.transcription !== undefined) data.transcription = updatePhoneCallDto.transcription;
-    if (updatePhoneCallDto.transcriptionSid !== undefined) data.transcriptionSid = updatePhoneCallDto.transcriptionSid;
     if (updatePhoneCallDto.transcriptionStatus !== undefined) data.transcriptionStatus = updatePhoneCallDto.transcriptionStatus;
     // AI analysis fields
     if (updatePhoneCallDto.aiSummary !== undefined) data.aiSummary = updatePhoneCallDto.aiSummary;
@@ -188,8 +251,91 @@ export class PhoneCallsService {
     return { message: 'Phone call deleted successfully' };
   }
 
-  async findByBuyer(tenantId: string, buyerId: string, query: QueryPhoneCallDto) {
-    return this.findAll(tenantId, { ...query, buyerId });
+  async findByBuyer(tenantId: string, buyerId: string, query: QueryPhoneCallDto, canAccessRecordings = true) {
+    return this.findAll(tenantId, { ...query, buyerId }, canAccessRecordings);
+  }
+
+  /**
+   * Find calls where fromNumber or toNumber matches any of the provided phone numbers
+   * Used to display call history for a buyer based on their phone numbers
+   */
+  async findByPhoneNumbers(
+    tenantId: string,
+    phoneNumbers: string[],
+    query: QueryPhoneCallDto,
+    canAccessRecordings = true,
+  ) {
+    const {
+      page = 1,
+      limit = 20,
+      sortBy = 'startedAt',
+      sortOrder = 'desc',
+      direction,
+      status,
+    } = query;
+
+    // Normalize phone numbers to E.164 format for comparison
+    const normalizedNumbers = phoneNumbers
+      .filter(Boolean)
+      .map((phone) => {
+        // Remove all non-digit characters
+        const digits = phone.replace(/\D/g, '');
+        // If it's a 10-digit US number, add +1 prefix
+        if (digits.length === 10) {
+          return `+1${digits}`;
+        }
+        // If it's 11 digits starting with 1, add + prefix
+        if (digits.length === 11 && digits.startsWith('1')) {
+          return `+${digits}`;
+        }
+        // Otherwise return with + prefix if not already present
+        return digits.startsWith('+') ? digits : `+${digits}`;
+      });
+
+    if (normalizedNumbers.length === 0) {
+      return {
+        data: [],
+        total: 0,
+        page,
+        limit,
+        totalPages: 0,
+        canAccessRecordings,
+      };
+    }
+
+    const where: Prisma.PhoneCallWhereInput = {
+      tenantId,
+      OR: [
+        { fromNumber: { in: normalizedNumbers } },
+        { toNumber: { in: normalizedNumbers } },
+      ],
+    };
+
+    // Apply optional filters
+    if (direction) where.direction = direction;
+    if (status) where.status = status;
+
+    const skip = (page - 1) * limit;
+
+    const [data, total] = await Promise.all([
+      this.prisma.phoneCall.findMany({
+        where,
+        skip,
+        take: limit,
+        orderBy: { [sortBy]: sortOrder },
+        include: this.includeRelations,
+      }),
+      this.prisma.phoneCall.count({ where }),
+    ]);
+
+    return {
+      data: this.filterSensitiveData(data, canAccessRecordings),
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit),
+      canAccessRecordings,
+    };
   }
 
   async getCallStats(tenantId: string, buyerId?: string, callerId?: string) {

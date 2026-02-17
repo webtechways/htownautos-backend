@@ -4,6 +4,8 @@ import { PresenceService } from './presence.service';
 import { PresenceController } from './presence.controller';
 import { PresenceInterceptor } from './presence.interceptor';
 import { PresenceGateway } from './presence.gateway';
+import { PhoneCallEventsService } from './phone-call-events.service';
+import { SmsEventsService } from './sms-events.service';
 import { PrismaModule } from '../prisma.module';
 
 @Global()
@@ -12,6 +14,8 @@ import { PrismaModule } from '../prisma.module';
   controllers: [PresenceController],
   providers: [
     PresenceService,
+    PhoneCallEventsService,
+    SmsEventsService,
     PresenceGateway,
     // Register interceptor globally to track all API activity
     {
@@ -19,6 +23,6 @@ import { PrismaModule } from '../prisma.module';
       useClass: PresenceInterceptor,
     },
   ],
-  exports: [PresenceService, PresenceGateway],
+  exports: [PresenceService, PresenceGateway, PhoneCallEventsService, SmsEventsService],
 })
 export class PresenceModule {}
