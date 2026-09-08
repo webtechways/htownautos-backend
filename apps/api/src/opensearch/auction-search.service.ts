@@ -1056,43 +1056,58 @@ export class AuctionSearchService {
    * sensacion de "la app tarda en levantar".
    *
    * Antes era un `aggregate` con `_max(updatedAt)` y `_count`: dos escaneos
-   * completos de 300k filas con columnas JSON grandes detras. Tardaba 35s.
+   * completos con las columnas JSON de la tabla detras. Tardaba 35 segundos.
    *
-   * Ahora el maximo sale del indice, y el total de la estimacion del planificador
-   * — para un contador de cabecera no compensa un COUNT(*) de la tabla entera.
-   * Ademas se cachea un minuto: el valor solo cambia cuando corre un sync.
+   * El maximo ya sale del indice.
+   *
+   * El total ya no se calcula en la peticion. Dos motivos: **el dashboard no lo
+   * usa** —el "306.018 listings" de la cabecera sale de `meta.total` del
+   * buscador— y la estimacion del planificador daba 1,5M frente a 306k reales,
+   * porque la tabla arrastra unas cinco veces su tamaño en tuplas muertas.
+   *
+   * Se mantiene el campo por si algo fuera de esta app lo lee, pero se refresca
+   * por detras y como mucho una vez por hora.
    */
-  private lastSyncCache: { at: number; value: { lastSyncAt: Date | null; totalListings: number } } | null =
-    null;
+  private lastSync: { lastSyncAt: Date | null; totalListings: number | null } = {
+    lastSyncAt: null,
+    totalListings: null,
+  };
+  private countedAt = 0;
+  private counting = false;
+
+  /**
+   * El conteo exacto tarda decenas de segundos sobre esta tabla, asi que se hace
+   * fuera de la peticion y nunca la bloquea. Espaciado a una hora porque nadie
+   * en la app lo mira.
+   */
+  private refreshCount() {
+    if (this.counting || Date.now() - this.countedAt < 60 * 60_000) return;
+    this.counting = true;
+    this.prisma.auctionListing
+      .count()
+      .then((total) => {
+        this.lastSync.totalListings = total;
+        this.countedAt = Date.now();
+      })
+      .catch((e) => this.logger.warn(`[LastSync] conteo fallido: ${e.message}`))
+      .finally(() => {
+        this.counting = false;
+      });
+  }
 
   async getLastSyncTime() {
-    if (this.lastSyncCache && Date.now() - this.lastSyncCache.at < 60_000) {
-      return this.lastSyncCache.value;
-    }
+    // Del indice: es un salto al final, no un escaneo.
+    const latest = await this.prisma.auctionListing.findFirst({
+      orderBy: { updatedAt: 'desc' },
+      select: { updatedAt: true },
+    });
+    this.lastSync.lastSyncAt = latest?.updatedAt ?? null;
 
-    const [latest, estimate] = await Promise.all([
-      // Con el indice en updatedAt esto es un salto al final, no un escaneo.
-      this.prisma.auctionListing.findFirst({
-        orderBy: { updatedAt: 'desc' },
-        select: { updatedAt: true },
-      }),
-      this.prisma.$queryRaw<Array<{ estimate: bigint }>>`
-        SELECT reltuples::bigint AS estimate
-        FROM pg_class
-        WHERE relname = 'auction_listings'
-      `.catch(() => []),
-    ]);
+    this.refreshCount();
 
-    let totalListings = Number(estimate?.[0]?.estimate ?? 0);
-    // reltuples es -1 en una tabla que nunca paso por ANALYZE. Solo entonces se
-    // paga el conteo exacto.
-    if (!Number.isFinite(totalListings) || totalListings <= 0) {
-      totalListings = await this.prisma.auctionListing.count();
-    }
-
-    const value = { lastSyncAt: latest?.updatedAt ?? null, totalListings };
-    this.lastSyncCache = { at: Date.now(), value };
-    return value;
+    // En el primer arranque todavia no hay conteo. Se manda null en vez de una
+    // estimacion inflada: un hueco un segundo es mejor que un numero falso.
+    return { ...this.lastSync };
   }
 
   /** Bypass: fetch directly from Copart API, no cache read/write */
