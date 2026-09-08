@@ -303,6 +303,7 @@ export class StatsService {
       buyerCountry: r.buyerCountry,
       itemNo: r.itemNo,
       emittedAt: r.emittedAt,
+      pendingApproval: r.pendingApproval,
       matched: r.matched,
       vin: r.vin,
       year: r.year,

@@ -14,7 +14,7 @@
  * mucho mas que un despliegue.
  */
 
-export type AuctionEventType = 'BIDREC' | 'SOLD' | 'OTHER';
+export type AuctionEventType = 'BIDREC' | 'PREBID' | 'SOLD' | 'SOLDPEND' | 'OTHER';
 
 export interface DecodedFrame {
   /** Sala, p.ej. `COPART833C`. */
@@ -93,6 +93,16 @@ export function looksLikeAuctionFrame(raw: string): boolean {
   return raw.includes('auction/outbound') || ENVELOPE_RE.test(raw);
 }
 
+/** Una venta, confirmada o pendiente de que el vendedor apruebe. */
+export function isSaleEvent(e: AuctionEventType): boolean {
+  return e === 'SOLD' || e === 'SOLDPEND';
+}
+
+/** Una puja: en vivo (BIDREC) o previa al remate (PREBID). */
+export function isBidEvent(e: AuctionEventType): boolean {
+  return e === 'BIDREC' || e === 'PREBID';
+}
+
 /**
  * Decodifica un frame en base64. Devuelve `null` cuando no es un evento de
  * subasta — keepalives y control de Solace pasan por el mismo socket.
@@ -125,8 +135,10 @@ export function decodeSolaceFrame(base64Frame: string): DecodedFrame | null {
   if (!payload || typeof payload !== 'object') return null;
 
   const rawEvent = str(envelope.event);
-  const event: AuctionEventType =
-    rawEvent === 'BIDREC' || rawEvent === 'SOLD' ? rawEvent : 'OTHER';
+  const CONOCIDOS = ['BIDREC', 'PREBID', 'SOLD', 'SOLDPEND'] as const;
+  const event: AuctionEventType = (CONOCIDOS as readonly string[]).includes(rawEvent ?? '')
+    ? (rawEvent as AuctionEventType)
+    : 'OTHER';
 
   const emit = num(envelope?.metadata?.emitTimestamp);
 
@@ -137,8 +149,13 @@ export function decodeSolaceFrame(base64Frame: string): DecodedFrame | null {
     emittedAt: emit ? new Date(emit) : null,
     lot: normalizeLot(payload.LOTNO),
     itemNo: num(payload.ITEMNO),
-    // Aqui esta el cambio de nombre entre eventos.
-    amount: event === 'SOLD' ? num(payload.BID) : num(payload.CURBID),
+    // El campo del importe cambia de nombre segun el evento: `BID` a secas en
+    // las ventas, `CURBID` en las pujas. Buscar siempre `CURBID` se come todas
+    // las ventas.
+    amount:
+      event === 'SOLD' || event === 'SOLDPEND'
+        ? (num(payload.BID) ?? num(payload.CURBID))
+        : (num(payload.CURBID) ?? num(payload.BID)),
     askBid: num(payload.ASKBID ?? payload.ASK),
     nextBid: num(payload.NEXT),
     increment: num(payload.INCREMENT),

@@ -50,6 +50,8 @@ export {
   decodeSolaceFrame,
   looksLikeAuctionFrame,
   normalizeLot,
+  isSaleEvent,
+  isBidEvent,
 } from './auction/solace-frame.decoder';
 export type { DecodedFrame, AuctionEventType } from './auction/solace-frame.decoder';
 export type { SellerRisk } from './utils/seller-risk.utils';

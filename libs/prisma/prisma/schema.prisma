@@ -2111,6 +2111,9 @@ model AuctionSaleResult {
   itemNo       Int?
   /// Instante en que Copart emitio el evento, distinto de cuando nos llego.
   emittedAt    DateTime?
+  /// SOLDPEND: adjudicada pero a la espera de que el vendedor acepte la puja.
+  /// Un SOLD posterior del mismo lote la confirma y esto pasa a false.
+  pendingApproval Boolean?
 
   // ── Vehicle snapshot promoted from auction_listings (for fast stats) ──
   matched           Boolean  @default(false) // was the lot found in auction_listings?
@@ -2183,6 +2186,10 @@ model AuctionBidEvent {
   id  String @id @default(uuid())
   lot BigInt
 
+  /// BIDREC (puja en vivo) o PREBID (puja previa al remate). Son la misma
+  /// forma de dato pero no valen lo mismo: una preventa no es una puja en sala.
+  eventType String @default("BIDREC")
+
   saleRoom  String?
   itemNo    Int?
   /// `CURBID`: lo que se ha pujado.
@@ -2204,11 +2211,14 @@ model AuctionBidEvent {
 
   raw Json?
 
-  /// Idempotencia: el mismo evento reenviado por dos VM no duplica fila.
-  @@unique([lot, emittedAt, bid])
+  /// Idempotencia: el mismo evento reenviado por dos VM no duplica fila. El
+  /// tipo entra en la clave porque una PREBID y una BIDREC pueden coincidir en
+  /// instante e importe y son eventos distintos.
+  @@unique([lot, eventType, emittedAt, bid])
   @@index([lot])
   @@index([saleRoom])
   @@index([emittedAt])
+  @@index([eventType])
   @@map("auction_bid_events")
 }
 

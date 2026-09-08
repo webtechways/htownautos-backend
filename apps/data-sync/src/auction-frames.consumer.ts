@@ -1,6 +1,6 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { PrismaService } from '@htownautos/prisma';
-import { decodeSolaceFrame, type DecodedFrame } from '@htownautos/common';
+import { decodeSolaceFrame, isBidEvent, isSaleEvent, type DecodedFrame } from '@htownautos/common';
 import {
   RabbitMQService,
   AUCTION_FRAMES_QUEUE,
@@ -65,7 +65,7 @@ export class AuctionFramesConsumer implements OnModuleInit {
     }
 
     try {
-      if (decoded.event === 'BIDREC') await this.saveBid(decoded);
+      if (isBidEvent(decoded.event)) await this.saveBid(decoded);
       else await this.saveSale(decoded);
 
       await this.prisma.auctionRawFrame.update({
@@ -118,13 +118,14 @@ export class AuctionFramesConsumer implements OnModuleInit {
     };
   }
 
-  /** Una puja. Idempotente por (lot, emittedAt, bid). */
+  /** Una puja, en vivo o previa. Idempotente por (lot, tipo, instante, importe). */
   private async saveBid(d: DecodedFrame): Promise<void> {
     const lot = BigInt(d.lot!);
     await this.prisma.auctionBidEvent
       .create({
         data: {
           lot,
+          eventType: d.event,
           saleRoom: d.sale,
           itemNo: d.itemNo,
           bid: d.amount,
@@ -153,6 +154,7 @@ export class AuctionFramesConsumer implements OnModuleInit {
    * que de verdad se vendio, y es la mitad de la clave unica.
    */
   private async saveSale(d: DecodedFrame): Promise<void> {
+    if (!isSaleEvent(d.event)) return;
     const lot = BigInt(d.lot!);
     const when = d.emittedAt ?? new Date();
     const saleDate =
@@ -167,6 +169,10 @@ export class AuctionFramesConsumer implements OnModuleInit {
       itemNo: d.itemNo,
       finalBid: d.amount,
       sold: true,
+      // SOLDPEND es una adjudicacion a la espera de que el vendedor acepte. Se
+      // guarda como venta —lo es— pero marcada, para no contar como cerrado algo
+      // que todavia puede caerse. Un SOLD posterior del mismo lote la confirma.
+      pendingApproval: d.event === 'SOLDPEND',
       reserveMet: d.reserveMet,
       approved: d.approved,
       buyerNo: d.buyerNo,
@@ -174,7 +180,7 @@ export class AuctionFramesConsumer implements OnModuleInit {
       buyerCountry: d.buyerCountry,
       emittedAt: d.emittedAt,
       receivedAt: new Date(),
-      event: 'SOLD',
+      event: d.event,
       matched: !!listing,
       ...(listing
         ? {
