@@ -292,6 +292,17 @@ export class StatsService {
       event: r.event,
       pageUrl: r.pageUrl,
       receivedAt: r.receivedAt,
+      // Lo que solo trae el frame de la subasta en vivo. El serializador es una
+      // lista explicita, asi que una columna nueva no aparece sola: se guardaba
+      // bien y se leia como null.
+      saleRoom: r.saleRoom,
+      reserveMet: r.reserveMet,
+      approved: r.approved,
+      buyerNo: r.buyerNo,
+      buyerState: r.buyerState,
+      buyerCountry: r.buyerCountry,
+      itemNo: r.itemNo,
+      emittedAt: r.emittedAt,
       matched: r.matched,
       vin: r.vin,
       year: r.year,
