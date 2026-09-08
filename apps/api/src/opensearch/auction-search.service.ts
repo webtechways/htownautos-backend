@@ -1051,15 +1051,48 @@ export class AuctionSearchService {
     return { lotNumber: lotNumberStr, highBid };
   }
 
+  /**
+   * Lo primero que pide el dashboard al arrancar, asi que su latencia es la
+   * sensacion de "la app tarda en levantar".
+   *
+   * Antes era un `aggregate` con `_max(updatedAt)` y `_count`: dos escaneos
+   * completos de 300k filas con columnas JSON grandes detras. Tardaba 35s.
+   *
+   * Ahora el maximo sale del indice, y el total de la estimacion del planificador
+   * — para un contador de cabecera no compensa un COUNT(*) de la tabla entera.
+   * Ademas se cachea un minuto: el valor solo cambia cuando corre un sync.
+   */
+  private lastSyncCache: { at: number; value: { lastSyncAt: Date | null; totalListings: number } } | null =
+    null;
+
   async getLastSyncTime() {
-    const result = await this.prisma.auctionListing.aggregate({
-      _max: { updatedAt: true },
-      _count: true,
-    });
-    return {
-      lastSyncAt: result._max.updatedAt,
-      totalListings: result._count,
-    };
+    if (this.lastSyncCache && Date.now() - this.lastSyncCache.at < 60_000) {
+      return this.lastSyncCache.value;
+    }
+
+    const [latest, estimate] = await Promise.all([
+      // Con el indice en updatedAt esto es un salto al final, no un escaneo.
+      this.prisma.auctionListing.findFirst({
+        orderBy: { updatedAt: 'desc' },
+        select: { updatedAt: true },
+      }),
+      this.prisma.$queryRaw<Array<{ estimate: bigint }>>`
+        SELECT reltuples::bigint AS estimate
+        FROM pg_class
+        WHERE relname = 'auction_listings'
+      `.catch(() => []),
+    ]);
+
+    let totalListings = Number(estimate?.[0]?.estimate ?? 0);
+    // reltuples es -1 en una tabla que nunca paso por ANALYZE. Solo entonces se
+    // paga el conteo exacto.
+    if (!Number.isFinite(totalListings) || totalListings <= 0) {
+      totalListings = await this.prisma.auctionListing.count();
+    }
+
+    const value = { lastSyncAt: latest?.updatedAt ?? null, totalListings };
+    this.lastSyncCache = { at: Date.now(), value };
+    return value;
   }
 
   /** Bypass: fetch directly from Copart API, no cache read/write */

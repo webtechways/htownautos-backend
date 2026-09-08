@@ -2030,6 +2030,9 @@ model AuctionListing {
   @@index([locationState])
   @@index([damageDescription])
   @@index([createdAt])
+  /// MAX(updatedAt) lo pide el dashboard en cada arranque. Sin indice son
+  /// 300k filas escaneadas con sus columnas JSON detras.
+  @@index([updatedAt])
   @@index([isStale])
   @@index([lastSeenAt])
   @@index([yardId])
