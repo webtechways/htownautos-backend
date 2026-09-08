@@ -2232,6 +2232,10 @@ model AuctionRawFrame {
   event  String?
   lot    BigInt?
   error  String?
+  /// Lo decodificado, para poder verlo en el Live Feed sin cruzar tablas.
+  /// Se rellena tambien en los `ignored`: un evento que aun no tratamos se
+  /// entiende mirando sus datos, no su nombre.
+  summary Json?
 
   receivedAt  DateTime  @default(now())
   processedAt DateTime?

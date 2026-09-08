@@ -54,6 +54,10 @@ export class AuctionFramesConsumer implements OnModuleInit {
         data: {
           status: 'ignored',
           event: decoded?.rawEvent ?? null,
+          lot: decoded?.lot ? BigInt(decoded.lot) : null,
+          // Se guarda igual: un evento que aun no tratamos —PREBID, SOLDPEND—
+          // solo se puede evaluar viendo sus datos.
+          summary: decoded ? (this.summarize(decoded) as any) : undefined,
           processedAt: new Date(),
         },
       });
@@ -70,6 +74,7 @@ export class AuctionFramesConsumer implements OnModuleInit {
           status: 'processed',
           event: decoded.rawEvent,
           lot: BigInt(decoded.lot),
+          summary: this.summarize(decoded) as any,
           error: null,
           processedAt: new Date(),
         },
@@ -89,6 +94,28 @@ export class AuctionFramesConsumer implements OnModuleInit {
       });
       this.logger.warn(`[Frames] ${row.id} fallo: ${err?.message}`);
     }
+  }
+
+  /** Lo que se enseña en el Live Feed. El payload entero sigue en `raw`. */
+  private summarize(d: DecodedFrame) {
+    return {
+      sale: d.sale,
+      lot: d.lot,
+      itemNo: d.itemNo,
+      amount: d.amount,
+      askBid: d.askBid,
+      nextBid: d.nextBid,
+      increment: d.increment,
+      reserveMet: d.reserveMet,
+      approved: d.approved,
+      buyerNo: d.buyerNo,
+      buyerState: d.buyerState,
+      buyerCountry: d.buyerCountry,
+      emittedAt: d.emittedAt?.toISOString() ?? null,
+      // El payload crudo tambien: es donde se ven los campos que todavia no
+      // sabemos leer, que es justo lo que hace falta para PREBID y SOLDPEND.
+      fields: d.payload,
+    };
   }
 
   /** Una puja. Idempotente por (lot, emittedAt, bid). */

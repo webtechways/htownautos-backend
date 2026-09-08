@@ -68,7 +68,7 @@ export class AuctionFramesService {
         take: 25,
         select: {
           id: true, status: true, event: true, lot: true, worker: true,
-          error: true, receivedAt: true, processedAt: true,
+          error: true, receivedAt: true, processedAt: true, summary: true,
         },
       }),
     ]);
