@@ -38,6 +38,7 @@ export const API_SCOPE_RESOURCES: ApiScopeResource[] = [
   { slug: 'vehicle-inspections', label: 'Vehicle Inspections', description: 'Inspection requests, checklists and results' },
   { slug: 'inspection-share-links', label: 'Inspection Share Links', description: 'Public share links for inspections' },
   { slug: 'favorites', label: 'Favorites', description: 'Favorited listings and entities' },
+  { slug: 'auction-ingest', label: 'Live Auction Ingest', description: 'Forward live bid/sale frames and claim auctions (scraper VMs)' },
 
   // — Communications —
   { slug: 'tasks', label: 'Tasks', description: 'Tasks / to-dos' },

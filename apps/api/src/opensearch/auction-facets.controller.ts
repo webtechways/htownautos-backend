@@ -5,12 +5,15 @@ import {
   ParseIntPipe,
   DefaultValuePipe,
 } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import { ApiTags, ApiOperation, ApiQuery } from '@nestjs/swagger';
 import { AuctionFacetsService } from './auction-facets.service';
 import { Public } from '@htownautos/auth';
 
+/** Las facetas se recalculan en cada cambio de filtro; son agregaciones. */
 @ApiTags('Auction Facets')
 @Controller('auction-facets')
+@Throttle({ default: { limit: 240, ttl: 60_000 } })
 export class AuctionFacetsController {
   constructor(private readonly service: AuctionFacetsService) {}
 

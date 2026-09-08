@@ -1,4 +1,5 @@
 import { Controller, Get, Param, Query } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { Public } from '@htownautos/auth';
 import { StatsService } from './stats.service';
@@ -9,9 +10,13 @@ import { QueryStatsDto } from './dto/query-stats.dto';
  * Listing". Separate controller from the ingest one so the ingest API-key
  * guard doesn't apply here. Marked @Public() to match the global (non-tenant)
  * auction data pattern used by /auctions/search.
+ *
+ * Tope propio: la rejilla de Stats pide 24 galerias por pagina, asi que va
+ * holgado — corta el raspado masivo sin estorbar al uso normal.
  */
 @ApiTags('Auction Sale Results')
 @Controller('auction-sale-results')
+@Throttle({ default: { limit: 300, ttl: 60_000 } })
 export class StatsController {
   constructor(private readonly stats: StatsService) {}
 

@@ -11,6 +11,7 @@ import {
   HttpStatus,
   UseGuards,
 } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import {
   ApiTags,
   ApiOperation,
@@ -41,7 +42,13 @@ import { PrismaService } from '@htownautos/prisma';
  * are cheap.
  */
 @ApiTags('Auctions (OpenSearch)')
+/**
+ * Tope propio: cada busqueda es una consulta a OpenSearch con agregaciones, y
+ * la galeria sale a Copart por proxy. 300/min deja de sobra para navegar —una
+ * rejilla carga 24 fichas— y corta el raspado masivo.
+ */
 @Controller('auctions')
+@Throttle({ default: { limit: 300, ttl: 60_000 } })
 export class AuctionSearchController {
   constructor(
     private readonly searchService: AuctionSearchService,
