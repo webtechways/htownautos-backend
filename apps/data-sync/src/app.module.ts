@@ -12,6 +12,7 @@ import {
 } from '@htownautos/common';
 import { CopartImportService } from './copart-import.service';
 import { SyncTriggerListener } from './sync-trigger.listener';
+import { AuctionFramesConsumer } from './auction-frames.consumer';
 import { WantedMatchNotifierService } from './wanted-match-notifier.service';
 import { SellerClassificationNotifierService } from './seller-classification-notifier.service';
 import { AuctionAliasNotifierService } from './auction-alias-notifier.service';
@@ -31,6 +32,7 @@ import { ImageRetentionService } from './image-retention.service';
   providers: [
     CopartImportService,
     SyncTriggerListener,
+    AuctionFramesConsumer,
     WantedMatchNotifierService,
     SellerClassificationNotifierService,
     AuctionAliasNotifierService,

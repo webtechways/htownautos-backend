@@ -4,3 +4,5 @@ export {
   AUCTION_SYNC_TRIGGER_QUEUE,
   type AuctionSyncTriggerMessage,
 } from './auction-sync-trigger';
+
+export * from './auction-frames';

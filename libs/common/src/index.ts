@@ -46,6 +46,12 @@ export {
 } from './utils/auction-derive.utils';
 export type { SellerCategory } from './utils/auction-derive.utils';
 export { deriveSellerRisk, explainSellerRisk, SELLER_RISKS } from './utils/seller-risk.utils';
+export {
+  decodeSolaceFrame,
+  looksLikeAuctionFrame,
+  normalizeLot,
+} from './auction/solace-frame.decoder';
+export type { DecodedFrame, AuctionEventType } from './auction/solace-frame.decoder';
 export type { SellerRisk } from './utils/seller-risk.utils';
 export {
   CANONICAL_FIELDS,

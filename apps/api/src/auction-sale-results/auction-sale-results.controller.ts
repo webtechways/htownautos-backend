@@ -10,6 +10,8 @@ import { ApiOperation, ApiResponse, ApiSecurity, ApiTags } from '@nestjs/swagger
 import { Public } from '@htownautos/auth';
 import { AuctionIngestGuard } from './auction-ingest.guard';
 import { AuctionSaleResultsService } from './auction-sale-results.service';
+import { AuctionFramesService } from './auction-frames.service';
+import { IngestFramesDto } from './dto/ingest-frames.dto';
 import type { SaleResultItemDto } from './dto/ingest-sale-results.dto';
 
 /**
@@ -26,7 +28,10 @@ import type { SaleResultItemDto } from './dto/ingest-sale-results.dto';
 @Public()
 @UseGuards(AuctionIngestGuard)
 export class AuctionSaleResultsController {
-  constructor(private readonly service: AuctionSaleResultsService) {}
+  constructor(
+    private readonly service: AuctionSaleResultsService,
+    private readonly frames: AuctionFramesService,
+  ) {}
 
   @Post('ingest')
   @HttpCode(HttpStatus.OK)
@@ -54,5 +59,24 @@ export class AuctionSaleResultsController {
       if ('lot' in (payload as any)) return [payload as SaleResultItemDto];
     }
     return [];
+  }
+
+  /**
+   * Frames crudos de la subasta en vivo, uno o en lote.
+   *
+   * Ruta aparte de /ingest y no el mismo cuerpo: /ingest ya tiene una forma
+   * concreta que usa la extension actual, y aceptar dos formas distintas en la
+   * misma ruta deja la validacion ambigua y rompe lo que ya funciona el dia
+   * que una se parezca a la otra.
+   *
+   * Aqui no se decodifica: se guarda el crudo y se encola. La respuesta es
+   * inmediata pase lo que pase con el parser.
+   */
+  @Post('ingest/frames')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Queue raw live-auction frames (Solace) for decoding' })
+  @ApiResponse({ status: 200, description: 'How many arrived and how many were queued' })
+  ingestFrames(@Body() dto: IngestFramesDto) {
+    return this.frames.ingest(dto);
   }
 }
