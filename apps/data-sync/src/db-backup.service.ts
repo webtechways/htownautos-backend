@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { S3Service } from '@htownautos/common';
+import { EnvBackupService } from './env-backup.service';
 import { spawn } from 'node:child_process';
 import { createReadStream, createWriteStream, promises as fs } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -29,7 +30,10 @@ export class DbBackupService {
   private readonly logger = new Logger(DbBackupService.name);
   private running = false;
 
-  constructor(private readonly s3: S3Service) {}
+  constructor(
+    private readonly s3: S3Service,
+    private readonly envs: EnvBackupService,
+  ) {}
 
   /** 03:30 Houston: fuera de subastas y despues de la purga de frames. */
   @Cron('30 3 * * *', { timeZone: 'America/Chicago' })
@@ -64,6 +68,12 @@ export class DbBackupService {
       const segundos = Math.round((Date.now() - inicio) / 1000);
       this.logger.log(
         `[Backup] ${key} — ${(size / 1e9).toFixed(2)} GB en ${segundos}s`,
+      );
+
+      // La configuracion va con el volcado: tener la base sin las variables no
+      // permite levantar nada, y separarlas es como acaban desincronizadas.
+      await this.envs.run().catch((e) =>
+        this.logger.error(`[Backup] La configuracion no se guardo: ${e.message}`),
       );
 
       await this.purge();

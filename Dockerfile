@@ -31,7 +31,7 @@ ENV NODE_ENV=production
 # delante — un pg_dump mas viejo que el servidor falla en seco. Al reves si
 # funciona, asi que se coge el ultimo cliente.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      ca-certificates gnupg curl gzip \
+      ca-certificates gnupg curl gzip openssl \
     && install -d /usr/share/postgresql-common/pgdg \
     && curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
          -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
