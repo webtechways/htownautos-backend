@@ -16,8 +16,14 @@ import {
  *   otro   → se marca `ignored`: keepalives y control de Solace pasan por el
  *            mismo socket y no son un error.
  *
- * El frame crudo se conserva pase lo que pase, asi que un fallo del parser se
- * arregla desplegando y reencolando, sin haber perdido nada.
+ * El frame crudo **solo se conserva cuando la decodificacion fallo**, que es el
+ * unico caso en que es irreemplazable. Si se decodifico, `summary.fields` ya
+ * tiene el payload entero en forma legible: guardar ademas el base64 original
+ * es pagar 1.220 bytes por fila —el 60% de la tabla— por una copia peor de algo
+ * que ya esta ahi.
+ *
+ * Un `ignored` conserva por tanto todo lo que hace falta para decidir que hacer
+ * con un evento nuevo, que es justo para lo que existe.
  */
 @Injectable()
 export class AuctionFramesConsumer implements OnModuleInit {
@@ -55,6 +61,10 @@ export class AuctionFramesConsumer implements OnModuleInit {
           status: 'ignored',
           event: decoded?.rawEvent ?? null,
           lot: decoded?.lot ? BigInt(decoded.lot) : null,
+          // Se decodifico: el payload vive en `summary.fields` y el base64 ya
+          // no aporta. Si NO se decodifico, se conserva — es lo unico que
+          // permitiria arreglarlo.
+          frame: decoded ? '' : undefined,
           // Se guarda igual: un evento que aun no tratamos —PREBID, SOLDPEND—
           // solo se puede evaluar viendo sus datos.
           summary: decoded ? (this.summarize(decoded) as any) : undefined,
@@ -75,6 +85,8 @@ export class AuctionFramesConsumer implements OnModuleInit {
           event: decoded.rawEvent,
           lot: BigInt(decoded.lot),
           summary: this.summarize(decoded) as any,
+          // Guardado en su tabla con forma: el base64 es duplicado.
+          frame: '',
           error: null,
           processedAt: new Date(),
         },

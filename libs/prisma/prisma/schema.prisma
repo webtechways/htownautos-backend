@@ -2256,6 +2256,9 @@ model AuctionRawFrame {
   @@index([status])
   @@index([receivedAt])
   @@index([lot])
+  /// La purga filtra por los dos a la vez; con indices sueltos Postgres solo
+  /// aprovecha uno y cada pasada acaba siendo un escaneo.
+  @@index([status, receivedAt])
   @@map("auction_raw_frames")
 }
 
