@@ -95,10 +95,26 @@ export class NotificationsService {
     const limit = query.limit ?? 20;
     const skip = (page - 1) * limit;
 
-    const where = {
+    // `status` supersedes the legacy `unreadOnly` flag when both are present.
+    const status =
+      query.status ?? (query.unreadOnly ? 'unread' : 'all');
+
+    const search = query.search;
+
+    const where: Prisma.NotificationWhereInput = {
       userId,
       tenantId,
-      ...(query.unreadOnly ? { isRead: false } : {}),
+      ...(status === 'unread' ? { isRead: false } : {}),
+      ...(status === 'read' ? { isRead: true } : {}),
+      ...(query.types?.length ? { type: { in: query.types } } : {}),
+      ...(search
+        ? {
+            OR: [
+              { title: { contains: search, mode: 'insensitive' as const } },
+              { message: { contains: search, mode: 'insensitive' as const } },
+            ],
+          }
+        : {}),
     };
 
     const [items, total] = await Promise.all([
@@ -126,6 +142,47 @@ export class NotificationsService {
     return this.prisma.notification.count({
       where: { userId, tenantId, isRead: false },
     });
+  }
+
+  // ── Per-type facets ──────────────────────────────────────────────────────────
+
+  /**
+   * Powers the notification-center type filter: every type this user actually
+   * has, with its total and unread counts. Derived from the data rather than a
+   * hardcoded list, so a new producer shows up in the UI without a frontend
+   * change.
+   */
+  async stats(userId: string, tenantId: string) {
+    const [byType, byTypeUnread] = await Promise.all([
+      this.prisma.notification.groupBy({
+        by: ['type'],
+        where: { userId, tenantId },
+        _count: { _all: true },
+      }),
+      this.prisma.notification.groupBy({
+        by: ['type'],
+        where: { userId, tenantId, isRead: false },
+        _count: { _all: true },
+      }),
+    ]);
+
+    const unreadByType = new Map(
+      byTypeUnread.map((r) => [r.type, r._count._all]),
+    );
+
+    const types = byType
+      .map((r) => ({
+        type: r.type,
+        count: r._count._all,
+        unread: unreadByType.get(r.type) ?? 0,
+      }))
+      .sort((a, b) => b.count - a.count);
+
+    return {
+      total: types.reduce((sum, t) => sum + t.count, 0),
+      unread: types.reduce((sum, t) => sum + t.unread, 0),
+      types,
+    };
   }
 
   // ── Mark single read ─────────────────────────────────────────────────────────

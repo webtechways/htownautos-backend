@@ -48,6 +48,18 @@ export class NotificationsController {
   }
 
   /**
+   * GET /notifications/stats
+   * Per-type totals + unread counts, for the notification-center filters.
+   */
+  @Get('stats')
+  stats(
+    @CurrentUser() user: AuthenticatedUser,
+    @CurrentTenant() tenantId: string,
+  ) {
+    return this.notificationsService.stats(user.id, tenantId);
+  }
+
+  /**
    * PATCH /notifications/:id/read
    * Marks a single notification as read. Scoped to the calling user.
    */
