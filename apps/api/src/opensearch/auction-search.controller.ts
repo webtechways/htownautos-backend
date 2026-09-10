@@ -362,6 +362,19 @@ export class AuctionSearchController {
     return result;
   }
 
+  /**
+   * Lanza un volcado de la base a B2 sin esperar al cron de las 3:30.
+   *
+   * Existe sobre todo para poder **probar la restauracion**: una copia que
+   * nunca se ha restaurado no es una copia, y comprobarlo no deberia depender
+   * de esperar a la madrugada.
+   */
+  @Post('db-backup')
+  @ApiOperation({ summary: 'Run a database backup to B2 now' })
+  runBackup() {
+    return this.publishSync({ kind: 'db-backup' });
+  }
+
   private async publishSync(
     msg: AuctionSyncTriggerMessage,
   ): Promise<{ queued: boolean; kind: string }> {

@@ -26,6 +26,22 @@ WORKDIR /app
 
 ENV NODE_ENV=production
 
+# pg_dump para el volcado diario a B2. Se instala desde el repo de PostgreSQL y
+# no el de Debian a proposito: bookworm trae el cliente 15 y el servidor va por
+# delante — un pg_dump mas viejo que el servidor falla en seco. Al reves si
+# funciona, asi que se coge el ultimo cliente.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      ca-certificates gnupg curl gzip \
+    && install -d /usr/share/postgresql-common/pgdg \
+    && curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+         -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
+    && echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] \
+https://apt.postgresql.org/pub/repos/apt bookworm-pgdg main" \
+         > /etc/apt/sources.list.d/pgdg.list \
+    && apt-get update && apt-get install -y --no-install-recommends postgresql-client \
+    && apt-get purge -y gnupg && apt-get autoremove -y \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
 

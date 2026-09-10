@@ -337,6 +337,58 @@ export class S3Service {
     await this.s3Client.send(command);
   }
 
+  /**
+   * Sube un fichero desde disco por streaming.
+   *
+   * Existe para el volcado de la base de datos: son cientos de MB y meterlos en
+   * un Buffer se lleva por delante el contenedor. Con `ContentLength` conocido
+   * el SDK puede mandarlo sin bufferizarlo.
+   */
+  async uploadStreamToKey(
+    body: NodeJS.ReadableStream,
+    key: string,
+    contentLength: number,
+    contentType = 'application/octet-stream',
+  ): Promise<void> {
+    await this.s3Client.send(
+      new PutObjectCommand({
+        Bucket: this.bucket,
+        Key: key,
+        Body: body as any,
+        ContentLength: contentLength,
+        ContentType: contentType,
+      }),
+    );
+  }
+
+  /** Objetos bajo un prefijo, con su fecha y tamaño. Para purgas por antiguedad. */
+  async listPrefix(prefix: string): Promise<Array<{ key: string; size: number; modified: Date }>> {
+    const out: Array<{ key: string; size: number; modified: Date }> = [];
+    let token: string | undefined;
+    do {
+      const res = await this.s3Client.send(
+        new ListObjectsV2Command({ Bucket: this.bucket, Prefix: prefix, ContinuationToken: token }),
+      );
+      for (const o of res.Contents ?? []) {
+        if (o.Key) out.push({ key: o.Key, size: o.Size ?? 0, modified: o.LastModified ?? new Date(0) });
+      }
+      token = res.IsTruncated ? res.NextContinuationToken : undefined;
+    } while (token);
+    return out;
+  }
+
+  /** Borra objetos por clave exacta. */
+  async deleteKeys(keys: string[]): Promise<number> {
+    if (!keys.length) return 0;
+    await this.s3Client.send(
+      new DeleteObjectsCommand({
+        Bucket: this.bucket,
+        Delete: { Objects: keys.map((Key) => ({ Key })) },
+      }),
+    );
+    return keys.length;
+  }
+
   /** Download an external URL and upload to S3 with a specific key */
   async uploadFromUrl(url: string, key: string, contentType: string = 'image/jpeg', acl?: ObjectCannedACL): Promise<void> {
     const response = await fetch(url);

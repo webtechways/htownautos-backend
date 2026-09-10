@@ -17,5 +17,7 @@ export type AuctionSyncTriggerMessage =
   | { kind: 'reindex-copart' }
   /** Reindex every source (currently equivalent to reindex-copart). */
   | { kind: 'reindex-all' }
+  /** Volcado de la base a B2, a peticion. El cron diario hace lo mismo. */
+  | { kind: 'db-backup' }
   /** Drop and recreate the OpenSearch index, no reimport. */
   | { kind: 'recreate-index' };

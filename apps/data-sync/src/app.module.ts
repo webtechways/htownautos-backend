@@ -8,12 +8,14 @@ import {
   ProxyService,
   CopartImagesService,
   PublicS3Service,
+  S3Service,
   AgentAssignmentService,
 } from '@htownautos/common';
 import { CopartImportService } from './copart-import.service';
 import { SyncTriggerListener } from './sync-trigger.listener';
 import { AuctionFramesConsumer } from './auction-frames.consumer';
 import { AuctionFramesRetentionService } from './auction-frames-retention.service';
+import { DbBackupService } from './db-backup.service';
 import { WantedMatchNotifierService } from './wanted-match-notifier.service';
 import { SellerClassificationNotifierService } from './seller-classification-notifier.service';
 import { AuctionAliasNotifierService } from './auction-alias-notifier.service';
@@ -35,6 +37,7 @@ import { ImageRetentionService } from './image-retention.service';
     SyncTriggerListener,
     AuctionFramesConsumer,
     AuctionFramesRetentionService,
+    DbBackupService,
     WantedMatchNotifierService,
     SellerClassificationNotifierService,
     AuctionAliasNotifierService,
@@ -43,6 +46,8 @@ import { ImageRetentionService } from './image-retention.service';
     ImageRetentionService,
     AgentAssignmentService,
     PublicS3Service,
+    // Perfil privado: ahi van los volcados de la base.
+    S3Service,
     CopartImagesService,
     ProxyService,
   ],

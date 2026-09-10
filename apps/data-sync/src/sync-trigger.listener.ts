@@ -6,6 +6,7 @@ import {
 } from '@htownautos/rabbitmq';
 import { AuctionIndexService, AuctionSyncService } from '@htownautos/opensearch';
 import { CopartImportService } from './copart-import.service';
+import { DbBackupService } from './db-backup.service';
 
 /**
  * Consumes auction sync trigger messages from the api and dispatches to the
@@ -21,6 +22,7 @@ export class SyncTriggerListener implements OnModuleInit {
     private readonly importService: CopartImportService,
     private readonly indexService: AuctionIndexService,
     private readonly syncService: AuctionSyncService,
+    private readonly backup: DbBackupService,
   ) {}
 
   async onModuleInit() {
@@ -57,6 +59,9 @@ export class SyncTriggerListener implements OnModuleInit {
         return;
       case 'reindex-all':
         await this.syncService.syncAll();
+        return;
+      case 'db-backup':
+        await this.backup.run();
         return;
       case 'recreate-index':
         await this.indexService.recreateIndex();
