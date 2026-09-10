@@ -96,3 +96,12 @@ export type { GalleryCacheMessage } from './copart/gallery-cache.constants';
 
 // Concurrency
 export { mapWithConcurrency } from './utils/concurrency.utils';
+
+// Chat delivery (lo comparten la api para el envio de prueba y data-sync para el reparto)
+export { sendChatMessage, channelWantsType, absoluteUrl } from './chat/chat-message';
+export type {
+  ChatProvider,
+  ChatPayload,
+  ChatTarget,
+  SendResult,
+} from './chat/chat-message';

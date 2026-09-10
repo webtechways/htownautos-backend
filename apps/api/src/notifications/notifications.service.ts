@@ -1,6 +1,11 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '@htownautos/prisma';
+import {
+  RabbitMQService,
+  CHAT_DISPATCH_QUEUE,
+  type ChatDispatchMessage,
+} from '@htownautos/rabbitmq';
 import { CreateNotificationDto } from './dto/create-notification.dto';
 import { ListNotificationsDto } from './dto/list-notifications.dto';
 
@@ -8,7 +13,10 @@ import { ListNotificationsDto } from './dto/list-notifications.dto';
 export class NotificationsService {
   private readonly logger = new Logger(NotificationsService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly rabbitMQ: RabbitMQService,
+  ) {}
 
   // ── Create (single) ──────────────────────────────────────────────────────────
 
@@ -76,6 +84,20 @@ export class NotificationsService {
         })),
         skipDuplicates: true,
       });
+
+      // Y fuera del dashboard: a los canales de chat que el tenant tenga
+      // conectados. Va por cola —el reparto lo hace data-sync— para no meter
+      // peticiones HTTP salientes en el camino que atiende al cliente.
+      const chat: ChatDispatchMessage = {
+        tenantId,
+        type: data.type,
+        title: data.title,
+        message: data.message,
+        priority: data.priority ?? 'normal',
+        actionUrl: data.actionUrl ?? null,
+      };
+      // `publish` devuelve false si RabbitMQ esta caido; no lanza.
+      await this.rabbitMQ.publish(CHAT_DISPATCH_QUEUE, chat);
     } catch (err) {
       this.logger.warn(
         `notifyTenantStaff: tenant=${tenantId} type=${data.type} — ${(err as Error).message}`,

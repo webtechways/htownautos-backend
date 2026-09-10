@@ -366,6 +366,10 @@ export class PrismaService implements OnModuleInit, OnModuleDestroy {
     return this.prisma.socialGroup;
   }
 
+  get notificationChannel() {
+    return this.prisma.notificationChannel;
+  }
+
   get socialGroupAccount() {
     return this.prisma.socialGroupAccount;
   }

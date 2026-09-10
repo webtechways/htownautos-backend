@@ -554,6 +554,7 @@ model Tenant {
   investments             Investment[]
   socialAccounts          SocialAccount[]
   socialGroups            SocialGroup[]
+  notificationChannels    NotificationChannel[]
   partOrders              PartOrder[]
   parcelTemplates         ParcelTemplate[]
   apiKeys                 ApiKey[]
@@ -3613,6 +3614,50 @@ model SocialAccount {
   @@index([tenantId])
   @@index([tenantId, platform])
   @@map("social_accounts")
+}
+
+/// Destino de chat al que un tenant reenvia sus notificaciones.
+///
+/// Las notificaciones solo viven dentro del dashboard: si nadie tiene la pestaña
+/// abierta, un deposito o un fallo de sincronizacion no lo ve nadie. Esta tabla
+/// guarda a donde sacarlas — Telegram, Discord o Slack.
+model NotificationChannel {
+  id       String @id @default(uuid())
+  tenantId String
+  provider String // telegram | discord | slack
+  label    String // como lo llama el tenant: "Ventas", "Alertas tecnicas"
+
+  /// A donde se entrega: chat_id de Telegram, URL del webhook de Discord o
+  /// canal de Slack. Nunca se devuelve entero por la API.
+  target String
+
+  /// Secretos del proveedor (token de bot de Slack). Fuera de las respuestas.
+  credentials Json?
+
+  /// Tipos de notificacion que quiere este canal. Vacio = todos. Es columna y
+  /// no un campo dentro de un Json porque el reparto filtra por ella.
+  types String[] @default([])
+
+  isActive Boolean @default(true)
+
+  /// Emparejamiento de Telegram: el tenant manda este codigo al bot y el
+  /// webhook lo canjea por el chat_id. De un solo uso y con caducidad.
+  linkCode          String?   @unique
+  linkCodeExpiresAt DateTime?
+
+  /// Ultimo resultado del envio, para que la UI diga si el canal esta sano.
+  lastSentAt   DateTime?
+  lastErrorAt  DateTime?
+  lastErrorMsg String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([tenantId, isActive])
+  @@map("notification_channels")
 }
 
 model SocialGroup {

@@ -5,4 +5,9 @@ export {
   type AuctionSyncTriggerMessage,
 } from './auction-sync-trigger';
 
+export {
+  CHAT_DISPATCH_QUEUE,
+  type ChatDispatchMessage,
+} from './chat-dispatch';
+
 export * from './auction-frames';

@@ -23,6 +23,7 @@ import { AuctionAliasNotifierService } from './auction-alias-notifier.service';
 import { ImageCacheEnqueuerService } from './image-cache-enqueuer.service';
 import { ImageCacheCrawlerService } from './image-cache-crawler.service';
 import { ImageRetentionService } from './image-retention.service';
+import { ChatDispatchConsumer } from './chat-dispatch.consumer';
 
 
 @Module({
@@ -38,6 +39,7 @@ import { ImageRetentionService } from './image-retention.service';
     SyncTriggerListener,
     AuctionFramesConsumer,
     AuctionFramesRetentionService,
+    ChatDispatchConsumer,
     DbBackupService,
     EnvBackupService,
     WantedMatchNotifierService,
