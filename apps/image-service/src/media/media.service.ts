@@ -14,6 +14,11 @@ import { MediaEntity } from './entities/media.entity';
 import { PaginatedResponseDto } from '@htownautos/common';
 import sharp from 'sharp';
 
+/** El bucket donde acaba un fichero segun sea publico o privado. */
+function bucketFor(isPublic: boolean): string {
+  return (isPublic ? process.env.B2_BUCKET_PUBLIC : process.env.B2_BUCKET_PRIVATE) || '';
+}
+
 @Injectable()
 export class MediaService {
   private readonly logger = new Logger(MediaService.name);
@@ -319,7 +324,9 @@ export class MediaService {
           description: dto.description,
           alt: dto.alt,
           storageProvider: 's3',
-          storageBucket: process.env.AWS_S3_BUCKET || process.env.AWS_S3_BUCKET_PUBLIC || '',
+          // Solo se guarda para saber donde quedo el fichero. `isPublic` decide
+          // cual, igual que decide a que perfil se subio.
+          storageBucket: bucketFor(!isPrivate),
           storageKey: dto.key,
           isPublic: !isPrivate,
           isActive: true,
@@ -510,7 +517,9 @@ export class MediaService {
           description: dto.description,
           alt: dto.alt,
           storageProvider: 's3',
-          storageBucket: process.env.AWS_S3_BUCKET || process.env.AWS_S3_BUCKET_PUBLIC || '',
+          // Solo se guarda para saber donde quedo el fichero. `isPublic` decide
+          // cual, igual que decide a que perfil se subio.
+          storageBucket: bucketFor(!isPrivate),
           storageKey: dto.key,
           isPublic: !isPrivate,
           isActive: true,

@@ -76,6 +76,16 @@ export class S3Service {
     this.endpoint = cfg.endpoint?.replace(/\/+$/, '') || null;
     this.cdnBaseUrl = cfg.cdnBaseUrl?.replace(/\/+$/, '') || null;
 
+    // No se lanza excepcion: un throw aqui deja a Nest sin resolver el
+    // proveedor y la API entera entra en bucle de reinicio. Se avisa fuerte y
+    // el primer uso fallara con un error que se entiende.
+    if (!this.bucket || !cfg.accessKeyId) {
+      this.logger.error(
+        `[S3] Perfil sin configurar (bucket="${this.bucket}"). ` +
+          'Revisa B2_ENDPOINT / B2_BUCKET_PRIVATE / B2_BUCKET_PUBLIC / B2_KEY_ID / B2_APP_KEY.',
+      );
+    }
+
     this.s3Client = new S3Client({
       region: this.region,
       credentials: {
@@ -86,15 +96,40 @@ export class S3Service {
     });
   }
 
-  /** The default profile: the PRIVATE bucket. Overridden by PublicS3Service. */
+  /**
+   * La region va dentro del propio host de B2
+   * (`s3.us-east-005.backblazeb2.com`), asi que se deduce en vez de pedir otra
+   * variable que se pueda quedar desincronizada de la anterior.
+   */
+  protected static regionFromHost(host?: string): string {
+    return host?.match(/s3\.([a-z0-9-]+)\.backblazeb2/)?.[1] ?? 'us-east-005';
+  }
+
+  /** `s3.x.backblazeb2.com` o `https://s3.x…` -> siempre con esquema. */
+  protected static toEndpoint(host?: string): string | undefined {
+    if (!host) return undefined;
+    return /^https?:\/\//.test(host) ? host : `https://${host}`;
+  }
+
+  /**
+   * Perfil por defecto: el bucket **privado**.
+   *
+   * Solo lee variables `B2_*`. Antes caia a `AWS_S3_*` y de ahi a
+   * `AWS_S3_BUCKET_PUBLIC`, y eso es exactamente como acabaron los documentos
+   * privados apuntando a un DigitalOcean que ya no existe: la migracion cambio
+   * el perfil publico y el privado se quedo con el endpoint viejo sin que nada
+   * lo dijera. Sin respaldos silenciosos, una variable mal puesta se nota.
+   */
   protected resolveProfile(): S3Profile {
+    const host = process.env.B2_ENDPOINT;
     return {
-      endpoint: process.env.AWS_S3_ENDPOINT,
-      bucket: process.env.AWS_S3_BUCKET || process.env.AWS_S3_BUCKET_PUBLIC || '',
-      region: process.env.AWS_REGION || 'us-east-1',
-      accessKeyId: process.env.AWS_ACCESS_KEY_ID || '',
-      secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY || '',
-      cdnBaseUrl: process.env.CDN_BASE_URL,
+      endpoint: S3Service.toEndpoint(host),
+      bucket: process.env.B2_BUCKET_PRIVATE || '',
+      region: S3Service.regionFromHost(host),
+      accessKeyId: process.env.B2_KEY_ID || '',
+      secretAccessKey: process.env.B2_APP_KEY || '',
+      // Sin CDN: lo privado se sirve siempre con URL firmada.
+      cdnBaseUrl: undefined,
     };
   }
 

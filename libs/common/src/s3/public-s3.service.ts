@@ -11,26 +11,25 @@ import { S3Service } from './s3.service';
  * public one downloads with no credentials (200), one in the private bucket
  * answers 401.
  *
- * Falls back to the default profile's envs when the public ones are absent, so
- * a half-configured environment keeps working exactly as before the split.
+ * Solo lee variables `B2_*`, sin respaldo al perfil privado: un fallo de
+ * configuracion tiene que romper a la vista, no publicar galerias desde el
+ * bucket equivocado ni escribir documentos privados en el publico.
  */
 @Injectable()
 export class PublicS3Service extends S3Service {
   protected readonly logger = new Logger(PublicS3Service.name);
 
   protected resolveProfile() {
+    const host = process.env.B2_ENDPOINT;
     return {
-      endpoint: process.env.PUBLIC_S3_ENDPOINT || process.env.AWS_S3_ENDPOINT,
-      bucket:
-        process.env.PUBLIC_S3_BUCKET ||
-        process.env.AWS_S3_BUCKET ||
-        process.env.AWS_S3_BUCKET_PUBLIC ||
-        '',
-      region: process.env.PUBLIC_S3_REGION || process.env.AWS_REGION || 'us-east-1',
-      accessKeyId: process.env.PUBLIC_S3_ACCESS_KEY_ID || process.env.AWS_ACCESS_KEY_ID || '',
-      secretAccessKey:
-        process.env.PUBLIC_S3_SECRET_ACCESS_KEY || process.env.AWS_SECRET_ACCESS_KEY || '',
-      cdnBaseUrl: process.env.PUBLIC_CDN_BASE_URL || process.env.CDN_BASE_URL,
+      endpoint: S3Service.toEndpoint(host),
+      bucket: process.env.B2_BUCKET_PUBLIC || '',
+      region: S3Service.regionFromHost(host),
+      accessKeyId: process.env.B2_KEY_ID || '',
+      secretAccessKey: process.env.B2_APP_KEY || '',
+      // Sin esto las galerias se servirian desde B2 directamente, saltandose
+      // Cloudflare — y ahi es donde esta la salida gratis.
+      cdnBaseUrl: process.env.B2_CDN_URL,
     };
   }
 }
