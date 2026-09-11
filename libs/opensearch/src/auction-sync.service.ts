@@ -21,27 +21,64 @@ export class AuctionSyncService {
   ) {}
 
   /**
-   * Full sync: Index all Copart listings from PostgreSQL
+   * Reindexa TODOS los lotes de Copart. Es la operacion cara: usala para el
+   * "reindexar todo" manual, no despues de cada importacion.
    */
   async syncAllCopart(): Promise<{ success: number; failed: number; total: number }> {
-    this.logger.log('Starting full Copart sync...');
+    return this.indexWhere({}, 'completo');
+  }
+
+  /**
+   * Reindexa solo lo que cambio desde `since`.
+   *
+   * Es lo que debe correr tras cada importacion. El upsert del importador pone
+   * `updatedAt = NOW()` en cada fila que toca, y `markStaleListings` tambien,
+   * asi que este filtro cubre los tres casos que importan: lotes nuevos,
+   * actualizados y marcados como obsoletos.
+   *
+   * Antes se reindexaba el indice entero —1,5 millones de documentos— despues
+   * de importar 143.000 filas. Cada pasada tardaba mas de tres horas, el cron
+   * de cada 30 minutos se saltaba casi siempre por el lock, y el vigilante
+   * avisaba de sincronizacion obsoleta porque no completaba dentro de su
+   * ventana de 4 horas.
+   */
+  async syncCopartSince(
+    since: Date,
+  ): Promise<{ success: number; failed: number; total: number }> {
+    return this.indexWhere({ updatedAt: { gte: since } }, `desde ${since.toISOString()}`);
+  }
+
+  /**
+   * Recorre los lotes que casen con `where` y los indexa por tandas.
+   *
+   * Pagina **por cursor** sobre `lotNumber`, no con `skip`/`take`. Con OFFSET,
+   * para llegar a la ultima tanda Postgres tiene que recorrer y descartar el
+   * millon y medio de filas anteriores: el coste crece con cada tanda y era el
+   * verdadero motivo de que el reindexado tardara horas. Por cursor, la ultima
+   * tanda cuesta lo mismo que la primera.
+   */
+  private async indexWhere(
+    where: Record<string, unknown>,
+    etiqueta: string,
+  ): Promise<{ success: number; failed: number; total: number }> {
+    const inicio = Date.now();
+    this.logger.log(`Copart reindex (${etiqueta}): empezando…`);
 
     let success = 0;
     let failed = 0;
-    let offset = 0;
-    let hasMore = true;
+    let procesados = 0;
+    let cursor: bigint | undefined;
 
-    while (hasMore) {
+    for (;;) {
       const listings = await this.prisma.auctionListing.findMany({
-        skip: offset,
+        where,
         take: this.BATCH_SIZE,
         orderBy: { lotNumber: 'asc' },
+        // `skip: 1` salta el propio cursor, que ya se indexo en la tanda previa.
+        ...(cursor !== undefined ? { cursor: { lotNumber: cursor }, skip: 1 } : {}),
       });
 
-      if (listings.length === 0) {
-        hasMore = false;
-        break;
-      }
+      if (listings.length === 0) break;
 
       const documents = listings.map((listing) => ({
         id: `copart_${listing.lotNumber.toString()}`,
@@ -51,20 +88,26 @@ export class AuctionSyncService {
       const result = await this.openSearchService.bulkIndex(AUCTION_INDEX_NAME, documents);
       success += result.success;
       failed += result.failed;
+      procesados += listings.length;
 
       if (result.errors.length > 0) {
         this.logger.warn(`Batch errors: ${result.errors.slice(0, 5).join(', ')}`);
       }
 
-      this.logger.log(`Copart sync progress: ${offset + listings.length} processed`);
-      offset += this.BATCH_SIZE;
-
-      if (listings.length < this.BATCH_SIZE) {
-        hasMore = false;
+      // Una linea cada 50.000 y no cada 500: el log anterior escribia tres mil
+      // lineas por pasada y tapaba cualquier otra cosa del worker.
+      if (procesados % 50_000 < this.BATCH_SIZE) {
+        this.logger.log(`Copart reindex (${etiqueta}): ${procesados} procesados`);
       }
+
+      cursor = listings[listings.length - 1].lotNumber;
+      if (listings.length < this.BATCH_SIZE) break;
     }
 
-    this.logger.log(`Copart sync complete: ${success} success, ${failed} failed`);
+    const segundos = Math.round((Date.now() - inicio) / 1000);
+    this.logger.log(
+      `Copart reindex (${etiqueta}) completo: ${success} ok, ${failed} fallidos, ${segundos}s`,
+    );
     return { success, failed, total: success + failed };
   }
 

@@ -523,14 +523,19 @@ export class CopartImportService implements OnModuleInit {
 
     // Phase: indexing (90→100)
     await this.updateProgress('indexing', 90);
-    const { success, failed } = await this.syncService.syncAllCopart();
+
+    // Solo lo que esta ejecucion toco, no el indice entero.
+    //
+    // El upsert y `markStaleListings` ponen `updatedAt = NOW()` en cada fila
+    // que modifican, asi que `syncStart` cubre lotes nuevos, actualizados y
+    // marcados como obsoletos. Reindexar los 1,5 millones despues de importar
+    // 143.000 costaba mas de tres horas por pasada, y el cron de cada 30
+    // minutos se saltaba casi siempre porque la anterior seguia corriendo.
+    const { success, failed } = await this.syncService.syncCopartSince(syncStart);
     metrics.rowsIndexed = success;
     metrics.rowsIndexFailed = failed;
     this.logger.log(`OpenSearch: ${success} indexed, ${failed} failed`);
     await this.updateProgress('indexing', 99);
-
-    // Silence unused-param warning; kept for future signature stability.
-    void syncStart;
   }
 
   // ────────────────────────────────────────────────────────────────────
