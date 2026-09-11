@@ -267,13 +267,7 @@ export class VehicleInspectionsService {
 
     // Hasta ahora solo avisaba el portal del cliente: una inspeccion creada
     // desde el dashboard no generaba nada y el equipo no se enteraba.
-    this.notify(
-      tenantId,
-      'CUSTOMER_INSPECTION_REQUESTED',
-      'Inspeccion solicitada',
-      `${this.label(row)}${row.yardName ? ` · ${row.yardName}` : ''}`,
-      row.id,
-    );
+    this.notify(tenantId, 'CUSTOMER_INSPECTION_REQUESTED', 'Inspeccion solicitada', row);
 
     return serialize(row);
   }
@@ -327,21 +321,9 @@ export class VehicleInspectionsService {
     // veces la misma inspeccion mandaria el aviso dos veces.
     if (dto.status !== undefined && dto.status !== previo.status) {
       if (dto.status === 'CANCELED') {
-        this.notify(
-          tenantId,
-          'CUSTOMER_INSPECTION_CANCELLED',
-          'Inspeccion cancelada',
-          this.label(row),
-          row.id,
-        );
+        this.notify(tenantId, 'CUSTOMER_INSPECTION_CANCELLED', 'Inspeccion cancelada', row);
       } else if (dto.status === 'DONE') {
-        this.notify(
-          tenantId,
-          'CUSTOMER_INSPECTION_COMPLETED',
-          'Inspeccion completada',
-          this.label(row),
-          row.id,
-        );
+        this.notify(tenantId, 'CUSTOMER_INSPECTION_COMPLETED', 'Inspeccion completada', row);
       }
     }
 
@@ -746,11 +728,89 @@ export class VehicleInspectionsService {
   // ── Avisos al equipo ──────────────────────────────────────────────────────
 
   /**
-   * Etiqueta legible de la inspeccion para el cuerpo del aviso. El lote y el
-   * VIN son lo que permite reconocerla de un vistazo desde el movil.
+   * Ficha del vehiculo para el cuerpo del aviso.
+   *
+   * "Lote 52873876" no le dice nada a nadie leyendo el movil. La inspeccion
+   * guarda VIN, lote y yard, pero no marca ni modelo: eso vive en
+   * `auction_listings`, asi que se busca por lote (que es su clave primaria) y
+   * si no hay, por VIN.
+   *
+   * La consulta es best-effort: si el lote ya no esta en el feed, el aviso sale
+   * igual con lo que tenemos.
    */
-  private label(row: { lotNumber?: string | null; vin?: string | null }): string {
-    return row.lotNumber ? `Lote ${row.lotNumber}` : row.vin || 'sin identificar';
+  private async vehicleLines(row: {
+    vin?: string | null;
+    lotNumber?: string | null;
+    yardName?: string | null;
+  }): Promise<string> {
+    let listing: {
+      year: number | null;
+      make: string | null;
+      modelGroup: string | null;
+      modelDetail: string | null;
+      vin: string | null;
+    } | null = null;
+
+    try {
+      const select = {
+        year: true,
+        make: true,
+        modelGroup: true,
+        modelDetail: true,
+        vin: true,
+      };
+      // El lote es la clave primaria, asi que es la busqueda barata.
+      const lote = row.lotNumber ? this.toBigInt(row.lotNumber) : null;
+      if (lote !== null) {
+        listing = await this.prisma.auctionListing.findUnique({
+          where: { lotNumber: lote },
+          select,
+        });
+      }
+      if (!listing && row.vin) {
+        listing = await this.prisma.auctionListing.findFirst({
+          where: { vin: row.vin },
+          select,
+        });
+      }
+    } catch {
+      // Un aviso sin marca y modelo sigue siendo util; uno que no sale, no.
+    }
+
+    const descripcion = [
+      listing?.year,
+      listing?.make,
+      listing?.modelGroup,
+      listing?.modelDetail,
+    ]
+      .filter(Boolean)
+      .join(' ');
+
+    const lineas: string[] = [];
+    if (descripcion) lineas.push(descripcion.toUpperCase());
+    const vin = row.vin || listing?.vin;
+    if (vin) lineas.push(`VIN ${vin}`);
+
+    const ubicacion = [
+      row.lotNumber ? `Lote ${row.lotNumber}` : null,
+      row.yardName,
+    ]
+      .filter(Boolean)
+      .join(' · ');
+    if (ubicacion) lineas.push(ubicacion);
+
+    return lineas.join('\n') || 'sin identificar';
+  }
+
+  /** El lote es BigInt en `auction_listings` y texto en la inspeccion. */
+  private toBigInt(v: string): bigint | null {
+    const limpio = v.replace(/\D/g, '');
+    if (!limpio) return null;
+    try {
+      return BigInt(limpio);
+    } catch {
+      return null;
+    }
   }
 
   /**
@@ -762,20 +822,22 @@ export class VehicleInspectionsService {
     tenantId: string,
     type: string,
     title: string,
-    message: string,
-    inspectionId: string,
+    row: { id: string; vin?: string | null; lotNumber?: string | null; yardName?: string | null },
   ): void {
     if (!tenantId) return; // sin tenant no hay a quien avisar
-    void this.notifications
-      .notifyTenantStaff(tenantId, {
-        title,
-        message,
-        type,
-        entityType: 'VehicleInspection',
-        entityId: inspectionId,
-        actionUrl: `/dashboard/inspections/${inspectionId}`,
-        priority: 'normal',
-      })
+    const inspectionId = row.id;
+    void this.vehicleLines(row)
+      .then((message) =>
+        this.notifications.notifyTenantStaff(tenantId, {
+          title,
+          message,
+          type,
+          entityType: 'VehicleInspection',
+          entityId: inspectionId,
+          actionUrl: `/dashboard/inspections/${inspectionId}`,
+          priority: 'normal',
+        }),
+      )
       .catch(() => undefined);
   }
 

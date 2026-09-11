@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '@htownautos/prisma';
+import { ChatNotifierService } from './chat-notifier.service';
 import {
   preferenceToWhere,
   futureSaleWhere,
@@ -77,11 +78,53 @@ function buyerDisplayName(b: {
  * RabbitMQ / WebSocket dependency); delivery to the frontend is by polling the
  * `notifications` table.
  */
+
+/** Cuantos coches se listan en el chat antes de resumir el resto. */
+const MAX_EN_CHAT = 8;
+
+/**
+ * Ficha de cada coche para el cuerpo del mensaje.
+ *
+ * Se corta a los ocho porque Telegram tiene un tope por mensaje y una lista de
+ * cuarenta coches no se lee en el movil de todas formas.
+ */
+function describeLots(
+  lots: {
+    lotNumber: string;
+    year: number | null;
+    make: string | null;
+    model: string | null;
+    trim: string | null;
+    vin: string | null;
+    odometer: number | null;
+  }[],
+): string {
+  const lineas = lots.slice(0, MAX_EN_CHAT).map((l) => {
+    const titulo =
+      [l.year, l.make, l.model, l.trim].filter(Boolean).join(' ').toUpperCase() ||
+      `Lote ${l.lotNumber}`;
+    const detalle = [
+      l.vin ? `VIN ${l.vin}` : null,
+      `Lote ${l.lotNumber}`,
+      l.odometer != null ? `${l.odometer.toLocaleString('es-ES')} mi` : null,
+    ]
+      .filter(Boolean)
+      .join(' · ');
+    return `• ${titulo}\n  ${detalle}`;
+  });
+  const resto = lots.length - MAX_EN_CHAT;
+  if (resto > 0) lineas.push(`…y ${resto} mas`);
+  return lineas.join('\n');
+}
+
 @Injectable()
 export class WantedMatchNotifierService {
   private readonly logger = new Logger(WantedMatchNotifierService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly chat: ChatNotifierService,
+  ) {}
 
   /**
    * @param newLotNumberStrings lotNumbers (as strings) freshly inserted this run.
@@ -237,6 +280,20 @@ export class WantedMatchNotifierService {
           metaValue: meta,
         });
       }
+
+      // Un mensaje por comprador, no por miembro del equipo: un aviso que va a
+      // ocho personas no son ocho mensajes en el grupo de Telegram.
+      //
+      // Y con la ficha de cada coche: "3 autos coinciden" obliga a abrir el
+      // dashboard para saber si merece la pena mirarlo.
+      await this.chat.send({
+        tenantId: group.tenantId,
+        type: 'AUCTION_WANTED_MATCH',
+        title: 'Coincidencia de subasta',
+        message: `${message}\n\n${describeLots(lots)}`,
+        actionUrl,
+        priority: 'normal',
+      });
     }
 
     if (rows.length === 0) return 0;

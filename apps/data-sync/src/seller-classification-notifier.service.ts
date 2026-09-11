@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '@htownautos/prisma';
+import { ChatNotifierService } from './chat-notifier.service';
 import { deriveSellerCategory } from '@htownautos/common';
 
 /**
@@ -28,7 +29,10 @@ function sellerKey(name: string): string {
 export class SellerClassificationNotifierService {
   private readonly logger = new Logger(SellerClassificationNotifierService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly chat: ChatNotifierService,
+  ) {}
 
   /** @returns the number of brand-new sellers seeded this run. */
   async seedAndNotify(): Promise<number> {
@@ -113,6 +117,22 @@ export class SellerClassificationNotifierService {
       data: rows,
       skipDuplicates: true,
     });
+
+    // Un mensaje por tenant, no por miembro: `members` trae una fila por
+    // persona y mandar uno por cada una llenaria el grupo de duplicados.
+    for (const tenantId of new Set(members.map((m) => m.tenantId))) {
+      await this.chat.send({
+        tenantId,
+        type: 'SELLER_NEEDS_CLASSIFICATION',
+        title: 'Vendedores por clasificar',
+        message: sample.length
+          ? `${message}\n\n${sample.map((s: string) => `• ${s}`).join('\n')}`
+          : message,
+        actionUrl: '/dashboard/settings/sellers?review=1',
+        priority: 'normal',
+      });
+    }
+
     this.logger.log(
       `Seller-classification: ${count} new seller(s) → ${result.count} notification(s)`,
     );

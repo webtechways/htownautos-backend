@@ -24,6 +24,7 @@ import { ImageCacheEnqueuerService } from './image-cache-enqueuer.service';
 import { ImageCacheCrawlerService } from './image-cache-crawler.service';
 import { ImageRetentionService } from './image-retention.service';
 import { ChatDispatchConsumer } from './chat-dispatch.consumer';
+import { ChatNotifierService } from './chat-notifier.service';
 
 
 @Module({
@@ -40,6 +41,7 @@ import { ChatDispatchConsumer } from './chat-dispatch.consumer';
     AuctionFramesConsumer,
     AuctionFramesRetentionService,
     ChatDispatchConsumer,
+    ChatNotifierService,
     DbBackupService,
     EnvBackupService,
     WantedMatchNotifierService,

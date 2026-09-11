@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '@htownautos/prisma';
+import { ChatNotifierService } from './chat-notifier.service';
 import { CANONICAL_FIELDS, normalizeToken, type CanonicalField } from '@htownautos/common';
 
 /** Above this many brand-new values in one run, seed silently (bulk/initial). */
@@ -24,7 +25,10 @@ const FIELD_COLUMN: Record<CanonicalField, 'make' | 'modelGroup' | 'trim' | 'col
 export class AuctionAliasNotifierService {
   private readonly logger = new Logger(AuctionAliasNotifierService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly chat: ChatNotifierService,
+  ) {}
 
   private async distinctNormalized(field: CanonicalField): Promise<Set<string>> {
     const col = FIELD_COLUMN[field];
@@ -100,6 +104,19 @@ export class AuctionAliasNotifierService {
       data: rows,
       skipDuplicates: true,
     });
+
+    // Un mensaje por tenant, no por miembro del equipo.
+    for (const tenantId of new Set(members.map((m) => m.tenantId))) {
+      await this.chat.send({
+        tenantId,
+        type: 'ALIAS_NEEDS_REVIEW',
+        title: 'Valores por revisar',
+        message,
+        actionUrl: '/dashboard/settings/vehicle-data?review=1',
+        priority: 'low',
+      });
+    }
+
     this.logger.log(
       `Alias-review: ${total} new value(s) → ${result.count} notification(s)`,
     );
