@@ -4,6 +4,8 @@ import { ClerkJwtGuard } from '@htownautos/auth';
 import { AgentAssignmentService } from '@htownautos/common';
 import { AuctionCalendarService } from './auction-calendar.service';
 import { UpdateCalendarConfigDto } from './dto/update-calendar-config.dto';
+import { UpdateCalendarAlertsDto } from './dto/update-calendar-alerts.dto';
+import { AuctionCalendarAlertsService } from './auction-calendar-alerts.service';
 
 /**
  * AutoBidMaster auction calendar (Settings → Auction Calendar). Global, staff-only.
@@ -16,6 +18,7 @@ export class AuctionCalendarController {
   constructor(
     private readonly service: AuctionCalendarService,
     private readonly assignment: AgentAssignmentService,
+    private readonly alerts: AuctionCalendarAlertsService,
   ) {}
 
   @Get('status')
@@ -39,6 +42,28 @@ export class AuctionCalendarController {
   @ApiOperation({ summary: 'Update refresh cadence' })
   updateConfig(@Body() dto: UpdateCalendarConfigDto) {
     return this.service.updateConfig(dto);
+  }
+
+  @Get('alerts')
+  @ApiOperation({ summary: 'Configuracion de avisos + cuantas subastas entran' })
+  getAlerts() {
+    return this.service.getAlerts();
+  }
+
+  @Patch('alerts')
+  @ApiOperation({ summary: 'Actualizar los avisos antes del comienzo' })
+  updateAlerts(@Body() dto: UpdateCalendarAlertsDto) {
+    return this.service.updateAlerts(dto);
+  }
+
+  /**
+   * Dispara la pasada de avisos ahora. Existe para poder comprobar que el
+   * mensaje llega bien sin esperar al cron ni a que empiece una subasta.
+   */
+  @Post('alerts/run')
+  @ApiOperation({ summary: 'Ejecutar ahora la pasada de avisos' })
+  async runAlerts() {
+    return { announced: await this.alerts.run() };
   }
 
   @Post('refresh')

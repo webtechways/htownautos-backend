@@ -38,17 +38,28 @@ export class ChatDispatchConsumer implements OnModuleInit {
   }
 
   private async handle(msg: ChatDispatchMessage): Promise<void> {
-    if (!msg?.tenantId || !msg?.type) return;
+    if (!msg?.type) return;
+
+    // Dos formas de decidir el destino, y solo una aplica por mensaje:
+    //
+    //  - `channelIds`: el usuario ya eligio los canales a mano (calendario).
+    //    Se entrega a esos y el filtro por tipos no pinta nada.
+    //  - `tenantId`: reparto normal — todos los canales activos del tenant que
+    //    hayan pedido este tipo.
+    const explicitos = msg.channelIds?.length ? msg.channelIds : null;
+    if (!explicitos && !msg.tenantId) return;
 
     const canales = await this.prisma.notificationChannel.findMany({
-      where: { tenantId: msg.tenantId, isActive: true },
+      where: explicitos
+        ? { id: { in: explicitos }, isActive: true }
+        : { tenantId: msg.tenantId, isActive: true },
     });
     if (canales.length === 0) return;
 
-    // Un canal sin tipos elegidos quiere todo; el resto, solo lo suyo. Y los
-    // que aun no completaron el emparejamiento no tienen destino.
+    // Los que aun no completaron el emparejamiento no tienen destino. Y en el
+    // reparto por tenant, un canal sin tipos elegidos quiere todo.
     const destinatarios = canales.filter(
-      (c) => c.target && channelWantsType(c.types, msg.type),
+      (c) => c.target && (explicitos ? true : channelWantsType(c.types, msg.type)),
     );
     if (destinatarios.length === 0) return;
 
@@ -90,8 +101,9 @@ export class ChatDispatchConsumer implements OnModuleInit {
     ).length;
 
     if (fallos > 0) {
+      const destino = explicitos ? `canales=${explicitos.length}` : `tenant=${msg.tenantId}`;
       this.logger.warn(
-        `[Chat] tenant=${msg.tenantId} type=${msg.type} — ${fallos}/${destinatarios.length} canal(es) fallaron`,
+        `[Chat] ${destino} type=${msg.type} — ${fallos}/${destinatarios.length} canal(es) fallaron`,
       );
     }
   }

@@ -4,7 +4,7 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
+import { Prisma, VehicleInspectionStatus } from '@prisma/client';
 import { PrismaService } from '@htownautos/prisma';
 import { S3Service } from '@htownautos/common';
 import { CreateVehicleInspectionDto } from './dto/create-vehicle-inspection.dto';
@@ -17,6 +17,7 @@ import { UpdateRequestItemDto } from './dto/update-request-item.dto';
 import { CreateInspectionErrorCodeDto } from './dto/create-inspection-error-code.dto';
 import { UpdateInspectionErrorCodeDto } from './dto/update-inspection-error-code.dto';
 import { DEFAULT_CHECKLIST } from './checklist-template';
+import { NotificationsService } from '../notifications/notifications.service';
 
 const DEFAULT_PAGE_SIZE = 25;
 const MAX_PAGE_SIZE = 100;
@@ -155,6 +156,7 @@ export class VehicleInspectionsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly s3: S3Service,
+    private readonly notifications: NotificationsService,
   ) {}
 
   // ─── inspections ──────────────────────────────────────────────────
@@ -262,11 +264,22 @@ export class VehicleInspectionsService {
       },
       include: INSPECTION_INCLUDE,
     });
+
+    // Hasta ahora solo avisaba el portal del cliente: una inspeccion creada
+    // desde el dashboard no generaba nada y el equipo no se enteraba.
+    this.notify(
+      tenantId,
+      'CUSTOMER_INSPECTION_REQUESTED',
+      'Inspeccion solicitada',
+      `${this.label(row)}${row.yardName ? ` · ${row.yardName}` : ''}`,
+      row.id,
+    );
+
     return serialize(row);
   }
 
   async update(id: string, tenantId: string, dto: UpdateVehicleInspectionDto) {
-    await this.ensureInspection(id, tenantId);
+    const previo = await this.ensureInspection(id, tenantId);
 
     const data: Prisma.VehicleInspectionUpdateInput = {};
     if (dto.vin !== undefined) data.vin = dto.vin;
@@ -309,6 +322,29 @@ export class VehicleInspectionsService {
       data,
       include: INSPECTION_INCLUDE,
     });
+
+    // Solo cuando el estado cambia de verdad. Sin esta comparacion, guardar dos
+    // veces la misma inspeccion mandaria el aviso dos veces.
+    if (dto.status !== undefined && dto.status !== previo.status) {
+      if (dto.status === 'CANCELED') {
+        this.notify(
+          tenantId,
+          'CUSTOMER_INSPECTION_CANCELLED',
+          'Inspeccion cancelada',
+          this.label(row),
+          row.id,
+        );
+      } else if (dto.status === 'DONE') {
+        this.notify(
+          tenantId,
+          'CUSTOMER_INSPECTION_COMPLETED',
+          'Inspeccion completada',
+          this.label(row),
+          row.id,
+        );
+      }
+    }
+
     return serialize(row);
   }
 
@@ -690,12 +726,57 @@ export class VehicleInspectionsService {
     }
   }
 
-  private async ensureInspection(id: string, tenantId: string): Promise<void> {
+  /**
+   * Devuelve el estado actual ademas de comprobar que existe: `update` lo
+   * necesita para saber si el estado cambio de verdad y no avisar dos veces
+   * cuando alguien guarda la misma inspeccion sin tocarlo.
+   */
+  private async ensureInspection(
+    id: string,
+    tenantId: string,
+  ): Promise<{ id: string; status: VehicleInspectionStatus }> {
     const exists = await this.prisma.vehicleInspection.findFirst({
       where: { id, tenantId: tenantId || undefined },
-      select: { id: true },
+      select: { id: true, status: true },
     });
     if (!exists) throw new NotFoundException(`Inspection ${id} not found`);
+    return exists;
+  }
+
+  // ── Avisos al equipo ──────────────────────────────────────────────────────
+
+  /**
+   * Etiqueta legible de la inspeccion para el cuerpo del aviso. El lote y el
+   * VIN son lo que permite reconocerla de un vistazo desde el movil.
+   */
+  private label(row: { lotNumber?: string | null; vin?: string | null }): string {
+    return row.lotNumber ? `Lote ${row.lotNumber}` : row.vin || 'sin identificar';
+  }
+
+  /**
+   * Avisa al equipo. Best-effort por partida doble: `notifyTenantStaff` ya no
+   * lanza, y ademas se ignora cualquier error aqui — una inspeccion nunca debe
+   * fallar porque el aviso no saliera.
+   */
+  private notify(
+    tenantId: string,
+    type: string,
+    title: string,
+    message: string,
+    inspectionId: string,
+  ): void {
+    if (!tenantId) return; // sin tenant no hay a quien avisar
+    void this.notifications
+      .notifyTenantStaff(tenantId, {
+        title,
+        message,
+        type,
+        entityType: 'VehicleInspection',
+        entityId: inspectionId,
+        actionUrl: `/dashboard/inspections/${inspectionId}`,
+        priority: 'normal',
+      })
+      .catch(() => undefined);
   }
 
   private async ensureChecklistItem(

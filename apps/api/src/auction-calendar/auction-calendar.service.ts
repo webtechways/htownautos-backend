@@ -4,6 +4,7 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '@htownautos/prisma';
 import { ProxyService } from '@htownautos/common';
 import { UpdateCalendarConfigDto } from './dto/update-calendar-config.dto';
+import { UpdateCalendarAlertsDto } from './dto/update-calendar-alerts.dto';
 
 const CONFIG_ID = 'singleton';
 const CALENDAR_URL = 'https://www.autobidmaster.com/en/data/v2/auction-calendar';
@@ -100,6 +101,7 @@ export class AuctionCalendarService implements OnModuleInit {
             { monitor: true },
             { scraperAgentId: { not: null } },
             { scraperWorkerId: { not: null } },
+            { alertedAt: { not: null } },
           ],
         },
         select: {
@@ -108,6 +110,7 @@ export class AuctionCalendarService implements OnModuleInit {
           monitor: true,
           scraperAgentId: true,
           scraperWorkerId: true,
+          alertedAt: true,
         },
       });
       const keyOf = (m: { locationSourceId: number; startedAt: Date }) =>
@@ -120,6 +123,11 @@ export class AuctionCalendarService implements OnModuleInit {
         previous
           .filter((m) => m.scraperWorkerId)
           .map((m) => [keyOf(m), m.scraperWorkerId as string]),
+      );
+      // Si esto no se preservara, cada refresco —cada pocas horas— volveria a
+      // avisar de las mismas subastas.
+      const alerted = new Map(
+        previous.filter((m) => m.alertedAt).map((m) => [keyOf(m), m.alertedAt as Date]),
       );
 
       const now = new Date();
@@ -164,6 +172,7 @@ export class AuctionCalendarService implements OnModuleInit {
               monitor: monitored.has(key),
               scraperAgentId: assignedAgent.get(key) ?? null,
               scraperWorkerId: claimedBy.get(key) ?? null,
+              alertedAt: alerted.get(key) ?? null,
               raw: a as unknown as Prisma.InputJsonValue,
               fetchedAt: now,
             });
@@ -217,7 +226,22 @@ export class AuctionCalendarService implements OnModuleInit {
   // ── Read API ────────────────────────────────────────────────────────────────
   async getConfig() {
     const cfg = await this.prisma.auctionCalendarConfig.findUnique({ where: { id: CONFIG_ID } });
-    return cfg ?? { id: CONFIG_ID, refreshHours: 6, lastFetchedAt: null, lastError: null, lastCount: 0 };
+    // El respaldo tiene que llevar los mismos campos que la fila real: si no,
+    // quien lea `getConfig()` recibe un objeto con menos propiedades el dia que
+    // la configuracion aun no existe.
+    return (
+      cfg ?? {
+        id: CONFIG_ID,
+        refreshHours: 6,
+        lastFetchedAt: null,
+        lastError: null,
+        lastCount: 0,
+        alertsEnabled: false,
+        alertMinutesBefore: 30,
+        alertChannelIds: [] as string[],
+        alertOnlyWithAgent: true,
+      }
+    );
   }
 
   async updateConfig(dto: UpdateCalendarConfigDto) {
@@ -226,6 +250,57 @@ export class AuctionCalendarService implements OnModuleInit {
       update: { ...dto },
       create: { id: CONFIG_ID, ...dto },
     });
+  }
+
+  // ── Avisos antes de que empiece una subasta ─────────────────────────────────
+
+  /**
+   * Configuracion de avisos + cuantas subastas entrarian ahora mismo con ese
+   * umbral. Ese numero es lo que evita configurarlo a ciegas: el calendario
+   * tiene cientos de entradas y el efecto de subir el umbral no es evidente.
+   */
+  async getAlerts() {
+    const cfg = await this.getConfig();
+    const alcance = await this.prisma.auctionCalendarEntry.count({
+      where: {
+        startedAt: {
+          gte: new Date(),
+          lte: new Date(Date.now() + (cfg.alertMinutesBefore ?? 30) * 60_000),
+        },
+        ...(cfg.alertOnlyWithAgent !== false ? { scraperAgentId: { not: null } } : {}),
+      },
+    });
+
+    // Cuantas habria hoy en total con este filtro, para dar una idea del volumen
+    // diario en vez de solo la ventana inmediata.
+    const finDeDia = new Date();
+    finDeDia.setHours(23, 59, 59, 999);
+    const hoy = await this.prisma.auctionCalendarEntry.count({
+      where: {
+        startedAt: { gte: new Date(), lte: finDeDia },
+        ...(cfg.alertOnlyWithAgent !== false ? { scraperAgentId: { not: null } } : {}),
+      },
+    });
+
+    return {
+      alertsEnabled: cfg.alertsEnabled ?? false,
+      alertMinutesBefore: cfg.alertMinutesBefore ?? 30,
+      alertChannelIds: cfg.alertChannelIds ?? [],
+      alertOnlyWithAgent: cfg.alertOnlyWithAgent ?? true,
+      /** Entran en la ventana ahora mismo. */
+      inWindow: alcance,
+      /** Quedan hoy con este filtro. */
+      remainingToday: hoy,
+    };
+  }
+
+  async updateAlerts(dto: UpdateCalendarAlertsDto) {
+    await this.prisma.auctionCalendarConfig.upsert({
+      where: { id: CONFIG_ID },
+      update: { ...dto },
+      create: { id: CONFIG_ID, ...dto },
+    });
+    return this.getAlerts();
   }
 
   async getStatus() {

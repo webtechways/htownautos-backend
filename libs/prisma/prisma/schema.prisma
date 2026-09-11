@@ -3151,6 +3151,10 @@ model AuctionCalendarEntry {
   // el refresco igual que los dos campos de arriba.
   scraperWorkerId     String?
   scraperWorker       ScraperWorker? @relation(fields: [scraperWorkerId], references: [id], onDelete: SetNull)
+  // Cuando se aviso por chat de que esta subasta iba a empezar. Es la
+  // deduplicacion del aviso, y se preserva en el refresco igual que los tres
+  // campos de arriba: si se perdiera, cada refresco reavisaria de lo mismo.
+  alertedAt           DateTime?
   raw                 Json?
   fetchedAt           DateTime @default(now())
 
@@ -3162,6 +3166,8 @@ model AuctionCalendarEntry {
   @@index([scraperAgentId])
   // El poll filtra por (día, VM) y busca candidatos por (día, sin VM).
   @@index([saleDate, scraperWorkerId])
+  // El cron de avisos busca por (instante de comienzo, sin avisar todavía).
+  @@index([startedAt, alertedAt])
   @@map("auction_calendar_entries")
 }
 
@@ -3172,6 +3178,21 @@ model AuctionCalendarConfig {
   lastFetchedAt DateTime?
   lastError     String?
   lastCount     Int       @default(0)
+
+  // ── Avisos por chat antes de que empiece una subasta ──────────────────────
+  // Apagados por defecto: el calendario trae cientos de subastas y encenderlo
+  // sin elegir canales ni umbral solo genera ruido.
+  alertsEnabled      Boolean  @default(false)
+  /// Cuantos minutos antes del comienzo se avisa.
+  alertMinutesBefore Int      @default(30)
+  /// Canales elegidos a mano en la pantalla del calendario. El calendario es
+  /// global (no tiene tenant), asi que el destino se elige explicitamente en
+  /// vez de deducirlo del reparto por tipos.
+  alertChannelIds    String[] @default([])
+  /// Avisar solo de las subastas con agente asignado, que son las que se van a
+  /// operar de verdad. Con 700+ proximas, avisar de todas es silenciar el canal.
+  alertOnlyWithAgent Boolean  @default(true)
+
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
