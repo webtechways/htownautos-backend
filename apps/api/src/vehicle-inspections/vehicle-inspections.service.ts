@@ -332,8 +332,20 @@ export class VehicleInspectionsService {
 
   async remove(id: string, tenantId: string) {
     await this.ensureInspection(id, tenantId);
+    // Se lee antes de borrar: despues no hay de donde sacar el lote ni el VIN.
+    const previo = await this.prisma.vehicleInspection.findUnique({
+      where: { id },
+      select: { id: true, vin: true, lotNumber: true, yardName: true },
+    });
     const keys = await this.collectInspectionStorageKeys([id]);
     await this.prisma.vehicleInspection.delete({ where: { id } });
+
+    // Borrar era el unico camino sin aviso, y es justo el que usa la gente
+    // para deshacer una inspeccion. Para el equipo el efecto es el mismo que
+    // cancelarla: deja de haber inspeccion.
+    if (previo) {
+      this.notify(tenantId, 'CUSTOMER_INSPECTION_CANCELLED', 'Inspeccion eliminada', previo);
+    }
     // S3 cleanup is best-effort and intentionally async: a missed key
     // costs cents in storage, but blocking the response on S3 retries
     // makes the UI feel broken when the API container has bad network.
@@ -365,11 +377,33 @@ export class VehicleInspectionsService {
       );
     }
 
+    const previas = await this.prisma.vehicleInspection.findMany({
+      where: { id: { in: uniqueIds }, tenantId: tenantId || undefined },
+      select: { id: true, vin: true, lotNumber: true, yardName: true },
+    });
+
     const keys = await this.collectInspectionStorageKeys(uniqueIds);
     const result = await this.prisma.vehicleInspection.deleteMany({
       where: { id: { in: uniqueIds }, tenantId: tenantId || undefined },
     });
     this.cleanupS3Keys(keys);
+
+    // Un aviso para todo el borrado: seleccionar veinte y borrarlas no son
+    // veinte mensajes en el grupo.
+    if (previas.length === 1) {
+      this.notify(tenantId, 'CUSTOMER_INSPECTION_CANCELLED', 'Inspeccion eliminada', previas[0]);
+    } else if (previas.length > 1) {
+      this.notifyPlain(
+        tenantId,
+        'CUSTOMER_INSPECTION_CANCELLED',
+        `${previas.length} inspecciones eliminadas`,
+        previas
+          .map((p) => `• ${p.lotNumber ? `Lote ${p.lotNumber}` : p.vin}`)
+          .slice(0, 10)
+          .join('\n'),
+      );
+    }
+
     return { deleted: result.count, mediaCleaned: keys.length };
   }
 
@@ -800,6 +834,32 @@ export class VehicleInspectionsService {
     if (ubicacion) lineas.push(ubicacion);
 
     return lineas.join('\n') || 'sin identificar';
+  }
+
+  /**
+   * Aviso con cuerpo ya construido, sin consultar el listing.
+   *
+   * Lo usa el borrado multiple: ahi el cuerpo es la lista de lo borrado, y
+   * pedir la ficha de cada coche serian N consultas para un mensaje que de
+   * todas formas se corta a diez lineas.
+   */
+  private notifyPlain(
+    tenantId: string,
+    type: string,
+    title: string,
+    message: string,
+  ): void {
+    if (!tenantId) return;
+    void this.notifications
+      .notifyTenantStaff(tenantId, {
+        title,
+        message,
+        type,
+        entityType: 'VehicleInspection',
+        actionUrl: '/dashboard/inspection',
+        priority: 'normal',
+      })
+      .catch(() => undefined);
   }
 
   /** El lote es BigInt en `auction_listings` y texto en la inspeccion. */
