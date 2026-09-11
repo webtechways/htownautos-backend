@@ -4,6 +4,7 @@ import { Cron } from '@nestjs/schedule';
 import { Pool, PoolClient, QueryResult, QueryResultRow } from 'pg';
 import { parse as csvParse } from 'csv-parse';
 import { PrismaService } from '@htownautos/prisma';
+import { ChatNotifierService } from './chat-notifier.service';
 import { AuctionSyncService } from '@htownautos/opensearch';
 import {
   deriveSellerCategory,
@@ -169,6 +170,7 @@ export class CopartImportService implements OnModuleInit {
     private readonly sellerClassificationNotifier: SellerClassificationNotifierService,
     private readonly auctionAliasNotifier: AuctionAliasNotifierService,
     private readonly imageCacheEnqueuer: ImageCacheEnqueuerService,
+    private readonly chat: ChatNotifierService,
   ) {
     this.pool = new Pool({
       connectionString: this.configService.get<string>('DATABASE_URL'),
@@ -237,6 +239,14 @@ export class CopartImportService implements OnModuleInit {
       const userIds = [...new Set(staff.map((s) => s.userId))];
       if (userIds.length === 0) return;
       const cleanReason = (reason || 'Motivo desconocido').replace(/\s+/g, ' ').trim().slice(0, 300);
+      await this.chat.send({
+        tenantId,
+        type: 'SYNC_FAILED',
+        title: 'Sincronización de Copart falló',
+        message: `La sincronización no se completó: ${cleanReason}`,
+        priority: 'high',
+        actionUrl: '/dashboard/auction',
+      });
       await this.prisma.notification.createMany({
         data: userIds.map((userId) => ({
           tenantId,

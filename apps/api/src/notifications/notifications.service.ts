@@ -25,7 +25,7 @@ export class NotificationsService {
     userId: string,
     data: CreateNotificationDto,
   ) {
-    return this.prisma.notification.create({
+    const row = await this.prisma.notification.create({
       data: {
         tenantId,
         userId,
@@ -41,6 +41,35 @@ export class NotificationsService {
           : undefined,
       },
     });
+
+    // Tambien al chat. Si esta via no publicara, un canal con ese tipo marcado
+    // no recibiria nada y el interruptor seria decorativo.
+    await this.publishToChat(tenantId, data);
+    return row;
+  }
+
+  /**
+   * Saca la notificacion a los canales de chat del tenant.
+   *
+   * Punto unico: las dos formas de crear notificaciones en la api —una sola y
+   * el reparto al equipo— pasan por aqui, para que añadir un productor no
+   * obligue a acordarse del chat.
+   */
+  private async publishToChat(
+    tenantId: string,
+    data: CreateNotificationDto,
+  ): Promise<void> {
+    if (!tenantId) return;
+    const chat: ChatDispatchMessage = {
+      tenantId,
+      type: data.type,
+      title: data.title,
+      message: data.message,
+      priority: data.priority ?? 'normal',
+      actionUrl: data.actionUrl ?? null,
+    };
+    // `publish` devuelve false si RabbitMQ esta caido; no lanza.
+    await this.rabbitMQ.publish(CHAT_DISPATCH_QUEUE, chat);
   }
 
   // ── Fan-out to all active tenant staff ───────────────────────────────────────
@@ -88,16 +117,8 @@ export class NotificationsService {
       // Y fuera del dashboard: a los canales de chat que el tenant tenga
       // conectados. Va por cola —el reparto lo hace data-sync— para no meter
       // peticiones HTTP salientes en el camino que atiende al cliente.
-      const chat: ChatDispatchMessage = {
-        tenantId,
-        type: data.type,
-        title: data.title,
-        message: data.message,
-        priority: data.priority ?? 'normal',
-        actionUrl: data.actionUrl ?? null,
-      };
-      // `publish` devuelve false si RabbitMQ esta caido; no lanza.
-      await this.rabbitMQ.publish(CHAT_DISPATCH_QUEUE, chat);
+      // Un mensaje por evento, aunque el reparto haya creado N filas.
+      await this.publishToChat(tenantId, data);
     } catch (err) {
       this.logger.warn(
         `notifyTenantStaff: tenant=${tenantId} type=${data.type} — ${(err as Error).message}`,
