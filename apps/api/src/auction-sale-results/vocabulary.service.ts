@@ -179,6 +179,45 @@ export class VocabularyService {
   }
 
   /**
+   * Busca en una frase suelta que marcas, modelos, versiones o años aparecen.
+   *
+   * Sirve para ahorrar una vuelta entera a OpenAI: sin esto, la primera llamada
+   * se gasta siempre en `resolver_valores` y solo la segunda consulta precios.
+   * Medido, cada vuelta cuesta unos 2 segundos de los 5 que tarda una respuesta.
+   *
+   * Solo acepta coincidencias EXACTAS del vocabulario (nada de erratas): una
+   * pista equivocada es peor que ninguna, porque el modelo se fiaria de ella.
+   * Si el usuario escribe mal, no hay pista y el modelo llama a la herramienta
+   * como antes.
+   */
+  async hints(frase: string): Promise<Record<string, string | number>> {
+    await this.asegurar();
+    const salida: Record<string, string | number> = {};
+
+    const anio = frase.match(/\b(19[5-9]\d|20[0-4]\d)\b/);
+    if (anio) salida.year = Number(anio[1]);
+
+    const palabras = frase.split(/\s+/).filter(Boolean);
+    // Ventanas de 1 a 3 palabras: "super cab", "model y", "cr-v".
+    for (const campo of ['make', 'model', 'trim'] as VocabField[]) {
+      const grupos = this.cache.get(campo);
+      if (!grupos || salida[campo]) continue;
+      let mejor: Entrada | null = null;
+      for (let n = 3; n >= 1 && !mejor; n--) {
+        for (let i = 0; i + n <= palabras.length; i++) {
+          const k = normaliza(palabras.slice(i, i + n).join(''));
+          // Se descartan trozos muy cortos: "s" o "xl" sueltos generan ruido.
+          if (k.length < 3) continue;
+          const e = grupos.get(k);
+          if (e && (!mejor || e.ventas > mejor.ventas)) mejor = e;
+        }
+      }
+      if (mejor) salida[campo] = mejor.canonico;
+    }
+    return salida;
+  }
+
+  /**
    * Expande cada valor a TODAS sus grafias en los datos.
    *
    * Es lo que evita que una pregunta por la F-150 devuelva dos filas —una con

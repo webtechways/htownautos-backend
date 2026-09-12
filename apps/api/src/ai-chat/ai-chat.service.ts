@@ -9,6 +9,7 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '@htownautos/prisma';
 import { AiChatToolsService, TOOL_DEFS } from './ai-chat.tools';
 import { StatsService } from '../auction-sale-results/stats.service';
+import { VocabularyService } from '../auction-sale-results/vocabulary.service';
 
 /**
  * Tope de vueltas del bucle de herramientas.
@@ -33,6 +34,7 @@ export class AiChatService {
     private readonly prisma: PrismaService,
     private readonly tools: AiChatToolsService,
     private readonly stats: StatsService,
+    private readonly vocab: VocabularyService,
   ) {
     // El mismo respaldo que usa max-bid: en produccion la clave de OpenAI esta
     // guardada como TTS_API_KEY, no como OPENAI_API_KEY. Sin esta linea el chat
@@ -87,6 +89,12 @@ export class AiChatService {
     userId: string;
     conversationId?: string;
     question: string;
+    /**
+     * Se llama segun avanza. Existe para el modo en streaming: sin esto, el
+     * usuario mira un texto fijo 3,3 segundos de mediana (y hasta 8 en el peor
+     * caso), que es justo lo que hace que no se sienta fluido.
+     */
+    onEvent?: (e: { type: 'tool'; name: string } | { type: 'delta'; text: string }) => void;
   }) {
     if (!this.openai) {
       throw new BadRequestException(
@@ -128,13 +136,27 @@ export class AiChatService {
     });
 
     const mensajes: OpenAI.Chat.ChatCompletionMessageParam[] = [
-      { role: 'system', content: await this.systemPrompt() },
+      { role: 'system', content: this.systemPrompt() },
       ...previos.reverse().map((m) => ({
         role: m.role as 'user' | 'assistant',
         content: m.content,
       })),
       { role: 'user', content: pregunta },
     ];
+
+    // Pistas resueltas por nuestro lado ANTES de hablar con OpenAI. Ahorran la
+    // vuelta que se gastaba siempre en `resolver_valores`, que son ~2s de los 5
+    // que tarda una respuesta. Solo van si la coincidencia es exacta.
+    const pistas = await this.vocab.hints(pregunta).catch(() => ({}));
+    if (Object.keys(pistas).length) {
+      mensajes.push({
+        role: 'system',
+        content:
+          'Ya identificado en la pregunta (no hace falta resolver_valores para esto): ' +
+          JSON.stringify(pistas) +
+          '. Usa estos valores tal cual al filtrar.',
+      });
+    }
 
     const inicio = Date.now();
     const usadas: { nombre: string; args: unknown }[] = [];
@@ -146,18 +168,61 @@ export class AiChatService {
     let respuesta = '';
 
     for (let vuelta = 0; vuelta < MAX_VUELTAS; vuelta++) {
-      const completion = await this.openai.chat.completions.create({
+      const peticion = {
         model: this.model,
         messages: mensajes,
         tools: TOOL_DEFS,
         temperature: 0.2, // datos, no prosa creativa
         max_tokens: 1200,
-      });
+        // Agrupa las peticiones de este chat para que OpenAI acierte mas veces
+        // con la cache del prefijo comun (prompt de sistema + herramientas).
+        prompt_cache_key: 'htownautos-ai-chat-v1',
+      } as const;
 
-      tokensIn += completion.usage?.prompt_tokens ?? 0;
-      tokensOut += completion.usage?.completion_tokens ?? 0;
+      let msg: OpenAI.Chat.ChatCompletionMessage | undefined;
 
-      const msg = completion.choices[0]?.message;
+      if (params.onEvent) {
+        // En streaming se reconstruye el mensaje a trozos. Los deltas de texto
+        // salen ya hacia el usuario; los de herramienta se acumulan porque solo
+        // sirven completos.
+        const stream = await this.openai.chat.completions.create({
+          ...peticion,
+          stream: true,
+          stream_options: { include_usage: true },
+        });
+        let contenido = '';
+        const llamadas: any[] = [];
+        for await (const trozo of stream) {
+          if (trozo.usage) {
+            tokensIn += trozo.usage.prompt_tokens ?? 0;
+            tokensOut += trozo.usage.completion_tokens ?? 0;
+          }
+          const d = trozo.choices[0]?.delta;
+          if (!d) continue;
+          if (d.content) {
+            contenido += d.content;
+            params.onEvent({ type: 'delta', text: d.content });
+          }
+          for (const tc of d.tool_calls ?? []) {
+            const i = tc.index ?? 0;
+            llamadas[i] ??= { id: '', type: 'function', function: { name: '', arguments: '' } };
+            if (tc.id) llamadas[i].id = tc.id;
+            if (tc.function?.name) llamadas[i].function.name += tc.function.name;
+            if (tc.function?.arguments) llamadas[i].function.arguments += tc.function.arguments;
+          }
+        }
+        msg = {
+          role: 'assistant',
+          content: contenido || null,
+          ...(llamadas.length ? { tool_calls: llamadas } : {}),
+        } as OpenAI.Chat.ChatCompletionMessage;
+      } else {
+        const completion = await this.openai.chat.completions.create(peticion);
+        tokensIn += completion.usage?.prompt_tokens ?? 0;
+        tokensOut += completion.usage?.completion_tokens ?? 0;
+        msg = completion.choices[0]?.message;
+      }
+
       if (!msg) break;
 
       if (!msg.tool_calls?.length) {
@@ -177,6 +242,7 @@ export class AiChatService {
             args = {};
           }
           usadas.push({ nombre: fn.name, args });
+          params.onEvent?.({ type: 'tool', name: fn.name });
           const salida = await this.tools.run(fn.name, args);
           // Tanto la herramienta de opciones como el corte por consulta
           // demasiado amplia ofrecen valores a elegir.
@@ -245,13 +311,11 @@ export class AiChatService {
    * Las instrucciones. La mitad de esto existe para evitar el unico fallo que
    * de verdad importa: que responda una cifra plausible que no sale de los datos.
    */
-  private async systemPrompt(): Promise<string> {
-    const c = await this.stats.coverage();
-    const dias =
-      c.desde && c.hasta
-        ? Math.max(1, Math.round((c.hasta.getTime() - c.desde.getTime()) / 86_400_000))
-        : 0;
-
+  private systemPrompt(): string {
+    // Sin datos variables aqui. OpenAI cachea prefijos de >=1024 tokens con
+    // coincidencia EXACTA: meter el total de ventas —que sube cada pocos
+    // segundos— hacia que el prefijo no coincidiera nunca y se pagara tarifa
+    // completa en cada llamada. El periodo cubierto lo da `cobertura_de_datos`.
     return [
       'Eres el asistente de datos de subastas de HtownAutos. Respondes en español, directo y breve.',
       '',
@@ -284,8 +348,9 @@ export class AiChatService {
       'responde sin pedir mas datos.',
       '5. Usa la MEDIANA como precio de referencia y los percentiles 25-75 como rango habitual.',
       '   La media se desvia con un solo lote caro y no representa lo que se paga.',
-      `6. Los datos cubren ${dias} dia(s) (${c.totalVentas} ventas registradas). NO respondas preguntas de`,
-      '   tendencia, evolucion o comparacion entre periodos: no hay historia suficiente. Dilo claramente.',
+      '6. Los datos abarcan un periodo CORTO (pocos dias). NO respondas preguntas de tendencia,',
+      '   evolucion o comparacion entre periodos. Si te preguntan eso, llama a `cobertura_de_datos`',
+      '   para saber el periodo exacto y explica que no hay historia suficiente.',
       '7. Si la pregunta no va de datos de subasta (inventario propio, clientes, contabilidad), dilo:',
       '   solo tienes acceso a resultados de subasta y lotes.',
       '',
