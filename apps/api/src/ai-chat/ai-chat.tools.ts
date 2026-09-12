@@ -76,8 +76,24 @@ export const TOOL_DEFS = [
       description:
         'Distribucion del precio final de venta para unos filtros: mediana, percentiles 25 y 75, minimo, maximo y media, ' +
         'mas el kilometraje mediano y el tamaño de la muestra. Es la herramienta principal para "cuanto se paga por X". ' +
-        'Usa la MEDIANA como respuesta y los percentiles como rango habitual.',
-      parameters: { ...FILTROS_SCHEMA },
+        'Usa la MEDIANA como respuesta y los percentiles como rango habitual. ' +
+        'Si la consulta es demasiado amplia para dar un precio util, en vez de precios devuelve `faltaPrecisar` ' +
+        'con el campo que falta y sus opciones: en ese caso PREGUNTA al usuario y ofrece esas opciones.',
+      parameters: {
+        type: 'object',
+        properties: {
+          ...FILTROS_SCHEMA.properties,
+          incluirTodos: {
+            type: 'boolean',
+            description:
+              'Deja esto SIN PONER por defecto. Ponlo a true UNICAMENTE en dos casos: ' +
+              '(a) el usuario uso palabras como "todos", "en general", "da igual el año", "sin filtrar"; ' +
+              '(b) ya le preguntaste por ese dato en un turno anterior y no quiso concretar. ' +
+              'NO lo pongas porque la pregunta suene general: "cuanto se paga por una F-150" NO cualifica, ' +
+              'porque una F-150 tiene 41 años distintos en los datos y la media de todos no le sirve a nadie.',
+          },
+        },
+      },
     },
   },
   {
@@ -94,6 +110,28 @@ export const TOOL_DEFS = [
           por: { type: 'string', enum: BREAKDOWN_FIELDS, description: 'Dimension por la que agrupar' },
         },
         required: ['por'],
+      },
+    },
+  },
+  {
+    type: 'function' as const,
+    function: {
+      name: 'opciones_para_elegir',
+      description:
+        'Devuelve los valores DISPONIBLES de un campo dentro de los filtros que ya conoces, con cuantas ventas tiene cada uno. ' +
+        'Usalo cuando falte un dato para responder bien: pide el campo que falta y ofrece esta lista al usuario. ' +
+        'Ejemplo: sabes que es un Ford F-150 pero no el año -> opciones_para_elegir(campo: "year", make: ["FORD"], model: ["F150"]).',
+      parameters: {
+        type: 'object',
+        properties: {
+          ...FILTROS_SCHEMA.properties,
+          campo: {
+            type: 'string',
+            enum: ['make', 'model', 'trim', 'year', 'damage', 'title', 'state', 'color'],
+            description: 'El campo que falta y quieres ofrecer',
+          },
+        },
+        required: ['campo'],
       },
     },
   },
@@ -164,6 +202,68 @@ export class AiChatToolsService {
   }
 
   /**
+   * Decide si falta un dato para que el precio signifique algo, y devuelve las
+   * opciones para preguntarlo. `null` si la consulta ya es suficientemente
+   * concreta.
+   *
+   * Orden: modelo -> año -> version, que es como lo piensa una persona.
+   */
+  private async faltaPrecisar(dto: QueryStatsDto): Promise<unknown | null> {
+    const pide = async (campo: BreakdownField, etiqueta: string) => {
+      const grupos = await this.stats.breakdown(dto, campo, 20);
+      const utiles = grupos.filter((g) => g.grupo);
+      if (utiles.length < 2) return null; // no hay nada que elegir
+      return {
+        faltaPrecisar: campo,
+        pregunta: etiqueta,
+        opciones: utiles.map((g) => ({ valor: g.grupo, ventas: g.muestra })),
+        nota:
+          'NO des ningun precio todavia. Pregunta por este dato y ofrece las opciones al usuario. ' +
+          'Si el usuario ya dijo que le da igual o quiere el conjunto, repite la llamada con incluirTodos=true.',
+      };
+    };
+
+    // Sin modelo, un precio por marca mezcla una furgoneta con un utilitario.
+    if (!dto.model?.length) {
+      const r = await pide('model', '¿De que modelo?');
+      if (r) return r;
+    }
+    // El año es el que mas mueve el precio.
+    if (dto.yearMin == null && dto.yearMax == null) {
+      const r = await pide('year', '¿De que año?');
+      if (r) return r;
+    }
+    // La version solo si de verdad hay varias con peso.
+    if (!dto.trim?.length) {
+      const grupos = await this.stats.breakdown(dto, 'trim', 20);
+      const utiles = grupos.filter((g) => g.grupo && g.muestra >= 3);
+      if (utiles.length >= 2) {
+        return {
+          faltaPrecisar: 'trim',
+          pregunta: '¿Que version?',
+          opciones: utiles.map((g) => ({ valor: g.grupo, ventas: g.muestra })),
+          nota:
+            'NO des ningun precio todavia. Pregunta la version y ofrece las opciones. ' +
+            'Si al usuario le da igual, repite con incluirTodos=true.',
+        };
+      }
+    }
+    return null;
+  }
+
+  /** Resumen legible de lo que se filtro, para que el modelo lo cite. */
+  private describeFilters(dto: QueryStatsDto): Record<string, unknown> {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(dto)) {
+      if (v === undefined || v === null) continue;
+      if (Array.isArray(v) && v.length === 0) continue;
+      if (['page', 'limit', 'sortBy', 'sortOrder', 'includeAggregations'].includes(k)) continue;
+      out[k] = v;
+    }
+    return Object.keys(out).length ? out : { sinFiltros: true };
+  }
+
+  /**
    * Ejecuta una herramienta. Nunca lanza: un fallo vuelve al modelo como texto
    * para que lo explique, en vez de romper la conversacion entera.
    */
@@ -203,9 +303,36 @@ export class AiChatToolsService {
         }
 
         case 'estadisticas_de_precio': {
-          const r = await this.stats.priceStats(await this.toDto(args));
+          const dto = await this.toDto(args);
+
+          // Antes de dar un precio, se comprueba que la pregunta sea lo bastante
+          // concreta. Una F-150 tiene 41 años distintos en los datos: la mediana
+          // de todos juntos mezcla un 2023 con un 1998 y no le sirve a nadie.
+          //
+          // Va aqui y no en el prompt a proposito: pedirselo por escrito al
+          // modelo no funciono —respondia igualmente—, y un resultado de
+          // herramienta sin precios no se puede ignorar.
+          if (!args?.incluirTodos) {
+            const falta = await this.faltaPrecisar(dto);
+            if (falta) return falta;
+          }
+
+          const r = await this.stats.priceStats(dto);
           return {
             ...r,
+            // Si se salto la precision, la respuesta tiene que decirlo. Un
+            // precio que mezcla 41 años no puede presentarse como "el precio".
+            ...(args?.incluirTodos
+              ? {
+                  advertencia:
+                    'Cifra agregada SIN precisar año ni version. Dilo explicitamente en tu respuesta ' +
+                    '("mezclando todos los años") y ofrece concretar.',
+                }
+              : {}),
+            // Se devuelve lo que de verdad se filtro. Sin esto, si el modelo
+            // olvida el año, responde "Corolla 2014" con datos de todos los
+            // años y nadie lo nota. Con esto lo ve y puede corregirse.
+            filtrosAplicados: this.describeFilters(dto),
             nota: r.muestra === 0
               ? 'Sin ventas con estos filtros. No estimes un precio.'
               : r.suficiente
@@ -219,6 +346,20 @@ export class AiChatToolsService {
           if (!BREAKDOWN_FIELDS.includes(por)) return { error: `dimension no valida: ${por}` };
           const grupos = await this.stats.breakdown(await this.toDto(filtros), por);
           return { por, grupos, nota: 'Los grupos marcados como no suficientes tienen muestra pobre; no los presentes como dato firme.' };
+        }
+
+        case 'opciones_para_elegir': {
+          const { campo, ...filtros } = args ?? {};
+          if (!BREAKDOWN_FIELDS.includes(campo)) return { error: `campo no valido: ${campo}` };
+          const grupos = await this.stats.breakdown(await this.toDto(filtros), campo, 20);
+          return {
+            campo,
+            // Sin precios a proposito: esto es para ELEGIR, no para comparar.
+            opciones: grupos.map((g) => ({ valor: g.grupo, ventas: g.muestra })),
+            nota: grupos.length
+              ? 'Ofrece estas opciones al usuario y espera su respuesta. No elijas tu por el.'
+              : 'No hay opciones con esos filtros. Revisa lo que ya has filtrado.',
+          };
         }
 
         case 'ejemplos_de_ventas': {

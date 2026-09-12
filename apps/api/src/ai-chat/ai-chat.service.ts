@@ -138,6 +138,9 @@ export class AiChatService {
 
     const inicio = Date.now();
     const usadas: { nombre: string; args: unknown }[] = [];
+    // Si la ultima herramienta ofrecio opciones, se devuelven aparte para que
+    // la UI las pinte como botones: tener que teclear "2023" rompe el ritmo.
+    let sugerencias: string[] = [];
     let tokensIn = 0;
     let tokensOut = 0;
     let respuesta = '';
@@ -175,6 +178,17 @@ export class AiChatService {
           }
           usadas.push({ nombre: fn.name, args });
           const salida = await this.tools.run(fn.name, args);
+          // Tanto la herramienta de opciones como el corte por consulta
+          // demasiado amplia ofrecen valores a elegir.
+          const ops = (salida as any)?.opciones;
+          if (fn.name === 'opciones_para_elegir' || (salida as any)?.faltaPrecisar) {
+            if (Array.isArray(ops)) {
+              sugerencias = ops
+                .map((o: any) => (o?.valor == null ? null : String(o.valor)))
+                .filter((x: string | null): x is string => !!x)
+                .slice(0, 12);
+            }
+          }
           return { id: tc.id, salida };
         }),
       );
@@ -220,6 +234,7 @@ export class AiChatService {
       messageId: fila.id,
       answer: fila.content,
       toolsUsed: usadas.map((u) => u.nombre),
+      suggestions: sugerencias,
       tokensIn,
       tokensOut,
       latencyMs,
@@ -254,6 +269,19 @@ export class AiChatService {
       '   varias opciones de peso parecido y elegir mal cambiaria mucho la respuesta.',
       '4. Di siempre sobre cuantas ventas se calcula ("segun 1.825 ventas"). Si la herramienta marca la',
       '   muestra como insuficiente, dilo en vez de dar la cifra como fiable.',
+      '   Comprueba `filtrosAplicados` en la respuesta de la herramienta: si falta algo que el usuario',
+      '   pidio (por ejemplo el año), NO afirmes ese dato en tu respuesta. Vuelve a llamar con el filtro.',
+      '',
+      'PREGUNTAR LO QUE FALTA (importante para que sea util):',
+      'Un precio sin año ni version sirve de poco: un F-150 de 2023 y uno de 2010 no tienen nada que ver.',
+      'Si el usuario no da todos los datos, NO respondas con la media de todo: pide lo que falta,',
+      'DE UNO EN UNO y en este orden: marca -> modelo -> año -> version.',
+      'Cada vez que pidas un dato, llama antes a `opciones_para_elegir` con lo que ya sabes y OFRECE esa',
+      'lista. Preguntar "¿que año?" sin opciones obliga al usuario a adivinar que hay en los datos.',
+      'Formato de esa pregunta: una frase corta diciendo que ya sabes y que te falta, y despues las',
+      'opciones separadas por " · " en una sola linea. Nada mas: no adelantes precios todavia.',
+      'Excepcion: si el usuario pide explicitamente el conjunto ("todos los F-150", "en general"),',
+      'responde sin pedir mas datos.',
       '5. Usa la MEDIANA como precio de referencia y los percentiles 25-75 como rango habitual.',
       '   La media se desvia con un solo lote caro y no representa lo que se paga.',
       `6. Los datos cubren ${dias} dia(s) (${c.totalVentas} ventas registradas). NO respondas preguntas de`,
