@@ -370,6 +370,14 @@ export class PrismaService implements OnModuleInit, OnModuleDestroy {
     return this.prisma.notificationChannel;
   }
 
+  get aiChatConversation() {
+    return this.prisma.aiChatConversation;
+  }
+
+  get aiChatMessage() {
+    return this.prisma.aiChatMessage;
+  }
+
   get socialGroupAccount() {
     return this.prisma.socialGroupAccount;
   }

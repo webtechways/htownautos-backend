@@ -3681,6 +3681,51 @@ model NotificationChannel {
   @@map("notification_channels")
 }
 
+/// Conversacion del chat de IA sobre los datos de subasta.
+model AiChatConversation {
+  id       String @id @default(uuid())
+  tenantId String
+  userId   String
+  /// Se genera con la primera pregunta para poder reconocerla en la lista.
+  title    String
+
+  messages  AiChatMessage[]
+  createdAt DateTime        @default(now())
+  updatedAt DateTime        @updatedAt
+
+  // La lista del usuario se ordena por actividad reciente.
+  @@index([userId, updatedAt])
+  @@index([tenantId])
+  @@map("ai_chat_conversations")
+}
+
+/// Un turno de la conversacion.
+model AiChatMessage {
+  id             String @id @default(uuid())
+  conversationId String
+  /// user | assistant
+  role           String
+  content        String @db.Text
+
+  /// Que herramientas se llamaron y con que argumentos. Es lo que permite
+  /// auditar de donde salio una cifra cuando alguien discute una respuesta.
+  toolCalls Json?
+
+  /// Consumo real, por mensaje. Sin esto el coste de la funcion es una
+  /// adivinanza hasta que llega la factura.
+  tokensIn  Int?
+  tokensOut Int?
+  model     String?
+  latencyMs Int?
+
+  createdAt DateTime @default(now())
+
+  conversation AiChatConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId, createdAt])
+  @@map("ai_chat_messages")
+}
+
 model SocialGroup {
   id        String   @id @default(uuid())
   tenantId  String

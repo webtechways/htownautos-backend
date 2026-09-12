@@ -73,6 +73,7 @@ import { InventoryAssetsModule } from './inventory-assets/inventory-assets.modul
 import { InvestmentsModule } from './investments/investments.module';
 import { SocialAccountsModule } from './social-accounts/social-accounts.module';
 import { NotificationChannelsModule } from './notification-channels/notification-channels.module';
+import { AiChatModule } from './ai-chat/ai-chat.module';
 import { ClerkWebhooksModule } from './clerk-webhooks/clerk-webhooks.module';
 import { ShippoModule } from './shippo/shippo.module';
 import { ParcelTemplatesModule } from './parcel-templates/parcel-templates.module';
@@ -176,6 +177,7 @@ import { SyncWatchdogModule } from './sync-watchdog/sync-watchdog.module';
     InvestmentsModule,
     SocialAccountsModule,
     NotificationChannelsModule,
+    AiChatModule,
     ClerkWebhooksModule,
     ShippoModule,
     ParcelTemplatesModule,

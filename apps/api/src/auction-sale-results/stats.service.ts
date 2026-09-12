@@ -15,6 +15,32 @@ type Where = Prisma.AuctionSaleResultWhereInput;
 const num = (d: Prisma.Decimal | null | undefined): number | null =>
   d === null || d === undefined ? null : Number(d);
 
+const redondea = (v: number | null | undefined): number | null =>
+  v === null || v === undefined ? null : Math.round(v);
+
+/**
+ * Dimensiones por las que se puede desglosar o resolver valores.
+ *
+ * Es una lista cerrada a proposito: el nombre de columna se interpola en SQL
+ * —`GROUP BY` no admite parametro—, asi que solo pueden entrar valores de aqui.
+ * Si algun dia se acepta el campo desde fuera sin pasar por este mapa, es
+ * inyeccion.
+ */
+const BREAKDOWN_COLUMNS = {
+  year: 'year',
+  make: 'make',
+  model: 'model',
+  trim: 'trim',
+  damage: 'damageDescription',
+  title: 'saleTitleType',
+  state: 'locationState',
+  color: 'color',
+  bodyStyle: 'bodyStyle',
+} as const;
+
+export type BreakdownField = keyof typeof BREAKDOWN_COLUMNS;
+export const BREAKDOWN_FIELDS = Object.keys(BREAKDOWN_COLUMNS) as BreakdownField[];
+
 /**
  * Read/search + facets over auction_sale_results for the "Stats Listing" page.
  * Mirrors the auction search filters (same promoted vehicle columns) and adds
@@ -84,6 +110,166 @@ export class StatsService {
     });
     if (!row) throw new NotFoundException(`No sale result for lot ${lot}`);
     return this.serialize(row);
+  }
+
+  // ── Agregados para el chat de IA ────────────────────────────────────────────
+
+  /**
+   * Por debajo de esto una media no significa nada. El chat lo usa para avisar
+   * en vez de dar una cifra que suena precisa y no lo es.
+   */
+  static readonly MUESTRA_MINIMA = 10;
+
+  /**
+   * Distribucion del precio final para un conjunto de filtros.
+   *
+   * Devuelve **mediana y percentiles antes que la media**: un lote adjudicado en
+   * 45.000 entre coches de 4.000 mueve la media y deja la mediana quieta, y es
+   * la mediana la que responde a "cuanto se paga por esto".
+   *
+   * `percentile_cont` no esta en Prisma, asi que va en consulta cruda — pero
+   * partiendo del mismo `buildWhere` que la pantalla de Stats, para que el chat
+   * y la rejilla no puedan discrepar sobre lo que significa un filtro.
+   */
+  async priceStats(dto: QueryStatsDto) {
+    const where = await this.buildWhere(dto);
+
+    // Se resuelven los ids con Prisma y se agrega sobre ellos: asi el filtro
+    // sigue siendo el mismo codigo, sin duplicar su logica en SQL.
+    const ids = await this.prisma.auctionSaleResult.findMany({
+      where: { ...where, finalBid: { not: null } },
+      select: { id: true },
+      take: 50_000, // techo de seguridad; con mas, la mediana ya no cambia
+    });
+
+    if (ids.length === 0) {
+      return { muestra: 0, suficiente: false, precio: null, odometroMediana: null };
+    }
+
+    // El getter de PrismaService devuelve la funcion ya enlazada y pierde la
+    // firma generica, asi que el tipo se pone con un cast en el resultado.
+    const filas = (await this.prisma.$queryRaw`
+      SELECT count(*)                                                        AS n,
+             percentile_cont(0.25) WITHIN GROUP (ORDER BY "finalBid")::float AS p25,
+             percentile_cont(0.50) WITHIN GROUP (ORDER BY "finalBid")::float AS mediana,
+             percentile_cont(0.75) WITHIN GROUP (ORDER BY "finalBid")::float AS p75,
+             min("finalBid")::float                                          AS minimo,
+             max("finalBid")::float                                          AS maximo,
+             avg("finalBid")::float                                          AS media,
+             percentile_cont(0.50) WITHIN GROUP (ORDER BY odometer)::float   AS odo
+        FROM auction_sale_results
+       WHERE id = ANY(${ids.map((r) => r.id)}::text[])
+    `) as {
+      n: bigint;
+      p25: number | null;
+      mediana: number | null;
+      p75: number | null;
+      minimo: number | null;
+      maximo: number | null;
+      media: number | null;
+      odo: number | null;
+    }[];
+
+    const r = filas[0];
+    const muestra = Number(r?.n ?? 0);
+    return {
+      muestra,
+      suficiente: muestra >= StatsService.MUESTRA_MINIMA,
+      precio: {
+        mediana: redondea(r?.mediana),
+        p25: redondea(r?.p25),
+        p75: redondea(r?.p75),
+        minimo: redondea(r?.minimo),
+        maximo: redondea(r?.maximo),
+        media: redondea(r?.media),
+      },
+      odometroMediana: redondea(r?.odo),
+    };
+  }
+
+  /**
+   * Reparto por una dimension, con recuento y mediana de precio en cada grupo.
+   * Es lo que contesta "¿que año sale mas a cuenta?" sin que el modelo tenga
+   * que pedir una consulta por año.
+   */
+  async breakdown(dto: QueryStatsDto, por: BreakdownField, limite = 15) {
+    const columna = BREAKDOWN_COLUMNS[por];
+    const where = await this.buildWhere(dto);
+
+    const ids = await this.prisma.auctionSaleResult.findMany({
+      where: { ...where, finalBid: { not: null } },
+      select: { id: true },
+      take: 50_000,
+    });
+    if (ids.length === 0) return [];
+
+    // El getter de PrismaService devuelve la funcion ya enlazada y pierde la
+    // firma generica, asi que el tipo se pone con un cast en el resultado.
+    const filas = (await this.prisma.$queryRawUnsafe(
+      `SELECT "${columna}"::text AS grupo,
+              count(*) AS n,
+              percentile_cont(0.50) WITHIN GROUP (ORDER BY "finalBid")::float AS mediana
+         FROM auction_sale_results
+        WHERE id = ANY($1::text[]) AND "${columna}" IS NOT NULL
+        GROUP BY "${columna}"
+        ORDER BY count(*) DESC
+        LIMIT $2`,
+      ids.map((r) => r.id),
+      limite,
+    )) as { grupo: string | null; n: bigint; mediana: number | null }[];
+
+    return filas.map((f) => ({
+      grupo: f.grupo,
+      muestra: Number(f.n),
+      suficiente: Number(f.n) >= StatsService.MUESTRA_MINIMA,
+      medianaPrecio: redondea(f.mediana),
+    }));
+  }
+
+  /**
+   * Valores reales que existen en los datos para un campo, buscando por texto.
+   *
+   * Sin esto el modelo filtra por el nombre que el usuario escribio —"Tacoma"—
+   * donde los datos guardan otra cosa, recibe cero filas y responde "no hay
+   * datos" con total seguridad. Devuelve tambien cuantas ventas tiene cada
+   * valor, que es como el modelo elige entre varios parecidos.
+   */
+  async resolveValues(campo: BreakdownField, texto: string, limite = 10) {
+    const columna = BREAKDOWN_COLUMNS[campo];
+
+    // Se compara ignorando guiones y espacios en AMBOS lados. No es cosmetico:
+    // los datos traen "F-150" (87 ventas) y "F150" (1539) como valores
+    // distintos, asi que buscar literalmente "f-150" devolveria el 5% de los
+    // datos y el modelo respondera con total seguridad una cifra falsa.
+    const aguja = texto.replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
+    if (!aguja) return [];
+
+    const filas = (await this.prisma.$queryRawUnsafe(
+      `SELECT "${columna}"::text AS valor, count(*) AS n
+         FROM auction_sale_results
+        WHERE "${columna}" IS NOT NULL
+          AND regexp_replace("${columna}"::text, '[^A-Za-z0-9]', '', 'g') ILIKE $1
+        GROUP BY "${columna}"
+        ORDER BY count(*) DESC
+        LIMIT $2`,
+      `%${aguja}%`,
+      limite,
+    )) as { valor: string | null; n: bigint }[];
+    return filas.map((f) => ({ valor: f.valor, ventas: Number(f.n) }));
+  }
+
+  /** Rango real de fechas cubierto. El chat lo necesita para no inventar tendencias. */
+  async coverage() {
+    const r = await this.prisma.auctionSaleResult.aggregate({
+      _min: { emittedAt: true },
+      _max: { emittedAt: true },
+      _count: { _all: true },
+    });
+    return {
+      desde: r._min.emittedAt,
+      hasta: r._max.emittedAt,
+      totalVentas: r._count._all,
+    };
   }
 
   async getFilters(dto: QueryStatsDto) {
