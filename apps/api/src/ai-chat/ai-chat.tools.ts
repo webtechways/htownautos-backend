@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { StatsService, BREAKDOWN_FIELDS, type BreakdownField } from '../auction-sale-results/stats.service';
+import { VocabularyService, type VocabField } from '../auction-sale-results/vocabulary.service';
 import { QueryStatsDto } from '../auction-sale-results/dto/query-stats.dto';
 
 /**
@@ -44,17 +45,27 @@ export const TOOL_DEFS = [
     function: {
       name: 'resolver_valores',
       description:
-        'Traduce lo que escribio el usuario al valor exacto que existe en los datos, con su numero de ventas. ' +
-        'USA ESTO SIEMPRE ANTES de filtrar por marca, modelo, version, daño, color o estado. ' +
-        'Los datos guardan el vocabulario de la subasta y no el del usuario: "F-150" y "F150" conviven como valores distintos. ' +
-        'Si filtras por un valor inventado recibiras cero ventas y concluiras erroneamente que no hay datos.',
+        'Traduce lo que escribio el usuario a los valores que existen en los datos. ' +
+        'USA ESTO UNA SOLA VEZ ANTES de filtrar, resolviendo TODOS los campos que necesites en la misma llamada. ' +
+        'Tolera erratas y distintas grafias, y ya agrupa las variantes: al filtrar usa el campo `valor` tal cual. ' +
+        'Si `exacto` es false pero hay un unico resultado claro, USALO y menciona la correccion de paso; no preguntes al usuario.',
       parameters: {
         type: 'object',
         properties: {
-          campo: { type: 'string', enum: BREAKDOWN_FIELDS, description: 'Que campo resolver' },
-          texto: { type: 'string', description: 'Lo que escribio el usuario' },
+          consultas: {
+            type: 'array',
+            description: 'Un elemento por cada campo a resolver',
+            items: {
+              type: 'object',
+              properties: {
+                campo: { type: 'string', enum: ['make', 'model', 'trim', 'damage', 'title', 'color', 'state'] },
+                texto: { type: 'string', description: 'Lo que escribio el usuario' },
+              },
+              required: ['campo', 'texto'],
+            },
+          },
         },
-        required: ['campo', 'texto'],
+        required: ['consultas'],
       },
     },
   },
@@ -119,14 +130,30 @@ export const TOOL_DEFS = [
 export class AiChatToolsService {
   private readonly logger = new Logger(AiChatToolsService.name);
 
-  constructor(private readonly stats: StatsService) {}
+  constructor(
+    private readonly stats: StatsService,
+    private readonly vocab: VocabularyService,
+  ) {}
 
   /** Pasa los argumentos del modelo al DTO que entiende StatsService. */
-  private toDto(args: any): QueryStatsDto {
+  private async toDto(args: any): Promise<QueryStatsDto> {
     const dto = new QueryStatsDto();
     const listas = ['make', 'model', 'trim', 'damageDescription', 'titleCategory', 'locationState', 'color'];
     for (const k of listas) {
       if (Array.isArray(args?.[k]) && args[k].length) (dto as any)[k] = args[k].map(String);
+    }
+
+    // Cada valor se expande a TODAS sus grafias en los datos. Sin esto, filtrar
+    // por "F150" deja fuera las 87 ventas guardadas como "F-150" y la respuesta
+    // sale partida en dos filas que al usuario no le dicen nada.
+    // `titleCategory` no se toca: no es vocabulario, es una categoria derivada.
+    const expandibles: [string, VocabField][] = [
+      ['make', 'make'], ['model', 'model'], ['trim', 'trim'],
+      ['damageDescription', 'damage'], ['locationState', 'state'], ['color', 'color'],
+    ];
+    for (const [clave, campo] of expandibles) {
+      const v = (dto as any)[clave] as string[] | undefined;
+      if (v?.length) (dto as any)[clave] = await this.vocab.expand(campo, v);
     }
     for (const k of ['yearMin', 'yearMax', 'odometerMin', 'odometerMax']) {
       const v = Number(args?.[k]);
@@ -144,16 +171,39 @@ export class AiChatToolsService {
     try {
       switch (nombre) {
         case 'resolver_valores': {
-          const campo = args?.campo as BreakdownField;
-          if (!BREAKDOWN_FIELDS.includes(campo)) return { error: `campo no valido: ${campo}` };
-          const valores = await this.stats.resolveValues(campo, String(args?.texto ?? ''));
-          return valores.length
-            ? { campo, valores }
-            : { campo, valores: [], nota: 'Ningun valor coincide. No inventes uno: dilo y pide al usuario que concrete.' };
+          const consultas: { campo: VocabField; texto: string }[] = Array.isArray(args?.consultas)
+            ? args.consultas
+            : // Compatibilidad con la forma antigua de un solo campo.
+              [{ campo: args?.campo, texto: args?.texto }];
+
+          const resueltos = await Promise.all(
+            consultas.map(async (c) => {
+              const encontrados = await this.vocab.resolve(c.campo, String(c.texto ?? ''));
+              return {
+                campo: c.campo,
+                busco: c.texto,
+                // `valor` ya es la grafia canonica; al filtrar se expanden todas.
+                valores: encontrados.map((e) => ({
+                  valor: e.valor,
+                  ventas: e.ventas,
+                  exacto: e.exacto,
+                  ...(e.grafias.length > 1 ? { variantesEnDatos: e.grafias } : {}),
+                })),
+              };
+            }),
+          );
+
+          const vacios = resueltos.filter((r) => r.valores.length === 0).map((r) => r.busco);
+          return {
+            resueltos,
+            ...(vacios.length
+              ? { nota: `Sin coincidencias para: ${vacios.join(', ')}. No inventes un valor: dilo y pide que concreten.` }
+              : {}),
+          };
         }
 
         case 'estadisticas_de_precio': {
-          const r = await this.stats.priceStats(this.toDto(args));
+          const r = await this.stats.priceStats(await this.toDto(args));
           return {
             ...r,
             nota: r.muestra === 0
@@ -167,12 +217,12 @@ export class AiChatToolsService {
         case 'desglose': {
           const { por, ...filtros } = args ?? {};
           if (!BREAKDOWN_FIELDS.includes(por)) return { error: `dimension no valida: ${por}` };
-          const grupos = await this.stats.breakdown(this.toDto(filtros), por);
+          const grupos = await this.stats.breakdown(await this.toDto(filtros), por);
           return { por, grupos, nota: 'Los grupos marcados como no suficientes tienen muestra pobre; no los presentes como dato firme.' };
         }
 
         case 'ejemplos_de_ventas': {
-          const dto = this.toDto(args);
+          const dto = await this.toDto(args);
           dto.limit = Math.min(Math.max(Number(args?.limite) || 5, 1), 10);
           dto.sortBy = 'saleDate';
           dto.sortOrder = 'desc';
