@@ -112,6 +112,61 @@ export class StatsService {
     return this.serialize(row);
   }
 
+  /**
+   * Una venta por VIN. Si el mismo coche se subasto dos veces, la mas reciente.
+   *
+   * El 99,9% de las ventas tienen VIN, asi que pegar un VIN deberia dar una
+   * respuesta exacta — y no lo hacia porque no existia esta consulta.
+   */
+  async findByVin(vin: string) {
+    const limpio = vin.trim().toUpperCase();
+    const row = await this.prisma.auctionSaleResult.findFirst({
+      where: { vin: limpio },
+      orderBy: [{ saleDate: 'desc' }, { createdAt: 'desc' }],
+    });
+    return row ? this.serialize(row) : null;
+  }
+
+  /**
+   * Traduce un codigo de titulo ("CT", "SV"...) a su categoria.
+   *
+   * Sin esto el modelo lo adivina, y se le vio interpretar "CT" como
+   * "Clean Title" en una respuesta y como "Connecticut" en la siguiente.
+   * Decirle a alguien que un titulo salvage esta limpio cuesta dinero.
+   */
+  async titleCategoryOf(codigo: string | null | undefined): Promise<string | null> {
+    if (!codigo) return null;
+    const overrides = await this.titleMapping.getOverrides();
+    return deriveTitleCategory(codigo, overrides);
+  }
+
+  /** El mismo VIN entre los lotes que aun estan en subasta. */
+  async listingByVin(vin: string) {
+    const row = await this.prisma.auctionListing.findFirst({
+      where: { vin: vin.trim().toUpperCase() },
+      select: {
+        lotNumber: true, year: true, make: true, modelGroup: true, modelDetail: true,
+        trim: true, odometer: true, damageDescription: true, saleTitleType: true,
+        locationState: true, saleDate: true, highBid: true, yardName: true,
+      },
+    });
+    if (!row) return null;
+    return {
+      lote: row.lotNumber.toString(),
+      year: row.year,
+      make: row.make,
+      model: row.modelGroup ?? row.modelDetail,
+      trim: row.trim,
+      odometer: row.odometer ? Number(row.odometer) : null,
+      damageDescription: row.damageDescription,
+      saleTitleType: row.saleTitleType,
+      locationState: row.locationState,
+      saleDate: row.saleDate,
+      pujaActual: row.highBid ? Number(row.highBid) : null,
+      yardName: row.yardName,
+    };
+  }
+
   // ── Agregados para el chat de IA ────────────────────────────────────────────
 
   /**

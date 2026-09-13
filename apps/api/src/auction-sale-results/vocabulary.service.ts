@@ -194,6 +194,14 @@ export class VocabularyService {
     await this.asegurar();
     const salida: Record<string, string | number> = {};
 
+    // Un VIN identifica UN coche: si aparece, lo demas sobra y hay que buscarlo
+    // tal cual. Las letras I, O y Q no existen en un VIN, por eso el rango.
+    const vin = frase.toUpperCase().match(/\b[A-HJ-NPR-Z0-9]{17}\b/);
+    if (vin) {
+      salida.vin = vin[0];
+      return salida; // nada mas importa: hay que usar buscar_por_identificador
+    }
+
     const anio = frase.match(/\b(19[5-9]\d|20[0-4]\d)\b/);
     if (anio) salida.year = Number(anio[1]);
 

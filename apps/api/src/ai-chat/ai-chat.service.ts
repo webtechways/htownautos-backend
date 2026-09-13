@@ -147,14 +147,18 @@ export class AiChatService {
     // Pistas resueltas por nuestro lado ANTES de hablar con OpenAI. Ahorran la
     // vuelta que se gastaba siempre en `resolver_valores`, que son ~2s de los 5
     // que tarda una respuesta. Solo van si la coincidencia es exacta.
-    const pistas = await this.vocab.hints(pregunta).catch(() => ({}));
+    const pistas: Record<string, string | number> = await this.vocab
+      .hints(pregunta)
+      .catch(() => ({}));
     if (Object.keys(pistas).length) {
       mensajes.push({
         role: 'system',
         content:
-          'Ya identificado en la pregunta (no hace falta resolver_valores para esto): ' +
+          'Detectado en la pregunta: ' +
           JSON.stringify(pistas) +
-          '. Usa estos valores tal cual al filtrar.',
+          (pistas.vin
+            ? '. Es un VIN: llama a buscar_por_identificador con el, y NO deduzcas marca ni modelo.'
+            : '. Usa estos valores tal cual al filtrar, sin volver a resolverlos.'),
       });
     }
 
@@ -322,16 +326,20 @@ export class AiChatService {
       'REGLAS, por orden de importancia:',
       '1. NUNCA des una cifra que no venga de una herramienta. No estimes, no redondees "de memoria",',
       '   no uses conocimiento general sobre precios de coches. Si no llamaste a una herramienta, no hay cifra.',
-      '2. Antes de filtrar por marca, modelo, version, daño, color o estado, llama a `resolver_valores`',
+      '2. Si el usuario pega un VIN (17 caracteres) o un numero de lote, llama SIEMPRE a',
+      '   `buscar_por_identificador`. NUNCA deduzcas la marca ni el modelo leyendo el VIN: te',
+      '   equivocaras —un VIN que empieza por 1C4 es un Jeep, no un Chrysler— y responderas sobre',
+      '   otro coche con total seguridad. Si no aparece, dilo; no busques modelos parecidos.',
+      '3. Antes de filtrar por marca, modelo, version, daño, color o estado, llama a `resolver_valores`',
       '   UNA SOLA VEZ, resolviendo todos los campos que necesites en la misma llamada.',
       '   Tolera erratas y agrupa las distintas grafias, asi que al filtrar usa el campo `valor` tal cual:',
       '   NO menciones las variantes internas ni separes la respuesta por ellas. Al usuario le da igual',
       '   que en los datos convivan "F-150" y "F150"; quiere UNA cifra para la F-150.',
-      '3. Si `exacto` es false pero hay un resultado claramente mejor, USALO y corrige de paso',
+      '4. Si `exacto` es false pero hay un resultado claramente mejor, USALO y corrige de paso',
       '   ("Entiendo que te refieres al Corolla: ..."). NO te pares a preguntar si acertaste;',
       '   preguntar por cada errata convierte el chat en un formulario. Pregunta solo si hay',
       '   varias opciones de peso parecido y elegir mal cambiaria mucho la respuesta.',
-      '4. Di siempre sobre cuantas ventas se calcula ("segun 1.825 ventas"). Si la herramienta marca la',
+      '5. Di siempre sobre cuantas ventas se calcula ("segun 1.825 ventas"). Si la herramienta marca la',
       '   muestra como insuficiente, dilo en vez de dar la cifra como fiable.',
       '   Comprueba `filtrosAplicados` en la respuesta de la herramienta: si falta algo que el usuario',
       '   pidio (por ejemplo el año), NO afirmes ese dato en tu respuesta. Vuelve a llamar con el filtro.',
@@ -346,12 +354,12 @@ export class AiChatService {
       'opciones separadas por " · " en una sola linea. Nada mas: no adelantes precios todavia.',
       'Excepcion: si el usuario pide explicitamente el conjunto ("todos los F-150", "en general"),',
       'responde sin pedir mas datos.',
-      '5. Usa la MEDIANA como precio de referencia y los percentiles 25-75 como rango habitual.',
+      '6. Usa la MEDIANA como precio de referencia y los percentiles 25-75 como rango habitual.',
       '   La media se desvia con un solo lote caro y no representa lo que se paga.',
-      '6. Los datos abarcan un periodo CORTO (pocos dias). NO respondas preguntas de tendencia,',
+      '7. Los datos abarcan un periodo CORTO (pocos dias). NO respondas preguntas de tendencia,',
       '   evolucion o comparacion entre periodos. Si te preguntan eso, llama a `cobertura_de_datos`',
       '   para saber el periodo exacto y explica que no hay historia suficiente.',
-      '7. Si la pregunta no va de datos de subasta (inventario propio, clientes, contabilidad), dilo:',
+      '8. Si la pregunta no va de datos de subasta (inventario propio, clientes, contabilidad), dilo:',
       '   solo tienes acceso a resultados de subasta y lotes.',
       '',
       'FORMATO: cifras en dolares sin decimales. Cuando des varios grupos, usa una tabla markdown.',

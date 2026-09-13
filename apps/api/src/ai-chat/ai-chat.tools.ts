@@ -72,6 +72,25 @@ export const TOOL_DEFS = [
   {
     type: 'function' as const,
     function: {
+      name: 'buscar_por_identificador',
+      description:
+        'Busca UN vehiculo concreto por su VIN o por su numero de lote y devuelve su ficha real: ' +
+        'año, marca, modelo, version, precio final, daño, titulo y kilometraje. ' +
+        'USA ESTO SIEMPRE que el usuario pegue un VIN (17 caracteres) o un numero de lote. ' +
+        'NUNCA deduzcas la marca o el modelo a partir del VIN por tu cuenta: te equivocaras ' +
+        '(un VIN que empieza por 1C4 es un Jeep, no un Chrysler) y responderas sobre otro coche.',
+      parameters: {
+        type: 'object',
+        properties: {
+          vin: { type: 'string', description: 'VIN completo, 17 caracteres' },
+          lote: { type: 'string', description: 'Numero de lote' },
+        },
+      },
+    },
+  },
+  {
+    type: 'function' as const,
+    function: {
       name: 'estadisticas_de_precio',
       description:
         'Distribucion del precio final de venta para unos filtros: mediana, percentiles 25 y 75, minimo, maximo y media, ' +
@@ -299,6 +318,47 @@ export class AiChatToolsService {
             ...(vacios.length
               ? { nota: `Sin coincidencias para: ${vacios.join(', ')}. No inventes un valor: dilo y pide que concreten.` }
               : {}),
+          };
+        }
+
+        case 'buscar_por_identificador': {
+          const vin = typeof args?.vin === 'string' ? args.vin.trim() : '';
+          const lote = args?.lote != null ? String(args.lote).replace(/\D/g, '') : '';
+          if (!vin && !lote) return { error: 'Hace falta un VIN o un numero de lote.' };
+
+          const venta = vin
+            ? await this.stats.findByVin(vin)
+            : await this.stats.findByLot(lote).catch(() => null);
+
+          // Puede estar todavia en subasta y no vendido: se mira tambien ahi.
+          const enSubasta = vin ? await this.stats.listingByVin(vin) : null;
+
+          if (!venta && !enSubasta) {
+            return {
+              encontrado: false,
+              nota:
+                'Ese VIN o lote no aparece ni en las ventas registradas ni en los lotes activos. ' +
+                'Dilo tal cual. NO deduzcas marca ni modelo del VIN ni busques por aproximacion.',
+            };
+          }
+
+          // La categoria de titulo, resuelta. El codigo crudo ("CT") invita a
+          // que el modelo lo interprete por su cuenta, y se le vio leerlo como
+          // "Clean Title" y como "Connecticut" en dos respuestas seguidas.
+          const codigoTitulo = (venta as any)?.saleTitleType ?? enSubasta?.saleTitleType;
+          const categoria = await this.stats.titleCategoryOf(codigoTitulo);
+
+          return {
+            encontrado: true,
+            ...(venta ? { venta } : {}),
+            ...(enSubasta ? { enSubastaAhora: enSubasta } : {}),
+            ...(categoria
+              ? {
+                  tituloCategoria: categoria,
+                  notaTitulo: `El codigo de titulo "${codigoTitulo}" significa: ${categoria}. Usa esta interpretacion y NO deduzcas otra.`,
+                }
+              : {}),
+            nota: 'Ficha exacta de ESTE vehiculo. Responde con estos datos, no con medias de modelos parecidos.',
           };
         }
 
