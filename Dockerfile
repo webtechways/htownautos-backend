@@ -51,6 +51,13 @@ RUN npx prisma generate --schema=libs/prisma/prisma/schema.prisma
 
 COPY --from=builder /app/dist ./dist
 
+# Assets del job nocturno de vectores: el PCA CONGELADO y el worker que corre
+# dentro del pod alquilado. No son TypeScript, asi que el build de nx no los
+# arrastra y hay que copiarlos a mano. El PCA viaja con el codigo a proposito:
+# es parte del artefacto desplegado, y un PCA que no corresponda al modelo
+# corrompe las predicciones sin dar ningun error.
+COPY apps/api/src/embed-jobs/assets ./assets/embed-jobs
+
 # Create symlinks for all @htownautos/* workspace packages so they resolve at runtime.
 # NX compiles them into dist/ — we create symlinks to the compiled output.
 RUN mkdir -p node_modules/@htownautos && \

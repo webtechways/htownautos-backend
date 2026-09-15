@@ -4334,3 +4334,100 @@ model DepositReleaseRequest {
   @@index([decidedById])
   @@map("deposit_release_requests")
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Vectores de imagen y el job nocturno que los produce
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Las fotos de un lote, ya convertidas a numeros por DINOv2 + PCA.
+///
+/// Append-only a proposito: las fotos de un lote NO cambian nunca, asi que una
+/// vez calculado el vector ese lote esta resuelto para siempre. El job nocturno
+/// solo anade; nunca reprocesa. Por eso la pasada inicial costo ~$5 y las
+/// diarias cuestan centimos.
+///
+/// `pcaVersion` existe para un fallo que no da error: si alguien reajusta el PCA,
+/// los vectores nuevos dejan de significar lo mismo que los que entrenaron el
+/// modelo. Guardando la version se detecta la mezcla en vez de servir numeros
+/// silenciosamente corruptos.
+model LotImageVector {
+  lotNumber  BigInt   @id
+  /// float32 empaquetados (64 dims = 256 bytes). Bytes y no Float[] porque
+  /// Postgres guarda cada elemento de un array float8 con cabecera propia.
+  vector     Bytes
+  dims       Int
+  /// p.ej. "dinov2-giant@518"
+  encoder    String
+  pcaVersion String
+  imageCount Int
+  createdAt  DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([encoder, pcaVersion])
+  @@map("lot_image_vectors")
+}
+
+/// Una ejecucion del job nocturno. Es tambien el registro contable: cuanto duro,
+/// que pod se alquilo, cuanto costo y —lo mas importante— quien apago el pod.
+model EmbedJobRun {
+  id     String @id @default(uuid())
+  /// pending | provisioning | running | done | failed | aborted
+  status String @default("pending")
+
+  podId        String?
+  podType      String?
+  /// Precio/hora que reporto RunPod al crear el pod.
+  costPerHr    Decimal? @db.Decimal(8, 4)
+  /// Coste estimado = costPerHr * horas facturadas.
+  costUsd      Decimal? @db.Decimal(8, 4)
+  gpuSeconds   Int?
+
+  startedAt    DateTime  @default(now())
+  podReadyAt   DateTime?
+  finishedAt   DateTime?
+  terminatedAt DateTime?
+  /// Cual de las vias apago el pod: job | deadline | watchdog | boot | self | manual.
+  /// Si aparece algo distinto de `job` de forma habitual, hay una via fallando.
+  terminatedBy String?
+
+  lotsRequested Int @default(0)
+  lotsDone      Int @default(0)
+  imagesDone    Int @default(0)
+  imagesFailed  Int @default(0)
+
+  error String? @db.Text
+  log   String? @db.Text
+
+  @@index([startedAt])
+  @@index([status])
+  @@map("embed_job_runs")
+}
+
+/// Ajustes del job nocturno, editables desde Auction Data.
+model EmbedJobConfig {
+  id      String  @id @default("singleton")
+  enabled Boolean @default(false)
+
+  /// Hora local (Central) a la que arranca. Los lotes se cachean con dias de
+  /// antelacion, asi que de madrugada llega de sobra.
+  cronHour Int @default(3)
+
+  /// GPUs a intentar, en orden. RunPod alquila la primera disponible.
+  gpuTypeIds String @default("NVIDIA A40,NVIDIA RTX A5000,NVIDIA A100 80GB PCIe")
+  imageName  String @default("")
+
+  /// Corta-circuitos. Ninguno es opcional: son lo que impide que un fallo se
+  /// convierta en un pod encendido 24 horas.
+  maxLotsPerRun  Int @default(20000)
+  maxMinutes     Int @default(180)
+  maxCostUsdPerRun Decimal @default(5.0) @db.Decimal(8, 2)
+
+  /// Cada cuanto el vigilante busca pods huerfanos (minutos).
+  watchdogMinutes Int @default(5)
+
+  lastRunAt DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  @@map("embed_job_config")
+}

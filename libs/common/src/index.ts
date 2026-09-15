@@ -105,3 +105,7 @@ export type {
   ChatTarget,
   SendResult,
 } from './chat/chat-message';
+
+// RunPod: alquiler de GPU por horas para el job nocturno de vectores
+export { RunpodService } from './runpod/runpod.service';
+export type { RunpodPod, CreatePodInput } from './runpod/runpod.service';

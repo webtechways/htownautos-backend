@@ -16,6 +16,8 @@ export interface PricePrediction {
   entrenadoCon: number;
   /** Campos que el modelo no recibio porque el listing no los trae. */
   faltan: string[];
+  /** Si el modelo pudo mirar las fotos del lote o predijo solo con los datos. */
+  conImagenes: boolean;
 }
 
 const ML_URL = process.env.ML_SERVICE_URL ?? 'http://htownautos-ml:8000';
@@ -62,6 +64,16 @@ export class PricePredictionService {
     });
 
     const imageCount = this.countImages(listing.galleryCache);
+
+    // El vector de las fotos, si el job nocturno ya lo calculo. Se lee aqui y no
+    // en el contenedor de ML para que ese siga sin credenciales de Postgres.
+    // Si no existe, la prediccion sale igual: LightGBM trata los huecos de forma
+    // nativa y el lote recibe respuesta sin fotos, algo peor y ya esta.
+    const fila = await this.prisma.lotImageVector.findUnique({
+      where: { lotNumber },
+      select: { vector: true, dims: true },
+    });
+    const imageVector = fila ? this.unpack(fila.vector, fila.dims) : null;
     const num = (v: unknown): number | null =>
       v === null || v === undefined ? null : Number(v);
 
@@ -104,6 +116,7 @@ export class PricePredictionService {
       vehicleType: listing.vehicleType ?? null,
       imageCount,
       prebidBidders: prebids.length,
+      ...(imageVector ? { imageVector } : {}),
     };
 
     const res = await this.call(payload);
@@ -118,7 +131,21 @@ export class PricePredictionService {
       modelVersion: res.modelVersion ?? 'desconocida',
       entrenadoCon: health?.entrenado_con ?? 0,
       faltan: this.missing(payload),
+      conImagenes: res.conImagenes === true,
     };
+  }
+
+  /**
+   * Los vectores se guardan como float32 empaquetados (64 dims = 256 bytes) para
+   * no inflar la tabla. Prisma los devuelve como Uint8Array, no Buffer.
+   *
+   * Si el tamano no cuadra con `dims` se devuelve null en vez de interpretar los
+   * bytes a medias: un vector mal leido no da error, da un precio equivocado.
+   */
+  private unpack(buf: Uint8Array, dims: number): number[] | null {
+    if (!buf || buf.byteLength !== dims * 4) return null;
+    const copia = new Uint8Array(buf); // asegura alineacion para Float32Array
+    return Array.from(new Float32Array(copia.buffer));
   }
 
   /** `galleryCache` guarda el JSON de la galeria ya resuelto al CDN. */

@@ -10,6 +10,7 @@ import {
   PublicS3Service,
   S3Service,
   AgentAssignmentService,
+  RunpodService,
 } from '@htownautos/common';
 import { CopartImportService } from './copart-import.service';
 import { SyncTriggerListener } from './sync-trigger.listener';
@@ -23,6 +24,8 @@ import { AuctionAliasNotifierService } from './auction-alias-notifier.service';
 import { ImageCacheEnqueuerService } from './image-cache-enqueuer.service';
 import { ImageCacheCrawlerService } from './image-cache-crawler.service';
 import { ImageRetentionService } from './image-retention.service';
+import { EmbedJobService } from './embed-job.service';
+import { EmbedJobWatchdogService } from './embed-job-watchdog.service';
 import { ChatDispatchConsumer } from './chat-dispatch.consumer';
 import { ChatNotifierService } from './chat-notifier.service';
 
@@ -50,6 +53,9 @@ import { ChatNotifierService } from './chat-notifier.service';
     ImageCacheEnqueuerService,
     ImageCacheCrawlerService,
     ImageRetentionService,
+    RunpodService,
+    EmbedJobService,
+    EmbedJobWatchdogService,
     AgentAssignmentService,
     PublicS3Service,
     // Perfil privado: ahi van los volcados de la base.
