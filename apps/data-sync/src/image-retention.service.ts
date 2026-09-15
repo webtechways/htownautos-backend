@@ -18,8 +18,9 @@ const MIN_HOURS_BETWEEN_RUNS = 12;
  * `retentionDays = 0` keeps everything, which was the historical behaviour.
  *
  * A lot is NEVER deleted while anyone has shown interest in it: staff or buyer
- * favourite, a placed bid, membership in a listing group, a review, or an AI
- * analysis. Those are the galleries someone may still need to look at.
+ * favourite, a placed bid, membership in a listing group, a review, an AI
+ * analysis, or a recorded sale result. Those are the galleries someone may still
+ * need to look at — or, for sale results, train on.
  */
 @Injectable()
 export class ImageRetentionService {
@@ -119,7 +120,7 @@ export class ImageRetentionService {
   /** Lot numbers someone cared about — never delete these. */
   private async protectedLots(lots: bigint[]): Promise<Set<bigint>> {
     const where = { lotNumber: { in: lots } };
-    const [favourites, buyerFavourites, bids, groupItems, reviews, analyses] =
+    const [favourites, buyerFavourites, bids, groupItems, reviews, analyses, sold] =
       await Promise.all([
         this.prisma.auctionFavorite.findMany({ where, select: { lotNumber: true } }),
         this.prisma.buyerFavorite.findMany({ where, select: { lotNumber: true } }),
@@ -130,6 +131,14 @@ export class ImageRetentionService {
           where: { auctionListingId: { in: lots } },
           select: { auctionListingId: true },
         }),
+        // A lot with a sale result is a labelled training example: its photos plus a
+        // real hammer price. Retention's cutoff is "auction already past", which is
+        // exactly what every sold lot is, so without this arm turning retention on
+        // would delete precisely the corpus the price model learns from.
+        this.prisma.auctionSaleResult.findMany({
+          where: { lot: { in: lots } },
+          select: { lot: true },
+        }),
       ]);
 
     const set = new Set<bigint>();
@@ -137,6 +146,7 @@ export class ImageRetentionService {
       for (const r of rows as { lotNumber: bigint }[]) set.add(r.lotNumber);
     }
     for (const a of analyses) set.add(a.auctionListingId);
+    for (const s of sold) set.add(s.lot);
     return set;
   }
 
