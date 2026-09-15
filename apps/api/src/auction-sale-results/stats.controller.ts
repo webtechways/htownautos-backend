@@ -1,8 +1,8 @@
-import { Controller, Get, Param, Query } from '@nestjs/common';
+import { BadRequestException, Controller, Get, Param, Query } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
-import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
+import { ApiOperation, ApiQuery, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { Public } from '@htownautos/auth';
-import { StatsService } from './stats.service';
+import { BREAKDOWN_FIELDS, BreakdownField, StatsService } from './stats.service';
 import { QueryStatsDto } from './dto/query-stats.dto';
 
 /**
@@ -42,5 +42,51 @@ export class StatsController {
   @ApiResponse({ status: 200, description: 'Aggregations' })
   getFilters(@Query() dto: QueryStatsDto) {
     return this.stats.getFilters(dto);
+  }
+
+  /**
+   * Distribucion de `finalBid` para los filtros dados: p25 / mediana / p75 y los
+   * extremos. Ya existia en StatsService para el chat de IA; la pagina de
+   * Reportes consume el MISMO metodo a proposito, para que chat y pantalla no
+   * puedan discrepar sobre lo que significa un filtro.
+   */
+  @Get('price-stats')
+  @Public()
+  @ApiOperation({ summary: 'Price distribution (p25/median/p75) for the current filters' })
+  @ApiResponse({ status: 200, description: 'Percentiles + sample size' })
+  priceStats(@Query() dto: QueryStatsDto) {
+    return this.stats.priceStats(dto);
+  }
+
+  /**
+   * Agrupacion por una dimension (el "group by" de la pagina de Reportes).
+   *
+   * `por` se valida contra la lista blanca aqui y no en el servicio: el nombre
+   * de columna acaba interpolado en SQL crudo, y aunque un valor desconocido
+   * solo produciria un identificador inexistente (no inyeccion), devolveria un
+   * 500 en vez de decirle al cliente que el campo no existe.
+   */
+  @Get('breakdown')
+  @Public()
+  @ApiOperation({ summary: 'Group sales by one dimension with count + median price' })
+  @ApiQuery({ name: 'por', enum: BREAKDOWN_FIELDS })
+  @ApiQuery({ name: 'limite', required: false, type: Number })
+  @ApiResponse({ status: 200, description: 'Groups with sample size and median price' })
+  breakdown(
+    @Query() dto: QueryStatsDto,
+    @Query('por') por: string,
+    @Query('limite') limite?: string,
+  ) {
+    if (!BREAKDOWN_FIELDS.includes(por as BreakdownField)) {
+      throw new BadRequestException(
+        `"por" debe ser uno de: ${BREAKDOWN_FIELDS.join(', ')}`,
+      );
+    }
+    const n = Number(limite);
+    return this.stats.breakdown(
+      dto,
+      por as BreakdownField,
+      Number.isFinite(n) ? Math.min(Math.max(Math.trunc(n), 1), 100) : 25,
+    );
   }
 }
