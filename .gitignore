@@ -48,3 +48,31 @@ lerna-debug.log*
 
 # Auction data files
 auctions/copart/
+
+# Salida de `tsc` junto al fuente. El build real va a /dist (ya ignorado arriba):
+# el Dockerfile compila con `nx run-many --target=build`, asi que estos .js y
+# .d.ts hermanos de un .ts son residuo de haber corrido tsc en local. Versionarlos
+# llenaba `git status` de ~1.500 ficheros y convertia cualquier `git add .` en una
+# ruleta.
+/apps/**/*.js
+/apps/**/*.js.map
+/apps/**/*.d.ts
+/libs/**/*.js
+/libs/**/*.js.map
+/libs/**/*.d.ts
+/scripts/**/*.js
+/scripts/**/*.js.map
+/scripts/**/*.d.ts
+/test/**/*.js
+/test/**/*.js.map
+/test/**/*.d.ts
+/prisma.config.js
+/prisma.config.js.map
+/prisma.config.d.ts
+tsconfig.tsbuildinfo
+
+# Estos si son fuente JavaScript, no salida de tsc: no tienen .ts hermano.
+!/scripts/generate-nomenclator-controllers.js
+!/scripts/kill-ports.js
+!/scripts/verify-auction-monitor.js
+!/scripts/verify-scraper-workers.js

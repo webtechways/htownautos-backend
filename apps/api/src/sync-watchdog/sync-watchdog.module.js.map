@@ -1,1 +1,0 @@
-{"version":3,"file":"sync-watchdog.module.js","sourceRoot":"","sources":["sync-watchdog.module.ts"],"names":[],"mappings":";;;;;;;;;AAAA,2CAAwC;AACxC,+CAAkD;AAClD,gFAA4E;AAC5E,mEAA8D;AAcvD,IAAM,kBAAkB,GAAxB,MAAM,kBAAkB;CAAG,CAAA;AAArB,gDAAkB;6BAAlB,kBAAkB;IAJ9B,IAAA,eAAM,EAAC;QACN,OAAO,EAAE,CAAC,qBAAY,EAAE,0CAAmB,CAAC;QAC5C,SAAS,EAAE,CAAC,2CAAmB,CAAC;KACjC,CAAC;GACW,kBAAkB,CAAG"}

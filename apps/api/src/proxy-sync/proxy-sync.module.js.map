@@ -1,1 +1,0 @@
-{"version":3,"file":"proxy-sync.module.js","sourceRoot":"","sources":["proxy-sync.module.ts"],"names":[],"mappings":";;;;;;;;;AAAA,2CAAwC;AACxC,+CAAkD;AAClD,6DAAwD;AAOjD,IAAM,eAAe,GAArB,MAAM,eAAe;CAAG,CAAA;AAAlB,0CAAe;0BAAf,eAAe;IAL3B,IAAA,eAAM,EAAC;QACN,OAAO,EAAE,CAAC,qBAAY,CAAC;QACvB,SAAS,EAAE,CAAC,qCAAgB,CAAC;QAC7B,OAAO,EAAE,CAAC,qCAAgB,CAAC;KAC5B,CAAC;GACW,eAAe,CAAG"}
