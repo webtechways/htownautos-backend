@@ -33,6 +33,7 @@ import { TitleModule } from './title/title.module';
 import { MarketCheckModule } from './marketcheck/marketcheck.module';
 import { PartsPricingModule } from './parts-pricing/parts-pricing.module';
 import { MaxBidModule } from './max-bid/max-bid.module';
+import { PricePredictionModule } from './price-prediction/price-prediction.module';
 import { UploadSessionModule } from './upload-session/upload-session.module';
 import { CopartModule } from './copart/copart.module';
 import { FavoritesModule } from './favorites/favorites.module';
@@ -137,6 +138,7 @@ import { SyncWatchdogModule } from './sync-watchdog/sync-watchdog.module';
     MarketCheckModule,
     PartsPricingModule,
     MaxBidModule,
+    PricePredictionModule,
     UploadSessionModule,
     CopartModule,
     FavoritesModule,
