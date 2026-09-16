@@ -43,18 +43,45 @@ RUN = os.environ["RUN_ID"]
 ENCODER = os.environ.get("EMBED_MODEL", "facebook/dinov2-giant")
 SIZE = int(os.environ.get("EMBED_SIZE", 518))
 BATCH = int(os.environ.get("BATCH", 64))
-WORKERS = int(os.environ.get("WORKERS", 32))
+# Each DataLoader worker is a separate process that forks a copy of the item
+# list and opens its own B2 client. With 32 of them and an 18k-item chunk the
+# pod died mid-chunk every time, while the same GPU handled a 4.5k chunk fine.
+# The GPU only sustains ~14 img/s here, so a handful of workers feeds it easily;
+# the extra processes were buying nothing and costing memory.
+WORKERS = int(os.environ.get("WORKERS", 6))
 MAXSEQ = int(os.environ.get("MAX_SEQ", 9))
-# Lotes por trozo. 2.000 x 9 fotos = ~110 MB de embeddings en vuelo.
-CHUNK = int(os.environ.get("CHUNK_LOTS", 2000))
+# Lots per chunk. 1.000 x 9 photos = ~55 MB of embeddings in flight.
+CHUNK = int(os.environ.get("CHUNK_LOTS", 1000))
 H = {"X-API-Key": KEY, "Content-Type": "application/json"}
 
 
+def rss_gb() -> float:
+    """Resident memory of this process tree, in GB.
+
+    Logged at every step because the pod has died three times with the log
+    simply stopping — the signature of an OOM kill, which leaves no traceback.
+    Without a number next to each step there is no way to tell memory pressure
+    from anything else.
+    """
+    try:
+        total = 0
+        for pid in os.listdir("/proc"):
+            if not pid.isdigit():
+                continue
+            try:
+                with open(f"/proc/{pid}/statm") as f:
+                    total += int(f.read().split()[1]) * os.sysconf("SC_PAGE_SIZE")
+            except Exception:
+                pass
+        return total / 1e9
+    except Exception:
+        return -1.0
+
+
 def log(msg: str) -> None:
-    """Solo imprime. El arranque redirige toda la salida a un fichero y la manda
-    a la API cada 10 s, asi que mandarla tambien desde aqui la duplicaba en la
-    pantalla."""
-    print(msg, flush=True)
+    """Print only. The bootstrap redirects all output to a file and ships it to
+    the API every 10 s; sending from here too duplicated every line on screen."""
+    print(f"{msg}  [rss {rss_gb():.1f} GB]", flush=True)
 
 
 class Fotos(Dataset):
@@ -90,14 +117,19 @@ class Fotos(Dataset):
 def procesar(items, proc, model, dev, comps, mean, pcav):
     """Embebe un trozo y devuelve (vectores listos, lotes sin ninguna foto)."""
     dl = DataLoader(Fotos(items, proc), batch_size=BATCH, num_workers=WORKERS,
-                    pin_memory=True, prefetch_factor=4)
+                    pin_memory=True, prefetch_factor=2)
+    log(f"  dataloader up: {len(items):,} images, {WORKERS} workers, batch {BATCH}")
     vecs, oks = [], []
     with torch.inference_mode():
-        for px, ok in dl:
+        for n, (px, ok) in enumerate(dl):
             out = model(pixel_values=px.to(dev, torch.float16, non_blocking=True),
                         interpolate_pos_encoding=True)
             vecs.append(out.last_hidden_state[:, 0].float().cpu().numpy())
             oks.append(ok.numpy())
+            # Frequent enough that a crash shows how far it got, sparse enough
+            # not to flood the log.
+            if n and n % 20 == 0:
+                log(f"  {n * BATCH:,}/{len(items):,} images")
 
     E = np.concatenate(vecs)
     ok = np.concatenate(oks) == 1
@@ -135,12 +167,14 @@ def main() -> int:
 
     offset = imgs_ok = imgs_mal = lotes_ok = lotes_sin = 0
     while True:
+        log(f"requesting manifest at offset {offset:,}")
         man = requests.get(
             f"{API}/embed-pod/{RUN}/manifest",
             params={"maxSeq": MAXSEQ, "offset": offset, "lots": CHUNK},
             headers=H, timeout=180,
         ).json()
         items = man["items"]
+        log(f"manifest: {len(items):,} images")
         if not items:
             break
 
