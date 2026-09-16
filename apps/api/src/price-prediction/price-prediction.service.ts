@@ -4,6 +4,16 @@ import { PrismaService } from '@htownautos/prisma';
 /** Lo que devuelve el servicio de modelo. */
 export interface PricePrediction {
   lot: string;
+  /**
+   * false cuando el lote no tiene vector de imagen y por tanto no se predice.
+   * El modelo PODRIA responder sin fotos —LightGBM trata los huecos de forma
+   * nativa— pero ese numero es medidamente peor ($1.241 frente a $1.142 de MAE
+   * sobre los coches con foto) y se presentaria con la misma confianza que uno
+   * bueno. Se prefiere no dar numero a dar uno que invita a confiar de mas.
+   */
+  disponible: boolean;
+  /** Por que no hay prediccion, cuando `disponible` es false. */
+  motivo?: string;
   /** Precio de martillo esperado, en dolares. */
   esperado: number;
   /** Extremos del intervalo calibrado al 80% de cobertura real. */
@@ -74,6 +84,24 @@ export class PricePredictionService {
       select: { vector: true, dims: true },
     });
     const imageVector = fila ? this.unpack(fila.vector, fila.dims) : null;
+
+    // Sin vector no se predice. Se distinguen los dos casos porque la accion del
+    // usuario es distinta: "todavia no procesado" se resuelve solo esta noche;
+    // "sin fotos en B2" no se resuelve nunca y no tiene sentido esperar.
+    if (!imageVector) {
+      const marcado = fila && fila.dims === 0;
+      return {
+        lot,
+        disponible: false,
+        motivo: marcado
+          ? 'Este lote no tiene fotos disponibles en el almacenamiento, asi que no se puede valorar con imagenes.'
+          : imageCount > 0
+            ? 'Las fotos de este lote aun no se han procesado. El proceso nocturno las convierte y manana habra prediccion.'
+            : 'Este lote no tiene fotos cacheadas todavia.',
+        esperado: 0, p10: 0, p90: 0, incertidumbre: null,
+        modelVersion: 'n/a', entrenadoCon: 0, faltan: [], conImagenes: false,
+      };
+    }
     const num = (v: unknown): number | null =>
       v === null || v === undefined ? null : Number(v);
 
@@ -124,6 +152,7 @@ export class PricePredictionService {
 
     return {
       lot,
+      disponible: true,
       esperado: res.esperado,
       p10: res.p10,
       p90: res.p90,

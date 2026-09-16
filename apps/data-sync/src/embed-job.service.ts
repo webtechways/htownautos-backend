@@ -1,7 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '@htownautos/prisma';
-import { RunpodService } from '@htownautos/common';
+import { RunpodService, PublicS3Service, mapWithConcurrency } from '@htownautos/common';
 
 const CONFIG_ID = 'singleton';
 /** Prefijo por el que el vigilante reconoce NUESTROS pods y no toca los ajenos. */
@@ -41,7 +41,62 @@ export class EmbedJobService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly runpod: RunpodService,
+    private readonly s3: PublicS3Service,
   ) {}
+
+  /**
+   * Comprueba en B2 que las fotos existen de verdad, ANTES de alquilar la GPU.
+   *
+   * `galleryCachedAt` miente: hay lotes antiguos marcados como cacheados cuyos
+   * objetos no sobrevivieron a la migracion desde DigitalOcean Spaces. En la
+   * primera ejecucion real fueron 71 de 502 —el 14%— y se descubrieron ya con la
+   * GPU en marcha, pagando por bajar cosas que no estaban.
+   *
+   * Se mira SOLO la primera foto de cada lote: el fallo observado es de lote
+   * entero (427 lotes salieron con sus 9 fotos y 71 fallaron completos), asi que
+   * una comprobacion por lote basta y son 20.000 peticiones en vez de 180.000.
+   *
+   * Los que no existen se marcan aqui mismo para que no vuelvan a la cola.
+   */
+  async validarEnB2(
+    lotes: { lot: bigint; imageCount: number }[],
+  ): Promise<{ ok: { lot: bigint; imageCount: number }[]; sinFotos: bigint[] }> {
+    const resultados = await mapWithConcurrency(lotes, 64, async (l) => {
+      try {
+        const r = await this.s3.headObject(`gallery/${l.lot.toString()}/1_hrs.jpg`);
+        return { l, existe: r.exists };
+      } catch {
+        // Un error de red no es prueba de que falte: se deja pasar y, si acaso,
+        // fallara en el pod. Marcar por error de red perderia lotes buenos.
+        return { l, existe: true };
+      }
+    });
+
+    // mapWithConcurrency refleja Promise.allSettled: nunca rechaza, devuelve el
+    // estado de cada elemento. Un rechazo aqui se trata como "existe" — marcar un
+    // lote por un fallo de red perderia fotos buenas para siempre.
+    const ok: { lot: bigint; imageCount: number }[] = [];
+    const sinFotos: bigint[] = [];
+    resultados.forEach((r, i) => {
+      if (r.status === 'fulfilled' && !r.value.existe) sinFotos.push(lotes[i].lot);
+      else ok.push(lotes[i]);
+    });
+    return { ok, sinFotos };
+  }
+
+  /** Marca lotes cuyas fotos no estan en B2 para que no vuelvan a la cola. */
+  private async marcarSinFotos(lotes: bigint[]): Promise<void> {
+    if (!lotes.length) return;
+    await this.prisma.lotImageVector
+      .createMany({
+        data: lotes.map((lot) => ({
+          lotNumber: lot, vector: Buffer.alloc(0), dims: 0,
+          encoder: 'sin-imagenes', pcaVersion: 'n/a', imageCount: 0,
+        })),
+        skipDuplicates: true,
+      })
+      .catch((e) => this.logger.warn(`[EmbedJob] marcar sin fotos: ${e.message}`));
+  }
 
   /**
    * Al arrancar el servicio, apaga cualquier pod que quedara vivo de una
@@ -142,14 +197,39 @@ export class EmbedJobService {
     }
 
     this.running = true;
-    const cabecera = `[${new Date().toISOString()}] ${origen}: ${lotes.length} lotes pendientes\n`;
+
+    // Validar ANTES de alquilar: es la diferencia entre descubrir que faltan
+    // fotos gratis o descubrirlo con la GPU cobrando.
+    this.logger.log(`[EmbedJob] validando ${lotes.length} lotes en B2...`);
+    const { ok: validos, sinFotos } = await this.validarEnB2(lotes);
+    await this.marcarSinFotos(sinFotos);
+    if (sinFotos.length) {
+      this.logger.warn(`[EmbedJob] ${sinFotos.length} lotes sin fotos en B2, marcados`);
+    }
+    if (!validos.length) {
+      this.running = false;
+      const msg = `Ninguno de los ${lotes.length} lotes tiene sus fotos en B2`;
+      this.logger.warn(`[EmbedJob] ${msg}`);
+      if (adoptarId) {
+        await this.prisma.embedJobRun.update({
+          where: { id: adoptarId },
+          data: { status: 'done', finishedAt: new Date(), log: msg + '\n' },
+        });
+      }
+      return null;
+    }
+
+    const cabecera =
+      `[${new Date().toISOString()}] ${origen}: ${lotes.length} pendientes, ` +
+      `${validos.length} con fotos verificadas en B2` +
+      (sinFotos.length ? `, ${sinFotos.length} marcados sin fotos` : '') + '\n';
     const run = adoptarId
       ? await this.prisma.embedJobRun.update({
           where: { id: adoptarId },
-          data: { status: 'provisioning', lotsRequested: lotes.length, log: cabecera },
+          data: { status: 'provisioning', lotsRequested: validos.length, log: cabecera },
         })
       : await this.prisma.embedJobRun.create({
-          data: { status: 'provisioning', lotsRequested: lotes.length, log: cabecera },
+          data: { status: 'provisioning', lotsRequested: validos.length, log: cabecera },
         });
 
     let podId: string | null = null;
