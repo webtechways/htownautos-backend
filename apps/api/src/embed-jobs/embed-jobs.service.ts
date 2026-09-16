@@ -215,7 +215,32 @@ export class EmbedJobsService {
     return { guardados };
   }
 
-  async complete(runId: string, body: { imagesDone?: number; imagesFailed?: number; error?: string }) {
+  async complete(
+    runId: string,
+    body: {
+      imagesDone?: number; imagesFailed?: number; error?: string;
+      lotsWithoutImages?: string[];
+    },
+  ) {
+    // Lapidas para los lotes cuyas fotos no estan en B2 pese a que
+    // `galleryCachedAt` dice que si (objetos que no sobrevivieron a la migracion
+    // desde Spaces). Sin esto vuelven a la cola cada noche y se reintentan para
+    // siempre: 71 de 502 en la primera ejecucion real.
+    const huecos = body.lotsWithoutImages ?? [];
+    if (huecos.length) {
+      await this.prisma.lotImageVector
+        .createMany({
+          data: huecos.map((lot) => ({
+            lotNumber: BigInt(lot), vector: Buffer.alloc(0), dims: 0,
+            encoder: 'sin-imagenes', pcaVersion: 'n/a', imageCount: 0,
+          })),
+          skipDuplicates: true,
+        })
+        .catch((e) => this.logger.warn(`[EmbedJobs] lapidas: ${e.message}`));
+      this.logger.warn(`[EmbedJobs] ${huecos.length} lotes marcados sin imagen en B2`);
+      await this.appendLog(runId, `${huecos.length} lotes marcados como "sin imagen en B2": no volveran a la cola`);
+    }
+
     return this.prisma.embedJobRun.update({
       where: { id: runId },
       data: {

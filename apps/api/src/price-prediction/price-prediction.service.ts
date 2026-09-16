@@ -143,7 +143,9 @@ export class PricePredictionService {
    * bytes a medias: un vector mal leido no da error, da un precio equivocado.
    */
   private unpack(buf: Uint8Array, dims: number): number[] | null {
-    if (!buf || buf.byteLength !== dims * 4) return null;
+    // dims 0 es una lapida: el lote se intento y sus fotos no estan en B2. No es
+    // un vector vacio, es la ausencia de vector.
+    if (!dims || !buf || buf.byteLength !== dims * 4) return null;
     const copia = new Uint8Array(buf); // asegura alineacion para Float32Array
     return Array.from(new Float32Array(copia.buffer));
   }

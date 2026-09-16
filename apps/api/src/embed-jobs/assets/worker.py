@@ -136,8 +136,15 @@ def main() -> int:
                             "pcaVersion": pcav})
         log(f"enviados {min(i+500, len(salida)):,}/{len(salida):,} vectores")
 
-    requests.post(f"{API}/embed-pod/{RUN}/complete", headers=H, timeout=30,
-                  json={"imagesDone": int(ok.sum()), "imagesFailed": fallos})
+    # Lotes que no dieron NI UNA foto buena: sus imagenes no estan en B2 aunque
+    # la base diga que si. Se reportan para marcarlos y que no vuelvan a la cola
+    # cada noche: si no, se reintentan para siempre gastando GPU en balde.
+    sin_ninguna = sorted(set(it["lot"] for it in items) - set(por_lote))
+    if sin_ninguna:
+        log(f"{len(sin_ninguna)} lotes sin ninguna foto accesible en B2")
+    requests.post(f"{API}/embed-pod/{RUN}/complete", headers=H, timeout=60,
+                  json={"imagesDone": int(ok.sum()), "imagesFailed": fallos,
+                        "lotsWithoutImages": sin_ninguna[:20000]})
     log(f"listo en {(time.time()-t0)/60:.1f} min")
     return 0
 
