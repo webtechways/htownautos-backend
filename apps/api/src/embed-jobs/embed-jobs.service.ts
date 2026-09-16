@@ -159,27 +159,47 @@ export class EmbedJobsService {
 
   // ─────────── Lo que llama el pod ───────────
 
-  /** El manifiesto: que lotes embeber y de que claves de B2 bajar sus fotos. */
-  async manifest(runId: string, maxSeq = 9) {
+  /**
+   * El manifiesto, PAGINADO POR LOTE.
+   *
+   * Antes devolvia todo de golpe y con 200.000 lotes eran 1,8 millones de items:
+   * el worker los acumulaba en memoria junto con sus embeddings (11 GB) y el pod
+   * moria a los cuatro minutos. Ahora el worker pide trozos y envia los vectores
+   * de cada uno antes de pedir el siguiente, asi que la memoria queda acotada por
+   * el tamaño del trozo y no por el del trabajo.
+   *
+   * Se pagina por LOTE y no por imagen para que las fotos de un coche nunca
+   * queden partidas entre dos trozos: el vector es el promedio de todas, y un
+   * lote a medias daria un vector distinto del que daria completo.
+   */
+  async manifest(runId: string, maxSeq = 9, offset = 0, lots = 2000) {
     const run = await this.prisma.embedJobRun.findUnique({ where: { id: runId } });
     if (!run) throw new NotFoundException('Ejecucion no encontrada');
 
     const filas = (await this.prisma.$queryRawUnsafe(
-      `SELECT l."lotNumber"::text AS lot,
-              (img->>'sequence')::int AS seq
-         FROM auction_listings l
-         LEFT JOIN lot_image_vectors v ON v."lotNumber" = l."lotNumber"
-         CROSS JOIN LATERAL json_array_elements(l."galleryCache"::json->'images') AS img
-        WHERE l."galleryCachedAt" IS NOT NULL AND v."lotNumber" IS NULL
-          AND (img->>'sequence')::int <= $1
-        ORDER BY l."saleDate" ASC NULLS LAST, l."lotNumber", 2
-        LIMIT $2`,
+      `WITH elegidos AS (
+         SELECT l."lotNumber", l."galleryCache"
+           FROM auction_listings l
+           LEFT JOIN lot_image_vectors v ON v."lotNumber" = l."lotNumber"
+          WHERE l."galleryCachedAt" IS NOT NULL AND v."lotNumber" IS NULL
+          ORDER BY l."saleDate" ASC NULLS LAST, l."lotNumber"
+          OFFSET $1 LIMIT $2
+       )
+       SELECT e."lotNumber"::text AS lot, (img->>'sequence')::int AS seq
+         FROM elegidos e
+         CROSS JOIN LATERAL json_array_elements(e."galleryCache"::json->'images') AS img
+        WHERE (img->>'sequence')::int <= $3
+        ORDER BY e."lotNumber", 2`,
+      offset,
+      Math.min(Math.max(lots, 1), 5000),
       maxSeq,
-      run.lotsRequested * maxSeq,
     )) as { lot: string; seq: number }[];
 
     return {
       runId,
+      offset,
+      lots,
+      agotado: filas.length === 0,
       // La clave se construye aqui y no en el pod para que el formato viva en un
       // solo sitio (lo escribe gallery-cache.service.ts al subir a B2).
       items: filas.map((f) => ({ lot: f.lot, seq: f.seq, key: `gallery/${f.lot}/${f.seq}_hrs.jpg` })),
@@ -220,6 +240,8 @@ export class EmbedJobsService {
     body: {
       imagesDone?: number; imagesFailed?: number; error?: string;
       lotsWithoutImages?: string[];
+      /** true cuando el pod solo manda lapidas de un trozo y sigue trabajando. */
+      parcial?: boolean;
     },
   ) {
     // Lapidas para los lotes cuyas fotos no estan en B2 pese a que
@@ -240,6 +262,10 @@ export class EmbedJobsService {
       this.logger.warn(`[EmbedJobs] ${huecos.length} lotes marcados sin imagen en B2`);
       await this.appendLog(runId, `${huecos.length} lotes marcados como "sin imagen en B2": no volveran a la cola`);
     }
+
+    // Un aviso parcial solo trae lapidas de un trozo: el pod sigue vivo y
+    // cerrar la ejecucion aqui la daria por terminada a mitad.
+    if (body.parcial) return { ok: true, parcial: true };
 
     return this.prisma.embedJobRun.update({
       where: { id: runId },

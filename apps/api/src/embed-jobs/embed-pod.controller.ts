@@ -52,8 +52,18 @@ export class EmbedPodController {
   }
 
   @Get(':runId/manifest')
-  manifest(@Param('runId') runId: string, @Query('maxSeq') maxSeq?: string) {
-    return this.service.manifest(runId, Number(maxSeq) || 9);
+  manifest(
+    @Param('runId') runId: string,
+    @Query('maxSeq') maxSeq?: string,
+    @Query('offset') offset?: string,
+    @Query('lots') lots?: string,
+  ) {
+    return this.service.manifest(
+      runId,
+      Number(maxSeq) || 9,
+      Number(offset) || 0,
+      Number(lots) || 2000,
+    );
   }
 
   @Post(':runId/vectors')

@@ -1,17 +1,29 @@
 """
 Trabajador que corre dentro del pod alquilado.
 
-Pide el manifiesto a la API, baja las fotos de B2, las pasa por DINOv2, les aplica
-el PCA CONGELADO que viene en la imagen, y devuelve los vectores. No toca Postgres:
-solo sabe hablar con tres rutas de la API y leer de B2.
+Pide el manifiesto a la API por TROZOS, baja las fotos de B2, las pasa por
+DINOv2, les aplica el PCA CONGELADO y devuelve los vectores de cada trozo antes
+de pedir el siguiente. No toca Postgres: solo habla con la API y lee de B2.
 
-El PCA va dentro de la imagen y no se recalcula nunca. Si se reajustara con los
-datos de cada noche, los vectores de hoy dejarian de significar lo mismo que los
-que entrenaron el modelo, y este se degradaria sin lanzar un solo error.
+── Por que por trozos ──
+La primera version se traia el manifiesto entero y acumulaba todos los embeddings
+para concatenarlos al final. Con 4.500 imagenes son 27 MB y funciona; con las
+1.799.739 de un trabajo real son 11 GB y el pod muere a los cuatro minutos, que
+es exactamente lo que paso. Procesando por trozos la memoria queda acotada por el
+tamaño del trozo y no por el del trabajo: da igual que queden mil lotes o un
+millon.
+
+Se pagina por LOTE y no por imagen porque el vector es el promedio de todas las
+fotos del coche: un lote partido entre dos trozos daria un vector distinto del
+que daria completo.
+
+── El PCA no se recalcula nunca ──
+Viene de la API, congelado. Si se reajustara con los datos de cada noche, los
+vectores de hoy dejarian de significar lo mismo que los que entrenaron el modelo,
+y este se degradaria sin lanzar un solo error.
 """
 
 import io
-import json
 import os
 import sys
 import time
@@ -33,16 +45,16 @@ SIZE = int(os.environ.get("EMBED_SIZE", 518))
 BATCH = int(os.environ.get("BATCH", 64))
 WORKERS = int(os.environ.get("WORKERS", 32))
 MAXSEQ = int(os.environ.get("MAX_SEQ", 9))
+# Lotes por trozo. 2.000 x 9 fotos = ~110 MB de embeddings en vuelo.
+CHUNK = int(os.environ.get("CHUNK_LOTS", 2000))
 H = {"X-API-Key": KEY, "Content-Type": "application/json"}
 
 
 def log(msg: str) -> None:
+    """Solo imprime. El arranque redirige toda la salida a un fichero y la manda
+    a la API cada 10 s, asi que mandarla tambien desde aqui la duplicaba en la
+    pantalla."""
     print(msg, flush=True)
-    try:
-        requests.post(f"{API}/embed-pod/{RUN}/log", headers=H,
-                      json={"line": msg}, timeout=10)
-    except Exception:
-        pass
 
 
 class Fotos(Dataset):
@@ -75,16 +87,39 @@ class Fotos(Dataset):
             return self.blank, 0
 
 
+def procesar(items, proc, model, dev, comps, mean, pcav):
+    """Embebe un trozo y devuelve (vectores listos, lotes sin ninguna foto)."""
+    dl = DataLoader(Fotos(items, proc), batch_size=BATCH, num_workers=WORKERS,
+                    pin_memory=True, prefetch_factor=4)
+    vecs, oks = [], []
+    with torch.inference_mode():
+        for px, ok in dl:
+            out = model(pixel_values=px.to(dev, torch.float16, non_blocking=True),
+                        interpolate_pos_encoding=True)
+            vecs.append(out.last_hidden_state[:, 0].float().cpu().numpy())
+            oks.append(ok.numpy())
+
+    E = np.concatenate(vecs)
+    ok = np.concatenate(oks) == 1
+    por_lote: dict[str, list[np.ndarray]] = {}
+    for i, it in enumerate(items):
+        if ok[i]:
+            por_lote.setdefault(it["lot"], []).append(E[i])
+
+    salida = [
+        {"lot": lot,
+         "vector": ((np.mean(arr, axis=0) - mean) @ comps.T).astype(np.float32).tolist(),
+         "imageCount": len(arr)}
+        for lot, arr in por_lote.items()
+    ]
+    # Lotes cuyas fotos no estan en B2 aunque la base diga que si: se reportan
+    # para marcarlos y que no vuelvan a la cola cada noche.
+    sin_ninguna = sorted(set(it["lot"] for it in items) - set(por_lote))
+    return salida, sin_ninguna, int(ok.sum()), int((~ok).sum())
+
+
 def main() -> int:
     t0 = time.time()
-    man = requests.get(f"{API}/embed-pod/{RUN}/manifest?maxSeq={MAXSEQ}",
-                       headers=H, timeout=120).json()
-    items = man["items"]
-    lotes = sorted({it["lot"] for it in items})
-    log(f"manifiesto: {len(items):,} imagenes de {len(lotes):,} lotes")
-    if not items:
-        requests.post(f"{API}/embed-pod/{RUN}/complete", headers=H, json={}, timeout=30)
-        return 0
 
     pca = np.load("/app/pca_img.npz", allow_pickle=True)
     comps, mean = pca["components"].astype(np.float32), pca["mean"].astype(np.float32)
@@ -96,56 +131,43 @@ def main() -> int:
         ENCODER, size={"shortest_edge": SIZE},
         crop_size={"height": SIZE, "width": SIZE})
     model = AutoModel.from_pretrained(ENCODER, dtype=torch.float16).to(dev).eval()
-    log(f"modelo {ENCODER} {SIZE}px en {dev}")
+    log(f"modelo {ENCODER} {SIZE}px en {dev} | trozos de {CHUNK:,} lotes")
 
-    dl = DataLoader(Fotos(items, proc), batch_size=BATCH, num_workers=WORKERS,
-                    pin_memory=True, prefetch_factor=4)
+    offset = imgs_ok = imgs_mal = lotes_ok = lotes_sin = 0
+    while True:
+        man = requests.get(
+            f"{API}/embed-pod/{RUN}/manifest",
+            params={"maxSeq": MAXSEQ, "offset": offset, "lots": CHUNK},
+            headers=H, timeout=180,
+        ).json()
+        items = man["items"]
+        if not items:
+            break
 
-    vecs, oks = [], []
-    with torch.inference_mode():
-        for n, (px, ok) in enumerate(dl):
-            out = model(pixel_values=px.to(dev, torch.float16, non_blocking=True),
-                        interpolate_pos_encoding=True)
-            vecs.append(out.last_hidden_state[:, 0].float().cpu().numpy())
-            oks.append(ok.numpy())
-            if n % 50 == 0 and n:
-                hechas = n * BATCH
-                log(f"{hechas:,}/{len(items):,} ({hechas/(time.time()-t0):.0f} img/s)")
+        salida, sin_ninguna, ok_n, mal_n = procesar(
+            items, proc, model, dev, comps, mean, pcav)
+        imgs_ok += ok_n
+        imgs_mal += mal_n
 
-    E = np.concatenate(vecs)
-    ok = np.concatenate(oks) == 1
-    fallos = int((~ok).sum())
-    log(f"codificadas {len(E):,} imagenes, {fallos} fallidas")
+        for i in range(0, len(salida), 500):
+            requests.post(f"{API}/embed-pod/{RUN}/vectors", headers=H, timeout=180,
+                          json={"items": salida[i:i + 500],
+                                "encoder": f"{ENCODER}@{SIZE}", "pcaVersion": pcav})
+        if sin_ninguna:
+            requests.post(f"{API}/embed-pod/{RUN}/complete", headers=H, timeout=60,
+                          json={"parcial": True, "lotsWithoutImages": sin_ninguna})
 
-    # Promedio por lote (el agrupado que gano en la comparacion) y PCA congelado.
-    por_lote: dict[str, list[np.ndarray]] = {}
-    for i, it in enumerate(items):
-        if ok[i]:
-            por_lote.setdefault(it["lot"], []).append(E[i])
+        lotes_ok += len(salida)
+        lotes_sin += len(sin_ninguna)
+        offset += CHUNK
+        ritmo = (imgs_ok + imgs_mal) / max(time.time() - t0, 1)
+        log(f"trozo hasta {offset:,}: +{len(salida):,} lotes "
+            f"({lotes_ok:,} en total) · {ritmo:.0f} img/s")
 
-    salida = []
-    for lot, arr in por_lote.items():
-        m = np.mean(arr, axis=0)
-        salida.append({"lot": lot,
-                       "vector": ((m - mean) @ comps.T).astype(np.float32).tolist(),
-                       "imageCount": len(arr)})
-
-    for i in range(0, len(salida), 500):
-        requests.post(f"{API}/embed-pod/{RUN}/vectors", headers=H, timeout=180,
-                      json={"items": salida[i:i + 500], "encoder": f"{ENCODER}@{SIZE}",
-                            "pcaVersion": pcav})
-        log(f"enviados {min(i+500, len(salida)):,}/{len(salida):,} vectores")
-
-    # Lotes que no dieron NI UNA foto buena: sus imagenes no estan en B2 aunque
-    # la base diga que si. Se reportan para marcarlos y que no vuelvan a la cola
-    # cada noche: si no, se reintentan para siempre gastando GPU en balde.
-    sin_ninguna = sorted(set(it["lot"] for it in items) - set(por_lote))
-    if sin_ninguna:
-        log(f"{len(sin_ninguna)} lotes sin ninguna foto accesible en B2")
     requests.post(f"{API}/embed-pod/{RUN}/complete", headers=H, timeout=60,
-                  json={"imagesDone": int(ok.sum()), "imagesFailed": fallos,
-                        "lotsWithoutImages": sin_ninguna[:20000]})
-    log(f"listo en {(time.time()-t0)/60:.1f} min")
+                  json={"imagesDone": imgs_ok, "imagesFailed": imgs_mal})
+    log(f"listo: {lotes_ok:,} lotes, {imgs_ok:,} imagenes, "
+        f"{lotes_sin:,} sin fotos, en {(time.time()-t0)/60:.1f} min")
     return 0
 
 
