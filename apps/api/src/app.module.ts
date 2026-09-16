@@ -87,6 +87,7 @@ import { PortalModule } from './portal/portal.module';
 import { AuctionHistoryModule } from './auction-history/auction-history.module';
 import { AdminSeedModule } from './admin-seed/admin-seed.module';
 import { NotificationsModule } from './notifications/notifications.module';
+import { VehicleDocumentsModule } from './vehicle-documents/vehicle-documents.module';
 import { ContactMessagesModule } from './contact-messages/contact-messages.module';
 import { AiTranslateModule } from './ai-translate/ai-translate.module';
 import { SyncWatchdogModule } from './sync-watchdog/sync-watchdog.module';
@@ -193,6 +194,7 @@ import { SyncWatchdogModule } from './sync-watchdog/sync-watchdog.module';
     AuctionHistoryModule,
     AdminSeedModule,
     NotificationsModule,
+    VehicleDocumentsModule,
     ContactMessagesModule,
     AiTranslateModule,
     SyncWatchdogModule,

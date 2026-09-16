@@ -333,6 +333,22 @@ export class BuyerEntity implements Omit<Buyer, 'monthlyHousingCost' | 'monthlyI
   @ApiPropertyOptional()
   reference5YearsKnown: number | null;
 
+  // Tramites de titulo (formulario 130-U de Texas)
+  @ApiPropertyOptional({ description: 'Condado de residencia — casilla 19 del 130-U' })
+  countyOfResidence: string | null;
+
+  @ApiPropertyOptional({
+    description: 'Casilla 13 del 130-U',
+    enum: ['INDIVIDUAL', 'BUSINESS', 'GOVERNMENT', 'TRUST', 'NON_PROFIT'],
+  })
+  applicantType: string | null;
+
+  @ApiPropertyOptional({ description: 'Casilla 27', enum: ['ACTIVE', 'RETIRED_VET', 'RESERVE'] })
+  militaryStatus: string | null;
+
+  @ApiProperty({ default: false, description: 'Casilla 28 — obliga a adjuntar el VTR-216' })
+  communicationImpediment: boolean;
+
   // Business Buyer
   @ApiProperty({ default: false })
   isBusinessBuyer: boolean;

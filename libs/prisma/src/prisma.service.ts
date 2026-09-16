@@ -434,6 +434,10 @@ export class PrismaService implements OnModuleInit, OnModuleDestroy {
     return this.prisma.notification;
   }
 
+  get vehicleDocument() {
+    return this.prisma.vehicleDocument;
+  }
+
   get contactMessage() {
     return this.prisma.contactMessage;
   }

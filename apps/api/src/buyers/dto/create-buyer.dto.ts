@@ -279,6 +279,30 @@ export class CreateBuyerDto {
   @Max(850)
   creditScore?: number;
 
+  // Tramites de titulo (formulario 130-U de Texas)
+  @ApiPropertyOptional({ description: 'Condado de residencia — casilla 19 del 130-U' })
+  @IsOptional()
+  @IsString()
+  countyOfResidence?: string;
+
+  @ApiPropertyOptional({
+    description: 'Casilla 13 del 130-U',
+    enum: ['INDIVIDUAL', 'BUSINESS', 'GOVERNMENT', 'TRUST', 'NON_PROFIT'],
+  })
+  @IsOptional()
+  @IsString()
+  applicantType?: string;
+
+  @ApiPropertyOptional({ description: 'Casilla 27', enum: ['ACTIVE', 'RETIRED_VET', 'RESERVE'] })
+  @IsOptional()
+  @IsString()
+  militaryStatus?: string;
+
+  @ApiPropertyOptional({ description: 'Casilla 28 — obliga a adjuntar el VTR-216', default: false })
+  @IsOptional()
+  @IsBoolean()
+  communicationImpediment?: boolean;
+
   // Business Buyer
   @ApiPropertyOptional({ description: 'Is this a business buyer?', default: false })
   @IsOptional()

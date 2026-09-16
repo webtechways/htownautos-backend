@@ -858,6 +858,17 @@ model Buyer {
   reference5Relation       String?
   reference5Address        String?
   reference5YearsKnown     Int?
+  // Datos que exige el 130-U de Texas y no estaban en el modelo. El condado no
+  // se puede deducir del codigo postal de forma fiable (hay ZIP que cruzan dos
+  // condados), asi que se pregunta y se guarda.
+  countyOfResidence        String?
+  // Casilla 13 del 130-U: INDIVIDUAL | BUSINESS | GOVERNMENT | TRUST | NON_PROFIT.
+  // `isBusinessBuyer` no basta: distingue dos casos de cinco.
+  applicantType            String?
+  // Casilla 27: ACTIVE | RETIRED_VET | RESERVE.
+  militaryStatus           String?
+  // Casilla 28: obliga a adjuntar el VTR-216.
+  communicationImpediment  Boolean                  @default(false)
   isBusinessBuyer          Boolean                  @default(false)
   businessName             String?
   businessType             String?
@@ -887,6 +898,7 @@ model Buyer {
   stripeCustomerId         String?                  @unique
   clerkUserId              String?                  @unique @map("clerk_user_id")
   activities               Activity[]
+  vehicleDocuments         VehicleDocument[]
   employmentStatus         EmploymentStatus?        @relation(fields: [employmentStatusId], references: [id])
   gender                   Gender?                  @relation(fields: [genderId], references: [id])
   idState                  IdState?                 @relation(fields: [idStateId], references: [id])
@@ -1241,6 +1253,7 @@ model Media {
   @@index([inspectionErrorCodeId])
   @@index([carfaxReportId])
   @@map("media")
+  vehicleDocuments             VehicleDocument[]
 }
 
 model Vehicle {
@@ -1309,6 +1322,7 @@ model Vehicle {
   gallery               Media[]             @relation("VehicleGallery")
   partsExtracted        Part[]              @relation("PartSourceVehicle")
   titles                Title[]
+  documents             VehicleDocument[]
   bodySubtype           BodySubtype?        @relation(fields: [bodySubtypeId], references: [id])
   bodyType              BodyType?           @relation(fields: [bodyTypeId], references: [id])
   driveType             DriveType?          @relation(fields: [driveTypeId], references: [id])
@@ -4481,4 +4495,46 @@ model ModelTrainingRun {
 
   @@index([startedAt])
   @@map("model_training_runs")
+}
+
+/// Un tramite (130-U, VTR-66, …) generado para un vehiculo y enviado a DocuSeal.
+///
+/// Se guarda lo que rellenamos (`values`) ademas de los identificadores de
+/// DocuSeal: si alguien discute que decia el formulario, la respuesta esta aqui
+/// y no depende de que DocuSeal siga vivo. El PDF firmado se archiva como Media
+/// del vehiculo, que es donde el usuario ya busca sus documentos.
+model VehicleDocument {
+  id            String    @id @default(uuid())
+  tenantId      String?
+  vehicleId     String
+  /// Cliente del CRM cuyos datos se usaron, si se eligio uno.
+  buyerId       String?
+  /// Clave interna del formulario: form-130-u, vtr-66, vtr-271…
+  formKey       String
+  formName      String
+  templateId    Int
+  submissionId  Int
+  submitterSlug String
+  /// draft | sent | opened | completed | declined
+  status        String    @default("draft")
+  /// Lo enviado a DocuSeal, tal cual.
+  values        Json
+  /// PDF firmado, ya archivado entre los documentos del vehiculo.
+  mediaId       String?
+  sentTo        String?
+  sentAt        DateTime?
+  completedAt   DateTime?
+  auditLogUrl   String?
+  createdById   String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  vehicle Vehicle @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  buyer   Buyer?  @relation(fields: [buyerId], references: [id], onDelete: SetNull)
+  media   Media?  @relation(fields: [mediaId], references: [id], onDelete: SetNull)
+
+  @@index([vehicleId, createdAt])
+  @@index([tenantId])
+  @@unique([submissionId])
+  @@map("vehicle_documents")
 }
