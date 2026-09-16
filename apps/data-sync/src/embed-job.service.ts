@@ -154,7 +154,18 @@ export class EmbedJobService {
 
     let podId: string | null = null;
     try {
-      const api = process.env.EMBED_CALLBACK_URL ?? 'http://api:3000/api/v1';
+      // El pod corre en RunPod, en internet abierto: NO puede resolver nombres de
+      // la red interna de Docker. Esta URL tiene que ser publica o el pod arranca,
+      // no consigue descargar nada, y se queda quieto cobrando hasta que salte
+      // algun corta-circuitos. Paso exactamente eso la primera vez.
+      const api = process.env.EMBED_CALLBACK_URL ?? '';
+      if (!/^https?:\/\//.test(api) || /\/\/(api|localhost|127\.)/.test(api)) {
+        throw new Error(
+          'EMBED_CALLBACK_URL debe ser la URL PUBLICA de la API (p. ej. ' +
+          'https://api.htownautos.com/api/v1). El pod es externo y no alcanza la ' +
+          'red interna de Docker.',
+        );
+      }
       const pod = await this.runpod.createPod({
         name: `${POD_PREFIX}-${run.id.slice(0, 8)}`,
         // Imagen estandar de RunPod: el codigo se descarga de la API al arrancar.
@@ -183,17 +194,24 @@ export class EmbedJobService {
       });
       podId = pod.id;
 
+      // `POST /pods` devuelve poco mas que el id: el modelo de GPU y el precio
+      // hay que releerlos, o la pantalla muestra "?" en todas las ejecuciones.
+      const detalle = await this.runpod.getPod(pod.id).catch(() => null);
+      const gpu = detalle?.gpu?.displayName ?? detalle?.machine?.gpuDisplayName
+        ?? pod.gpu?.displayName ?? null;
+      const precio = detalle?.costPerHr ?? pod.costPerHr;
+
       await this.prisma.embedJobRun.update({
         where: { id: run.id },
         data: {
           podId: pod.id,
-          podType: pod.gpu?.displayName ?? pod.machine?.gpuDisplayName ?? null,
-          costPerHr: pod.costPerHr ? Number(pod.costPerHr) : null,
+          podType: gpu,
+          costPerHr: precio ? Number(precio) : null,
           status: 'running',
           podReadyAt: new Date(),
         },
       });
-      await this.append(run.id, `pod ${pod.id} (${pod.gpu?.displayName ?? '?'}) a $${pod.costPerHr}/h`);
+      await this.append(run.id, `pod ${pod.id} (${gpu ?? '?'}) a $${precio ?? '?'}/h`);
 
       await this.poll(run.id, podId, cfg);
     } catch (err: any) {
@@ -216,6 +234,12 @@ export class EmbedJobService {
   /** Sondea hasta que el pod reporta el final, vence el plazo o se pasa de coste. */
   private async poll(runId: string, podId: string, cfg: any): Promise<void> {
     const limite = Date.now() + cfg.maxMinutes * 60_000;
+    // Un pod sano escribe en el log a los pocos minutos (bootstrap, descarga del
+    // modelo, primeros lotes). Si a los 25 no ha dicho NADA es que no consigue
+    // hablar con la API, y esperar al plazo de 3 h son ~$4,80 tirados. Este limite
+    // convierte ese fallo en ~$0,65.
+    const mudoHasta = Date.now() + 25 * 60_000;
+    const inicial = (await this.prisma.embedJobRun.findUnique({ where: { id: runId } }))?.log?.length ?? 0;
 
     for (;;) {
       await new Promise((r) => setTimeout(r, POLL_MS));
@@ -223,6 +247,17 @@ export class EmbedJobService {
       if (!run) return;
 
       if (run.status === 'done' || run.status === 'failed') return;
+
+      // Via 2b: el pod nunca dio senales de vida.
+      if (Date.now() > mudoHasta && run.lotsDone === 0 && (run.log?.length ?? 0) <= inicial) {
+        await this.abort(
+          runId,
+          'El pod no reporto nada en 25 min: probablemente no alcanza la API ' +
+          '(revisa EMBED_CALLBACK_URL)',
+          'deadline',
+        );
+        return;
+      }
 
       // Via 2: plazo vencido.
       if (Date.now() > limite) {
