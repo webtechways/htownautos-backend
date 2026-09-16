@@ -165,6 +165,34 @@ export class PricePredictionService {
   }
 
   /**
+   * Que lotes ha "visto" el modelo, para una pagina de resultados.
+   *
+   * Tres estados y no dos, porque lo que puede hacer el usuario es distinto en
+   * cada uno: `visto` tiene vector y se predice; `pendiente` lo tendra esta
+   * noche; `sin-fotos` no lo tendra nunca y no sirve esperar.
+   */
+  async vectorStatus(lots: string[]): Promise<Record<string, 'visto' | 'pendiente' | 'sin-fotos'>> {
+    const ids = lots
+      .map((l) => { try { return BigInt(l); } catch { return null; } })
+      .filter((v): v is bigint => v !== null)
+      .slice(0, 500);
+    if (!ids.length) return {};
+
+    const filas = await this.prisma.lotImageVector.findMany({
+      where: { lotNumber: { in: ids } },
+      select: { lotNumber: true, dims: true },
+    });
+
+    const mapa: Record<string, 'visto' | 'pendiente' | 'sin-fotos'> = {};
+    for (const id of ids) mapa[id.toString()] = 'pendiente';
+    // dims 0 es una lapida: se intento y las fotos no estaban en B2.
+    for (const f of filas) {
+      mapa[f.lotNumber.toString()] = f.dims > 0 ? 'visto' : 'sin-fotos';
+    }
+    return mapa;
+  }
+
+  /**
    * Los vectores se guardan como float32 empaquetados (64 dims = 256 bytes) para
    * no inflar la tabla. Prisma los devuelve como Uint8Array, no Buffer.
    *

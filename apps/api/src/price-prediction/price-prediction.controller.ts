@@ -1,4 +1,4 @@
-import { Controller, Get, Param } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post } from '@nestjs/common';
 import { ApiOperation, ApiParam, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 import { Public } from '@htownautos/auth';
@@ -22,5 +22,17 @@ export class PricePredictionController {
   @ApiResponse({ status: 503, description: 'The model service is unreachable' })
   predict(@Param('lot') lot: string) {
     return this.service.predict(lot);
+  }
+
+  /**
+   * Estado del vector para varios lotes de una vez. La rejilla lo pide para los
+   * lotes visibles: una consulta por lote serian 24 peticiones por pagina.
+   */
+  @Post('vector-status')
+  @Public()
+  @ApiOperation({ summary: 'Which lots the model has already seen (image vectors)' })
+  @ApiResponse({ status: 201, description: 'Map lot -> visto | pendiente | sin-fotos' })
+  vectorStatus(@Body() body: { lots: string[] }) {
+    return this.service.vectorStatus(body?.lots ?? []);
   }
 }
