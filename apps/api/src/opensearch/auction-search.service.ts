@@ -1,5 +1,5 @@
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
-import { OpenSearchService, AUCTION_INDEX_NAME, AuctionSyncService } from '@htownautos/opensearch';
+import { OpenSearchService, AUCTION_INDEX_NAME, AuctionSyncService, parseListingImages } from '@htownautos/opensearch';
 import type { UnifiedAuction, AuctionAggregations, AuctionSearchResult } from '@htownautos/opensearch';
 import { PrismaService } from '@htownautos/prisma';
 import { RabbitMQService } from '@htownautos/rabbitmq';
@@ -171,6 +171,7 @@ export class AuctionSearchService {
       const result = await this.openSearchService.search(AUCTION_INDEX_NAME, searchBody);
 
       const data: UnifiedAuction[] = result.hits.hits.map((hit: any) => hit._source);
+      await this.hydrateMainImages(data);
 
       // With collapse, hits.total counts raw (pre-collapse) docs; the collapsed
       // result set is what we actually return, so report its size.
@@ -593,6 +594,53 @@ export class AuctionSearchService {
         ...(filter.length > 0 && { filter }),
       },
     };
+  }
+
+  /**
+   * Fills in `mainImage` for result rows that were indexed without one.
+   *
+   * Every Copart row carries a thumbnail URL in `auction_listings.images`, but
+   * the indexer used to drop it (it ran `JSON.parse` on a bare URL), so all
+   * 316k indexed documents have `mainImage: null`. The mapper is fixed now, yet
+   * those documents only pick the value up on a full reindex — three hours over
+   * 1.59M docs. Until then the grid would keep painting broken images for
+   * photos whose URL is one primary-key lookup away.
+   *
+   * One query per page, keyed by primary key, for at most `limit` lots. It
+   * becomes a no-op the moment the index is rebuilt, because nothing will be
+   * missing a `mainImage` any more.
+   */
+  private async hydrateMainImages(data: UnifiedAuction[]): Promise<void> {
+    const missing = data.filter((d) => !d.mainImage && d.source === 'copart');
+    if (missing.length === 0) return;
+
+    const lotNumbers: bigint[] = [];
+    for (const row of missing) {
+      try {
+        lotNumbers.push(BigInt(row.sourceId));
+      } catch {
+        // Non-numeric sourceId: not a Copart lot, nothing to look up.
+      }
+    }
+    if (lotNumbers.length === 0) return;
+
+    try {
+      const rows = await this.prisma.auctionListing.findMany({
+        where: { lotNumber: { in: lotNumbers } },
+        select: { lotNumber: true, images: true },
+      });
+      const byLot = new Map(rows.map((r) => [r.lotNumber.toString(), r.images]));
+      for (const row of missing) {
+        const images = parseListingImages(byLot.get(row.sourceId));
+        if (images.length > 0) {
+          row.images = images;
+          row.mainImage = images[0];
+        }
+      }
+    } catch (err) {
+      // A thumbnail is not worth failing a search over.
+      this.logger.warn(`[Search] mainImage hydration failed: ${(err as Error).message}`);
+    }
   }
 
   private buildSort(sortBy: string, sortOrder: 'asc' | 'desc'): any[] {
@@ -1164,9 +1212,34 @@ export class AuctionSearchService {
     if (images.length > 0) {
       const msg: GalleryCacheMessage = { lotNumber, images };
       this.rabbitMQ.publish(GALLERY_CACHE_QUEUE, msg).catch(() => {});
+      return { lotNumber, imageCount: images.length, images };
     }
 
-    return { lotNumber, imageCount: images.length, images };
+    // Copart's lotImages API 404s for lots with no sale date assigned, even
+    // though the lot is live and its photos are still served from cs.copart.com
+    // (verified: the API 404s for lot 56343685 while AutoBidMaster shows its 12
+    // photos and the stored thumbnail returns HTTP 200). The CSV feed gives us
+    // one thumbnail per lot, so fall back to it rather than reporting the lot as
+    // having no images at all.
+    const fromFeed = parseListingImages(listing.images);
+    if (fromFeed.length > 0) {
+      this.logger.log(`[Gallery] Lot ${lotNumber}: Copart API empty, using feed thumbnail`);
+      return {
+        lotNumber,
+        imageCount: fromFeed.length,
+        images: fromFeed.map((url, i) => ({
+          sequence: i + 1,
+          thumbnail: url,
+          // Same object, three renditions: `_thb` (4 KB), `_ful` (48 KB) and
+          // `_hrs` (164 KB). The feed only ever gives the thumbnail, but the
+          // other two are served from the same path, so the lightbox does not
+          // have to open a 4 KB image scaled up.
+          fullSize: url.replace(/_thb\.jpg$/i, '_hrs.jpg'),
+        })),
+      };
+    }
+
+    return { lotNumber, imageCount: 0, images: [] };
   }
 
   // ── Analysis snapshot upsert ───────────────────────────────────────────────

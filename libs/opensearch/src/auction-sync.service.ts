@@ -10,6 +10,56 @@ import {
   normalizeToken,
 } from '@htownautos/common';
 
+/**
+ * Reads the `images` column of an auction listing into a list of usable URLs.
+ *
+ * The column holds three different shapes depending on where the row came from,
+ * and for 1.59M of the 1.59M Copart rows it is a BARE URL with no scheme:
+ *
+ *   cs.copart.com/v1/AUTH_svc.pdoc00001/lpp/0525/759a58b7…_thb.jpg
+ *
+ * The previous version ran `JSON.parse` on it and swallowed the throw, so every
+ * listing in the index ended up with `images: []` and `mainImage: null`. The
+ * grid had nothing to paint and fell back to asking Copart for a gallery on
+ * every single card — which 404s for any lot with no sale date assigned. The
+ * result was a wall of broken images for photos we already had the URL of.
+ *
+ * A scheme-less URL is not a bug in the feed; it is how Copart's CSV ships it.
+ * Protocol-relative (`//host/…`) would also work in a browser but breaks any
+ * server-side fetch, so the scheme is made explicit here.
+ */
+export function parseListingImages(raw: unknown): string[] {
+  if (typeof raw !== 'string') return [];
+  const value = raw.trim();
+  if (!value) return [];
+
+  const withScheme = (url: string): string | null => {
+    const u = url.trim();
+    if (!u) return null;
+    if (u.startsWith('http://') || u.startsWith('https://')) return u;
+    if (u.startsWith('//')) return `https:${u}`;
+    // Anything that is not recognisably a host/path is not a URL we can render.
+    return /^[a-z0-9.-]+\.[a-z]{2,}\//i.test(u) ? `https://${u}` : null;
+  };
+
+  if (value.startsWith('[')) {
+    try {
+      const parsed: unknown = JSON.parse(value);
+      if (Array.isArray(parsed)) {
+        return parsed
+          .filter((u): u is string => typeof u === 'string')
+          .map(withScheme)
+          .filter((u): u is string => u !== null);
+      }
+    } catch {
+      // Falls through to the single-URL handling below.
+    }
+  }
+
+  const single = withScheme(value);
+  return single ? [single] : [];
+}
+
 @Injectable()
 export class AuctionSyncService {
   private readonly logger = new Logger(AuctionSyncService.name);
@@ -165,23 +215,8 @@ export class AuctionSyncService {
   private mapCopartToUnified(listing: any): UnifiedAuction {
     const lotNumber = listing.lotNumber.toString();
 
-    // Images field is stored as JSON string array or API URL
-    // Parse if it's a valid JSON array, otherwise empty
-    let images: string[] = [];
-    let mainImage: string | null = null;
-
-    if (listing.images) {
-      try {
-        // Try to parse as JSON array
-        const parsed = JSON.parse(listing.images);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          images = parsed;
-          mainImage = parsed[0];
-        }
-      } catch {
-        // Not valid JSON (likely API URL), ignore
-      }
-    }
+    const images = parseListingImages(listing.images);
+    const mainImage = images[0] ?? null;
 
     // Format sale date if available
     let saleDateFormatted: string | null = null;
