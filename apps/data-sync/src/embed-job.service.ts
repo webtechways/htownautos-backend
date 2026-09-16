@@ -158,12 +158,25 @@ export class EmbedJobService {
       // la red interna de Docker. Esta URL tiene que ser publica o el pod arranca,
       // no consigue descargar nada, y se queda quieto cobrando hasta que salte
       // algun corta-circuitos. Paso exactamente eso la primera vez.
-      const api = process.env.EMBED_CALLBACK_URL ?? '';
-      if (!/^https?:\/\//.test(api) || /\/\/(api|localhost|127\.)/.test(api)) {
+      // Se compara el HOST exacto, no un trozo de la cadena. La primera version
+      // buscaba "//api" y rechazaba `https://api.htownautos.com` —la URL buena—
+      // porque el dominio empieza igual que el nombre del servicio en Docker.
+      const api = (process.env.EMBED_CALLBACK_URL ?? '').trim();
+      let host = '';
+      try {
+        host = new URL(api).hostname;
+      } catch {
         throw new Error(
-          'EMBED_CALLBACK_URL debe ser la URL PUBLICA de la API (p. ej. ' +
-          'https://api.htownautos.com/api/v1). El pod es externo y no alcanza la ' +
-          'red interna de Docker.',
+          `EMBED_CALLBACK_URL no es una URL valida: "${api}". Debe ser la URL ` +
+          'publica de la API, p. ej. https://api.htownautos.com/api/v1',
+        );
+      }
+      // Un host sin punto solo puede ser un nombre de la red interna de Docker,
+      // y el pod corre en internet abierto: no lo alcanzaria nunca.
+      if (!host.includes('.') || host === 'localhost' || host.startsWith('127.')) {
+        throw new Error(
+          `EMBED_CALLBACK_URL apunta a "${host}", que es una direccion interna. ` +
+          'El pod es externo y necesita la URL publica de la API.',
         );
       }
       const pod = await this.runpod.createPod({
