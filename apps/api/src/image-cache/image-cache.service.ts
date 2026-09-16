@@ -265,10 +265,28 @@ export class ImageCacheService {
     const todayInt =
       now.getUTCFullYear() * 10000 + (now.getUTCMonth() + 1) * 100 + now.getUTCDate();
 
-    // `priority` holds the lot's saleDate as YYYYMMDD.
+    // Pick up the sale dates Copart assigned after these lots were enqueued;
+    // `priority` is a snapshot and would otherwise still read NULL for them.
+    await this.prisma.$executeRaw`
+      UPDATE image_cache_jobs j
+         SET priority = l."saleDate"
+        FROM auction_listings l
+       WHERE l."lotNumber" = j."lotNumber"
+         AND j.priority IS NULL
+         AND l."saleDate" IS NOT NULL
+    `;
+
+    // `priority` holds the lot's saleDate as YYYYMMDD. A NULL means Copart has
+    // listed the lot but not scheduled it ("Future Sale") — it cannot have been
+    // auctioned yet, so it is retryable; NULL fails `gte` in SQL, which is what
+    // used to drop 27.569 of these jobs on the floor. The age bound keeps the
+    // permanent tail (~1,3% never get a date) out of the queue.
     const where: Prisma.ImageCacheJobWhereInput = {
       status: { in: ['failed', 'skipped'] },
-      priority: { gte: todayInt },
+      OR: [
+        { priority: { gte: todayInt } },
+        { priority: null, createdAt: { gt: new Date(Date.now() - 45 * 24 * 3_600_000) } },
+      ],
     };
 
     const [failed, skipped] = await Promise.all([
