@@ -250,6 +250,10 @@ export class PrismaService implements OnModuleInit, OnModuleDestroy {
     return this.prisma.embedJobConfig;
   }
 
+  get modelTrainingRun() {
+    return this.prisma.modelTrainingRun;
+  }
+
   get auctionBidEvent() {
     return this.prisma.auctionBidEvent;
   }

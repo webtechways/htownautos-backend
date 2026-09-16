@@ -4425,9 +4425,60 @@ model EmbedJobConfig {
   /// Cada cuanto el vigilante busca pods huerfanos (minutos).
   watchdogMinutes Int @default(5)
 
+  // ── Reentrenamiento del modelo de precio ──
+  /// Ventana movil: solo se entrena con ventas de los ultimos N dias. Precios de
+  /// hace medio año no describen el mercado de esta semana.
+  trainingDays Int @default(90)
+  /// Si false, el modelo nuevo se entrena y se mide pero NO sustituye al que
+  /// esta sirviendo aunque gane. Util para observar unas semanas antes de soltar
+  /// el automatismo.
+  autoPromote    Boolean   @default(true)
+  lastTrainingAt DateTime?
+
   lastRunAt DateTime?
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
 
   @@map("embed_job_config")
+}
+
+/// Una ejecucion del reentrenamiento del modelo de precio.
+///
+/// Guarda las metricas de los DOS modelos —el que estaba en produccion y el
+/// recien entrenado— porque la decision de promover se toma comparandolos, y sin
+/// las dos cifras no hay forma de auditar por que se promovio o por que no.
+model ModelTrainingRun {
+  id     String @id @default(uuid())
+  /// pending | running | done | failed
+  status String @default("pending")
+
+  /// Ventana movil de dias de ventas usada para entrenar. Los precios viejos no
+  /// interesan: el mercado de salvage se mueve con la chatarra y la temporada.
+  trainingDays Int @default(90)
+
+  rowsTrain Int?
+  rowsValid Int?
+  /// Cuantas filas del entrenamiento traian vector de imagen.
+  rowsWithImages Int?
+
+  /// MAE del modelo que estaba sirviendo, sobre el mismo examen.
+  maeChampion  Decimal? @db.Decimal(10, 2)
+  /// MAE del recien entrenado.
+  maeChallenger Decimal? @db.Decimal(10, 2)
+  /// MAE del baseline tonto (mediana por marca/modelo/año/titulo), como suelo.
+  maeBaseline  Decimal? @db.Decimal(10, 2)
+  intervalCoverage Decimal? @db.Decimal(5, 3)
+
+  /// Si el nuevo sustituyo al anterior, y por que no si no lo hizo.
+  promoted       Boolean @default(false)
+  promotedReason String?
+  modelVersion   String?
+
+  startedAt  DateTime  @default(now())
+  finishedAt DateTime?
+  error      String?   @db.Text
+  log        String?   @db.Text
+
+  @@index([startedAt])
+  @@map("model_training_runs")
 }

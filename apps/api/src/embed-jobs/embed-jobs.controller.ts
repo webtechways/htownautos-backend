@@ -37,6 +37,18 @@ export class EmbedJobsController {
     return this.service.requestRun();
   }
 
+  @Get('training/status')
+  @ApiOperation({ summary: 'Estado y historial del reentrenamiento del modelo' })
+  trainingStatus() {
+    return this.service.trainingStatus();
+  }
+
+  @Post('training/run')
+  @ApiOperation({ summary: 'Reentrenar el modelo con la ventana movil de dias' })
+  startTraining(@Body() body: { days?: number; force?: boolean }) {
+    return this.service.startTraining(body?.days, body?.force === true);
+  }
+
   @Post('kill-all')
   @ApiOperation({ summary: 'Apagado de emergencia: borra todos nuestros pods' })
   @ApiResponse({ status: 201, description: 'Ids borrados y fallidos' })
