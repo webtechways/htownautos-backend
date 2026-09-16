@@ -58,6 +58,18 @@ export interface Datos130U {
 
   previousOwner?: string;
   dealerGdn?: string;
+  /**
+   * Pendientes de que su casilla tenga nombre en la plantilla de DocuSeal.
+   *
+   * Existen en el PDF pero el campo esta sin bautizar, y DocuSeal solo rellena
+   * por nombre: mandarlos hoy no los pondria en ningun sitio. Estan aqui para
+   * que se vea que faltan, y NO se preguntan en el asistente — pedir un dato
+   * que se va a tirar es peor que no pedirlo.
+   *
+   *   unitNumber          casilla 22
+   *   fairMarketDeduction casilla 38(c)
+   *   penaltyPercent      casilla 38(f), el 5% / 10%
+   */
   unitNumber?: string;
   renewalRecipient?: string;
   renewalAddress?: string;
