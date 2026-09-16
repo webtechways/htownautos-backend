@@ -3391,7 +3391,10 @@ model AuctionMonitorSession {
 // row's status (done/failed) after uploading to S3. Global (auction data is shared).
 model ImageCacheJob {
   lotNumber       BigInt    @id
-  status          String    @default("pending") // pending | processing | done | failed
+  status          String    @default("pending") // pending | processing | done | failed | skipped
+  // `skipped` = Copart answered with zero images. NOT terminal: it usually means
+  // "no photos yet" —they are published days after the lot is listed— so the
+  // enqueuer puts unsold lots back to `pending` once a day.
   priority        Int? // = AuctionListing.saleDate (YYYYMMDD); soonest auction first
   attempts        Int       @default(0)
   failedSequences Json? // sequences that never cached after maxAttempts

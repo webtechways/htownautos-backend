@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '@htownautos/prisma';
 
 /** How many lotNumbers to pack into a single `lotNumber IN (...)` clause. */
@@ -25,6 +26,56 @@ export class ImageCacheEnqueuerService {
   private readonly logger = new Logger(ImageCacheEnqueuerService.name);
 
   constructor(private readonly prisma: PrismaService) {}
+
+  /**
+   * Put `skipped` lots back in the queue once a day.
+   *
+   * `skipped` is set when Copart answers with zero images, and the crawler
+   * treats it as terminal. But that condition is temporary: Copart routinely
+   * lists a lot days before its photos are taken, so "no images" today usually
+   * means "no images yet".
+   *
+   * Measured on 2026-09-16: 43.307 lots sat in `skipped`, 8.594 of them not even
+   * auctioned yet, and five sampled at random already had 8 to 14 photos live on
+   * Copart. Those galleries were never going to be picked up, which also meant
+   * those lots could never get an image vector or a price prediction.
+   *
+   * Only lots whose auction has not happened yet are retried: once the sale is
+   * past, new photos are of no use and re-queueing them would burn proxy budget
+   * on lots nobody can bid on.
+   */
+  @Cron(CronExpression.EVERY_DAY_AT_2AM)
+  async retrySkipped(): Promise<number> {
+    const today = new Date();
+    const todayInt =
+      today.getUTCFullYear() * 10000 + (today.getUTCMonth() + 1) * 100 + today.getUTCDate();
+
+    // `priority` holds the lot's saleDate as YYYYMMDD, so the "not auctioned
+    // yet" filter runs in the query instead of pulling rows to filter in memory.
+    const stale = await this.prisma.imageCacheJob.findMany({
+      where: {
+        status: 'skipped',
+        priority: { gte: todayInt },
+        // Leave a day between attempts: photos do not appear within minutes, and
+        // hammering Copart for them wastes the proxy pool.
+        updatedAt: { lt: new Date(Date.now() - 24 * 3_600_000) },
+      },
+      select: { lotNumber: true },
+      orderBy: { priority: 'asc' },
+      take: 5000,
+    });
+    if (!stale.length) return 0;
+
+    const { count } = await this.prisma.imageCacheJob.updateMany({
+      where: { lotNumber: { in: stale.map((j) => j.lotNumber) }, status: 'skipped' },
+      data: { status: 'pending', attempts: 0 },
+    });
+    this.logger.log(
+      `[ImageCache] ${count} lot(s) back from "skipped" to "pending" ` +
+      `(Copart publishes photos days after listing)`,
+    );
+    return count;
+  }
 
   async enqueueNewLots(lotNumberStrings: string[]): Promise<number> {
     if (!lotNumberStrings.length) return 0;
