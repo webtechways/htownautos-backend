@@ -248,6 +248,50 @@ export class ImageCacheService {
    * fallando para siempre — que es justo lo contrario de lo que pide un boton
    * de reintentar.
    */
+  /**
+   * Re-queue everything still worth retrying: `failed` and `skipped` alike, but
+   * only while the auction has not happened yet.
+   *
+   * The two states look different and are the same problem here. `failed` means
+   * the proxies got blocked; `skipped` means Copart answered with zero images —
+   * which usually means "no photos yet", since they are published days after a
+   * lot is listed. Neither is permanent while the car is still going to sell.
+   *
+   * Past the sale date it stops being worth it: new photos help nobody once
+   * nobody can bid, and re-queueing them spends proxy budget for nothing.
+   */
+  async requeueRetryable(): Promise<{ requeued: number; failed: number; skipped: number }> {
+    const now = new Date();
+    const todayInt =
+      now.getUTCFullYear() * 10000 + (now.getUTCMonth() + 1) * 100 + now.getUTCDate();
+
+    // `priority` holds the lot's saleDate as YYYYMMDD.
+    const where: Prisma.ImageCacheJobWhereInput = {
+      status: { in: ['failed', 'skipped'] },
+      priority: { gte: todayInt },
+    };
+
+    const [failed, skipped] = await Promise.all([
+      this.prisma.imageCacheJob.count({ where: { ...where, status: 'failed' } }),
+      this.prisma.imageCacheJob.count({ where: { ...where, status: 'skipped' } }),
+    ]);
+
+    const res = await this.prisma.imageCacheJob.updateMany({
+      where,
+      data: {
+        status: 'pending',
+        lastError: null,
+        attempts: 0,
+        failedSequences: Prisma.DbNull,
+      },
+    });
+    this.logger.log(
+      `[ImageCache] re-queued ${res.count} lot(s) not yet auctioned ` +
+      `(${failed} failed, ${skipped} skipped)`,
+    );
+    return { requeued: res.count, failed, skipped };
+  }
+
   async retryFailed(lots?: string[]): Promise<{ requeued: number }> {
     const where: Prisma.ImageCacheJobWhereInput = { status: 'failed' };
     if (lots?.length) {

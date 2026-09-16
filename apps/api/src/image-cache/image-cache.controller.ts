@@ -60,6 +60,14 @@ export class ImageCacheController {
     return this.service.retryJob(lot);
   }
 
+  @Post('jobs/requeue-retryable')
+  @ApiOperation({
+    summary: 'Re-queue every failed/skipped lot whose auction has not happened yet',
+  })
+  requeueRetryable() {
+    return this.service.requeueRetryable();
+  }
+
   @Post('jobs/retry')
   @ApiOperation({
     summary: 'Re-queue failed lots: the ones given, or every failed one',
