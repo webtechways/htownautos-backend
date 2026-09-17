@@ -76,3 +76,7 @@ tsconfig.tsbuildinfo
 !/scripts/kill-ports.js
 !/scripts/verify-auction-monitor.js
 !/scripts/verify-scraper-workers.js
+
+# Python bytecode from local checks of the pod worker
+__pycache__/
+*.pyc
