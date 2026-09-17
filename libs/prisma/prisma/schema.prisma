@@ -4446,6 +4446,15 @@ model EmbedJobConfig {
   maxLotsPerRun    Int     @default(20000)
   maxMinutes       Int     @default(180)
   maxCostUsdPerRun Decimal @default(5.0) @db.Decimal(8, 2)
+  /// Precio/hora maximo aceptable al alquilar.
+  ///
+  /// La API de RunPod no deja PEDIR un pod barato: no hay ningun parametro de
+  /// precio en `POST /pods`, y `gpuTypePriority: availability` optimiza por
+  /// conseguir GPU, no por coste. El mismo A40 se ha alquilado a $0,27, a $0,49
+  /// y una vez a $1,59 segun el host que toque. Lo unico que se puede hacer es
+  /// mirar el precio nada mas crearlo y devolverlo si se pasa, que cuesta
+  /// segundos de facturacion.
+  maxCostPerHr     Decimal @default(0.60) @db.Decimal(8, 4)
 
   // ── Que lotes entran en la cola ──
   // Sin esto la cola era "todo lo pendiente, del mas viejo al mas nuevo", que

@@ -461,6 +461,27 @@ export class EmbedJobService {
       });
       await this.append(run.id, `pod ${pod.id} (${gpu ?? '?'}) a $${precio ?? '?'}/h`);
 
+      // ── Devolver el pod si sale caro ──
+      // `POST /pods` no admite ningun parametro de precio y `gpuTypePriority:
+      // availability` optimiza por conseguir GPU, no por coste, asi que el
+      // precio no se puede pedir: solo se puede mirar y rechazar. El mismo A40
+      // ha salido a $0,27, a $0,49 y una vez a $1,59. Devolverlo aqui cuesta los
+      // segundos que lleva crearlo y borrarlo.
+      const tope = Number(cfg.maxCostPerHr);
+      if (precio && tope > 0 && Number(precio) > tope) {
+        const msg =
+          `RunPod asigno un pod a $${Number(precio).toFixed(2)}/h, por encima del ` +
+          `tope de $${tope.toFixed(2)}/h. Se devuelve sin usarlo.`;
+        this.logger.warn(`[EmbedJob] ${msg}`);
+        await this.prisma.embedJobRun.update({
+          where: { id: run.id },
+          data: { status: 'aborted', error: msg, finishedAt: new Date() },
+        });
+        await this.terminate(run.id, pod.id, 'deadline', msg);
+        podId = null;
+        return run.id;
+      }
+
       await this.poll(run.id, podId, cfg);
     } catch (err: any) {
       this.logger.error(`[EmbedJob] ${err.message}`);
