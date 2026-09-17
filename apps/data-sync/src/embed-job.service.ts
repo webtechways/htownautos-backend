@@ -7,6 +7,15 @@ const CONFIG_ID = 'singleton';
 /** Prefijo por el que el vigilante reconoce NUESTROS pods y no toca los ajenos. */
 export const POD_PREFIX = 'htownautos-embed';
 const POLL_MS = 20_000;
+/**
+ * Silencio a partir del cual un pod se da por huerfano al arrancar el servicio.
+ *
+ * El pod habla solo: el bootstrap manda el log cada 10 s y el worker imprime
+ * cada 20 tandas, asi que en marcha escribe cada minuto y medio o dos. Quince
+ * minutos es muy por encima de ese ritmo y deja margen para el arranque, donde
+ * se baja el modelo y hay un hueco sin lineas.
+ */
+const SILENCIO_HUERFANO_MIN = 15;
 
 /**
  * Job nocturno: convierte las fotos de los lotes nuevos en vectores.
@@ -99,17 +108,75 @@ export class EmbedJobService {
   }
 
   /**
-   * Al arrancar el servicio, apaga cualquier pod que quedara vivo de una
-   * ejecucion anterior. Cubre el caso de que el contenedor muriera a mitad: sin
-   * esto el pod seguiria facturando y nadie lo sabria.
+   * Al arrancar el servicio, decide que hacer con los pods que siguen vivos.
+   *
+   * ── Por que no basta con apagarlos todos ──
+   * La primera version daba por huerfano cualquier pod cuya ejecucion siguiera
+   * en `running`, razonando que si el backend se reinicio el pod quedo suelto.
+   * Es falso: el pod es una maquina independiente que no se entera de que este
+   * contenedor se redespliega, y sigue trabajando y reportando por la API. Un
+   * deploy en horario normal bastaba para tirar una ejecucion sana.
+   *
+   * Paso el 2026-09-16: un deploy mato una ejecucion de 3 h 57 min CINCO
+   * SEGUNDOS despues de su ultima linea de progreso. Los 16.000 vectores ya
+   * subidos sobrevivieron —el worker los manda por trozos, no al final— asi que
+   * no se perdio el trabajo hecho, pero si el pod que estaba en marcha y los
+   * minutos de GPU ya pagados del trozo a medias.
+   *
+   * Lo que de verdad separa un pod huerfano de uno sano no es si nosotros nos
+   * reiniciamos, sino si EL sigue hablando. `lastSeenAt` lo dice: lo escribe el
+   * pod en cada linea de log y en cada tanda de vectores.
+   *
+   * Un pod adoptado se vuelve a supervisar de inmediato. Sin eso quedaria
+   * corriendo sin plazo ni tope de coste, que es peor que matarlo.
    */
   async onModuleInit(): Promise<void> {
-    const huerfanas = await this.prisma.embedJobRun.findMany({
+    const vivas = await this.prisma.embedJobRun.findMany({
       where: { status: { in: ['provisioning', 'running'] }, podId: { not: null } },
     });
-    for (const r of huerfanas) {
-      this.logger.warn(`[EmbedJob] ejecucion ${r.id} quedo viva; apagando pod ${r.podId}`);
-      await this.terminate(r.id, r.podId!, 'boot', 'El servicio se reinicio a mitad');
+    for (const r of vivas) {
+      const visto = r.lastSeenAt ?? r.podReadyAt ?? r.startedAt;
+      const silencioMin = (Date.now() - visto.getTime()) / 60_000;
+
+      if (silencioMin > SILENCIO_HUERFANO_MIN) {
+        this.logger.warn(
+          `[EmbedJob] ejecucion ${r.id} muda desde hace ${silencioMin.toFixed(0)} min; apagando pod ${r.podId}`,
+        );
+        await this.terminate(
+          r.id, r.podId!, 'boot',
+          `Sin señales del pod en ${silencioMin.toFixed(0)} min tras reiniciarse el servicio`,
+        );
+        continue;
+      }
+
+      this.logger.log(
+        `[EmbedJob] ejecucion ${r.id} sigue viva (ultima señal hace ${silencioMin.toFixed(1)} min); retomando supervision`,
+      );
+      await this.append(
+        r.id,
+        `el servicio se reinicio; el pod seguia trabajando (ultima señal hace ` +
+        `${silencioMin.toFixed(1)} min) y se retoma la supervision`,
+      );
+      void this.retomar(r.id, r.podId!);
+    }
+  }
+
+  /**
+   * Vuelve a poner un pod adoptado bajo vigilancia.
+   *
+   * Se lanza sin esperar porque `onModuleInit` bloquea el arranque de Nest: si
+   * esto se esperara, el servicio no terminaria de levantar hasta que el pod
+   * acabase, horas despues.
+   */
+  private async retomar(runId: string, podId: string): Promise<void> {
+    try {
+      const cfg = await this.config();
+      this.running = true;
+      await this.poll(runId, podId, cfg);
+    } catch (e) {
+      this.logger.error(`[EmbedJob] supervision retomada de ${runId} fallo: ${(e as Error).message}`);
+    } finally {
+      this.running = false;
     }
   }
 
@@ -326,12 +393,18 @@ export class EmbedJobService {
 
   /** Sondea hasta que el pod reporta el final, vence el plazo o se pasa de coste. */
   private async poll(runId: string, podId: string, cfg: any): Promise<void> {
-    const limite = Date.now() + cfg.maxMinutes * 60_000;
+    // Anclado al arranque REAL de la ejecucion, no a este momento: si se
+    // reanclara aqui, un pod adoptado tras cada redespliegue estrenaria plazo
+    // cada vez y podria facturar indefinidamente. Lo mismo con el silencio
+    // inicial de abajo.
+    const arranque =
+      (await this.prisma.embedJobRun.findUnique({ where: { id: runId } }))?.startedAt ?? new Date();
+    const limite = arranque.getTime() + cfg.maxMinutes * 60_000;
     // Un pod sano escribe en el log a los pocos minutos (bootstrap, descarga del
     // modelo, primeros lotes). Si a los 25 no ha dicho NADA es que no consigue
     // hablar con la API, y esperar al plazo de 3 h son ~$4,80 tirados. Este limite
     // convierte ese fallo en ~$0,65.
-    const mudoHasta = Date.now() + 25 * 60_000;
+    const mudoHasta = arranque.getTime() + 25 * 60_000;
     const inicial = (await this.prisma.embedJobRun.findUnique({ where: { id: runId } }))?.log?.length ?? 0;
 
     for (;;) {

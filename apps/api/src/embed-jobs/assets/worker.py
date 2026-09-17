@@ -52,6 +52,14 @@ WORKERS = int(os.environ.get("WORKERS", 6))
 MAXSEQ = int(os.environ.get("MAX_SEQ", 9))
 # Lots per chunk. 1.000 x 9 photos = ~55 MB of embeddings in flight.
 CHUNK = int(os.environ.get("CHUNK_LOTS", 1000))
+# The pod is killed from outside when this many minutes are up (`timeout` in the
+# bootstrap, and the job's own deadline). The run is sized in LOTS while the
+# budget is in MINUTES, and nothing reconciles the two: on 2026-09-16 a run
+# asked for 200.000 lots inside a 240 min window at a measured 67,5 lots/min,
+# so only ~16.200 could ever fit and the job was guaranteed to be reported as
+# failed. Stopping on our own terms turns that into a clean finish with real
+# progress, and does it without assuming any particular GPU speed.
+MAX_MINUTES = int(os.environ.get("MAX_MINUTES", 180))
 H = {"X-API-Key": KEY, "Content-Type": "application/json"}
 
 
@@ -165,8 +173,23 @@ def main() -> int:
     model = AutoModel.from_pretrained(ENCODER, dtype=torch.float16).to(dev).eval()
     log(f"modelo {ENCODER} {SIZE}px en {dev} | trozos de {CHUNK:,} lotes")
 
+    # Leave room to finish the chunk in hand and post the results.
+    presupuesto_s = MAX_MINUTES * 60
+    ultimo_trozo_s = 0.0
+
     offset = imgs_ok = imgs_mal = lotes_ok = lotes_sin = 0
     while True:
+        # Measured, not guessed: the next chunk costs about what the last one
+        # cost. Asking for one more that cannot finish wastes GPU minutes and
+        # ends the run as a failure instead of a partial success.
+        transcurrido = time.time() - t0
+        margen = ultimo_trozo_s * 1.2 + 120
+        if ultimo_trozo_s and transcurrido + margen > presupuesto_s:
+            log(f"parando por presupuesto: {transcurrido/60:.0f} min de "
+                f"{MAX_MINUTES} min, el siguiente trozo no cabe "
+                f"(~{ultimo_trozo_s/60:.1f} min)")
+            break
+
         log(f"requesting manifest at offset {offset:,}")
         man = requests.get(
             f"{API}/embed-pod/{RUN}/manifest",
@@ -178,6 +201,7 @@ def main() -> int:
         if not items:
             break
 
+        t_trozo = time.time()
         salida, sin_ninguna, ok_n, mal_n = procesar(
             items, proc, model, dev, comps, mean, pcav)
         imgs_ok += ok_n
@@ -193,6 +217,7 @@ def main() -> int:
 
         lotes_ok += len(salida)
         lotes_sin += len(sin_ninguna)
+        ultimo_trozo_s = time.time() - t_trozo
         offset += CHUNK
         ritmo = (imgs_ok + imgs_mal) / max(time.time() - t0, 1)
         log(f"trozo hasta {offset:,}: +{len(salida):,} lotes "

@@ -490,7 +490,7 @@ model Tenant {
   zipCode                   String?
   country                   String    @default("USA")
   settings                  Json?
-  feeConfig                 Json?   @map("fee_config") // Per-tenant auction fee configuration
+  feeConfig                 Json?     @map("fee_config") // Per-tenant auction fee configuration
   twilioMessagingServiceSid String? // Twilio Messaging Service ID for SMS
   logo                      String?
   isActive                  Boolean   @default(true)
@@ -749,7 +749,7 @@ model TenantInvitation {
 }
 
 model Buyer {
-  id                       String                   @id @default(uuid())
+  id                       String                    @id @default(uuid())
   firstName                String
   middleName               String?
   lastName                 String
@@ -768,11 +768,11 @@ model Buyer {
   currentCity              String
   currentState             String
   currentZipCode           String
-  currentCountry           String                   @default("USA")
+  currentCountry           String                    @default("USA")
   yearsAtAddress           Int?
   monthsAtAddress          Int?
   housingStatus            String?
-  monthlyHousingCost       Decimal?                 @db.Decimal(10, 2)
+  monthlyHousingCost       Decimal?                  @db.Decimal(10, 2)
   previousAddress          String?
   previousCity             String?
   previousState            String?
@@ -801,10 +801,10 @@ model Buyer {
   employerCity             String?
   employerState            String?
   employerZipCode          String?
-  monthlyIncome            Decimal?                 @db.Decimal(10, 2)
+  monthlyIncome            Decimal?                  @db.Decimal(10, 2)
   yearsEmployed            Int?
   monthsEmployed           Int?
-  additionalIncome         Decimal?                 @db.Decimal(10, 2)
+  additionalIncome         Decimal?                  @db.Decimal(10, 2)
   additionalIncomeSource   String?
   previousEmployer         String?
   previousEmployerPhone    String?
@@ -813,7 +813,7 @@ model Buyer {
   previousEmployerCity     String?
   previousEmployerState    String?
   previousEmployerZipCode  String?
-  previousMonthlyIncome    Decimal?                 @db.Decimal(10, 2)
+  previousMonthlyIncome    Decimal?                  @db.Decimal(10, 2)
   previousYearsEmployed    Int?
   previousMonthsEmployed   Int?
   bankName                 String?
@@ -823,16 +823,16 @@ model Buyer {
   yearsWithBank            Int?
   monthsWithBank           Int?
   creditScore              Int?
-  bankruptcyHistory        Boolean                  @default(false)
+  bankruptcyHistory        Boolean                   @default(false)
   bankruptcyDate           DateTime?
   bankruptcyType           String?
   bankruptcyDischargeDate  DateTime?
-  repoHistory              Boolean                  @default(false)
+  repoHistory              Boolean                   @default(false)
   repoDate                 DateTime?
-  foreclosureHistory       Boolean                  @default(false)
+  foreclosureHistory       Boolean                   @default(false)
   foreclosureDate          DateTime?
-  currentMonthlyDebts      Decimal?                 @db.Decimal(10, 2)
-  alimonyChildSupport      Decimal?                 @db.Decimal(10, 2)
+  currentMonthlyDebts      Decimal?                  @db.Decimal(10, 2)
+  alimonyChildSupport      Decimal?                  @db.Decimal(10, 2)
   reference1Name           String?
   reference1Phone          String?
   reference1Relation       String?
@@ -868,18 +868,18 @@ model Buyer {
   // Casilla 27: ACTIVE | RETIRED_VET | RESERVE.
   militaryStatus           String?
   // Casilla 28: obliga a adjuntar el VTR-216.
-  communicationImpediment  Boolean                  @default(false)
-  isBusinessBuyer          Boolean                  @default(false)
+  communicationImpediment  Boolean                   @default(false)
+  isBusinessBuyer          Boolean                   @default(false)
   businessName             String?
   businessType             String?
   businessEIN              String?
   businessYearsInBusiness  Int?
-  businessAnnualRevenue    Decimal?                 @db.Decimal(12, 2)
-  ofacCheckCompleted       Boolean                  @default(false)
+  businessAnnualRevenue    Decimal?                  @db.Decimal(12, 2)
+  ofacCheckCompleted       Boolean                   @default(false)
   ofacCheckDate            DateTime?
   ofacCheckResult          String?
   ofacNotes                String?
-  identityVerified         Boolean                  @default(false)
+  identityVerified         Boolean                   @default(false)
   identityVerifiedDate     DateTime?
   identityVerifiedBy       String?
   source                   String?
@@ -889,28 +889,28 @@ model Buyer {
   contactMethod            String?
   contactTime              String?
   notes                    String?
-  createdAt                DateTime                 @default(now())
-  updatedAt                DateTime                 @updatedAt
+  createdAt                DateTime                  @default(now())
+  updatedAt                DateTime                  @updatedAt
   metaValue                Json?
   tenantId                 String?
   salesPersonId            String?
   bdcAgentId               String?
-  stripeCustomerId         String?                  @unique
-  clerkUserId              String?                  @unique @map("clerk_user_id")
+  stripeCustomerId         String?                   @unique
+  clerkUserId              String?                   @unique @map("clerk_user_id")
   activities               Activity[]
   vehicleDocuments         VehicleDocument[]
-  employmentStatus         EmploymentStatus?        @relation(fields: [employmentStatusId], references: [id])
-  gender                   Gender?                  @relation(fields: [genderId], references: [id])
-  idState                  IdState?                 @relation(fields: [idStateId], references: [id])
-  idType                   IdType?                  @relation(fields: [idTypeId], references: [id])
-  occupation               Occupation?              @relation(fields: [occupationId], references: [id])
-  preferredLanguage        PreferredLanguage?       @relation(fields: [preferredLanguageId], references: [id])
-  tenant                   Tenant?                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  salesperson              TenantUser?              @relation("BuyerSalesperson", fields: [salesPersonId], references: [id])
-  bdcAgent                 TenantUser?              @relation("BuyerBdcAgent", fields: [bdcAgentId], references: [id])
-  dealsAsBuyer             Deal[]                   @relation("BuyerDeals")
-  dealsAsCoBuyer           Deal[]                   @relation("CoBuyerDeals")
-  media                    Media[]                  @relation("BuyerMedia")
+  employmentStatus         EmploymentStatus?         @relation(fields: [employmentStatusId], references: [id])
+  gender                   Gender?                   @relation(fields: [genderId], references: [id])
+  idState                  IdState?                  @relation(fields: [idStateId], references: [id])
+  idType                   IdType?                   @relation(fields: [idTypeId], references: [id])
+  occupation               Occupation?               @relation(fields: [occupationId], references: [id])
+  preferredLanguage        PreferredLanguage?        @relation(fields: [preferredLanguageId], references: [id])
+  tenant                   Tenant?                   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  salesperson              TenantUser?               @relation("BuyerSalesperson", fields: [salesPersonId], references: [id])
+  bdcAgent                 TenantUser?               @relation("BuyerBdcAgent", fields: [bdcAgentId], references: [id])
+  dealsAsBuyer             Deal[]                    @relation("BuyerDeals")
+  dealsAsCoBuyer           Deal[]                    @relation("CoBuyerDeals")
+  media                    Media[]                   @relation("BuyerMedia")
   tasks                    Task[]
   buyerNotes               Note[]
   phoneCalls               PhoneCall[]
@@ -921,7 +921,7 @@ model Buyer {
   vehiclePreferences       BuyerVehiclePreference[]
   favorites                BuyerFavorite[]
   favoriteShareLinks       BuyerFavoritesShareLink[]
-  inspections              VehicleInspection[]      @relation("BuyerInspections")
+  inspections              VehicleInspection[]       @relation("BuyerInspections")
   ledgerEntries            CustomerLedgerEntry[]
   portalOrders             PortalOrder[]
   depositReleaseRequests   DepositReleaseRequest[]
@@ -1239,6 +1239,7 @@ model Media {
   inspectionRequestItem        InspectionRequestItem?   @relation("RequestItemMedia", fields: [inspectionRequestItemId], references: [id], onDelete: Cascade)
   inspectionErrorCode          InspectionErrorCode?     @relation("ErrorCodeMedia", fields: [inspectionErrorCodeId], references: [id], onDelete: Cascade)
   carfaxReport                 CarfaxReport?            @relation("CarfaxReportMedia", fields: [carfaxReportId], references: [id], onDelete: Cascade)
+  vehicleDocuments             VehicleDocument[]
 
   @@index([tenantId])
   @@index([vehicleId])
@@ -1253,7 +1254,6 @@ model Media {
   @@index([inspectionErrorCodeId])
   @@index([carfaxReportId])
   @@map("media")
-  vehicleDocuments             VehicleDocument[]
 }
 
 model Vehicle {
@@ -1998,7 +1998,7 @@ model AuctionListing {
   announcements         String?
   // Derived at import time (see copart-import.service.ts) — kept in sync with
   // the OpenSearch document so both backends filter identically.
-  sellerCategory        String?                   // Insurance | Rental | Repo | Other
+  sellerCategory        String? // Insurance | Rental | Repo | Other
   engineSizeL           Decimal?                  @db.Decimal(4, 1)
   locationLat           Float?
   locationLng           Float?
@@ -2103,8 +2103,8 @@ model AuctionSaleResult {
   saleDate         Int? // YYYYMMDD (parsed from pageUrl, fallback to receivedAt)
   auctionSession   String? // e.g. "copart-882-a"
   saleLocationSlug String? // e.g. "ncs-mountain_region"
-  finalBid         Decimal? @db.Decimal(12, 2)
-  askingPrice      Decimal? @db.Decimal(12, 2)
+  finalBid         Decimal?  @db.Decimal(12, 2)
+  askingPrice      Decimal?  @db.Decimal(12, 2)
   reserve          Boolean?
   sold             Boolean?
   ticks            Int?
@@ -2116,19 +2116,19 @@ model AuctionSaleResult {
 
   // ── Datos que solo trae el frame de Solace ──
   /// Sala tal cual la nombra Copart, p.ej. `COPART024A`.
-  saleRoom     String?
+  saleRoom        String?
   /// `MINMET`: si la reserva quedo cubierta.
-  reserveMet   Boolean?
+  reserveMet      Boolean?
   /// `APRFLG`: venta aprobada.
-  approved     Boolean?
-  buyerNo      String?
+  approved        Boolean?
+  buyerNo         String?
   /// `BUYERST` no es del mismo tipo siempre: "NJ" en EE.UU., "19" en
   /// internacionales. Se guarda como texto y ya.
-  buyerState   String?
-  buyerCountry String?
-  itemNo       Int?
+  buyerState      String?
+  buyerCountry    String?
+  itemNo          Int?
   /// Instante en que Copart emitio el evento, distinto de cuando nos llego.
-  emittedAt    DateTime?
+  emittedAt       DateTime?
   /// SOLDPEND: adjudicada pero a la espera de que el vendedor acepte la puja.
   /// Un SOLD posterior del mismo lote la confirma y esto pasa a false.
   pendingApproval Boolean?
@@ -2250,16 +2250,16 @@ model AuctionRawFrame {
   id String @id @default(uuid())
 
   /// El frame en base64, tal cual lo capturo la extension.
-  frame  String @db.Text
+  frame  String  @db.Text
   /// De que VM vino, para poder aislar una maquina que mande basura.
   worker String?
 
   /// pending | processed | failed | ignored
-  status String  @default("pending")
+  status  String  @default("pending")
   /// Que salio al decodificarlo, para no tener que repetirlo en la UI.
-  event  String?
-  lot    BigInt?
-  error  String?
+  event   String?
+  lot     BigInt?
+  error   String?
   /// Lo decodificado, para poder verlo en el Live Feed sin cruzar tablas.
   /// Se rellena tambien en los `ignored`: un evento que aun no tratamos se
   /// entiende mirando sus datos, no su nombre.
@@ -2504,7 +2504,7 @@ model BuyerFavoritesShareLink {
   /// ShortUrl.code companion — populated at creation; null if shortener failed.
   shortUrlCode   String?
 
-  buyer  Buyer   @relation(fields: [buyerId], references: [id], onDelete: Cascade)
+  buyer Buyer @relation(fields: [buyerId], references: [id], onDelete: Cascade)
 
   @@index([buyerId])
   @@index([token])
@@ -3138,7 +3138,7 @@ model Proxy {
 // replaced on each refresh. `url` is the pre-built AutoBidMaster search link
 // (sale-location-id-<slug>/sale-date-<YYYYMMDD>, date in Central time). Global.
 model AuctionCalendarEntry {
-  id                  String   @id @default(uuid())
+  id                  String         @id @default(uuid())
   status              String // live | later | upcoming | ended
   auctionGroup        String // usa | canada
   locationSourceId    Int
@@ -3147,19 +3147,19 @@ model AuctionCalendarEntry {
   locationSlug        String
   countryCode         String?
   region              String?
-  latitude            Decimal? @db.Decimal(10, 7)
-  longitude           Decimal? @db.Decimal(10, 7)
+  latitude            Decimal?       @db.Decimal(10, 7)
+  longitude           Decimal?       @db.Decimal(10, 7)
   startedAt           DateTime // absolute instant (parsed from the -07:00 ISO)
   saleDate            Int // YYYYMMDD in America/Chicago (Houston Central)
   inventoryAuction    String?
-  totalAvailableItems Int      @default(0)
-  url                 String   @db.Text
+  totalAvailableItems Int            @default(0)
+  url                 String         @db.Text
   // Staff toggle — preserved across calendar refreshes (by location+startedAt).
-  monitor             Boolean  @default(false)
+  monitor             Boolean        @default(false)
   // Agente asignado para operar esta subasta. Se preserva igual que `monitor`
   // porque cada refresco del calendario borra y recrea todas las filas.
   scraperAgentId      String?
-  scraperAgent        ScraperAgent? @relation(fields: [scraperAgentId], references: [id], onDelete: SetNull)
+  scraperAgent        ScraperAgent?  @relation(fields: [scraperAgentId], references: [id], onDelete: SetNull)
   // VM que se llevó esta subasta hoy. Lo estampa el poll de /scraper/poll y es
   // exclusivo: mientras esté puesto, ninguna otra VM la recibe. Se preserva en
   // el refresco igual que los dos campos de arriba.
@@ -3170,7 +3170,7 @@ model AuctionCalendarEntry {
   // campos de arriba: si se perdiera, cada refresco reavisaria de lo mismo.
   alertedAt           DateTime?
   raw                 Json?
-  fetchedAt           DateTime @default(now())
+  fetchedAt           DateTime       @default(now())
 
   @@unique([locationSourceId, startedAt])
   @@index([status])
@@ -3207,8 +3207,8 @@ model AuctionCalendarConfig {
   /// operar de verdad. Con 700+ proximas, avisar de todas es silenciar el canal.
   alertOnlyWithAgent Boolean  @default(true)
 
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@map("auction_calendar_config")
 }
@@ -3321,9 +3321,9 @@ model AuctionMonitorConfig {
   forwardWebhookUrl String?
 
   // Login state (ABM_USER / ABM_PASS)
-  loginOk     Boolean   @default(false)
-  lastLoginAt DateTime?
-  loginError  String?
+  loginOk              Boolean   @default(false)
+  lastLoginAt          DateTime?
+  loginError           String?
   // The API container has no direct channel to the browser worker, so the DB is
   // the bus: the UI stamps this and the worker runs a login check on its next tick.
   loginTestRequestedAt DateTime?
@@ -3344,14 +3344,14 @@ model AuctionMonitorConfig {
 // One browser session per monitored auction (calendar entry). Holds live counters
 // so the UI can show what each page is capturing without touching the browser.
 model AuctionMonitorSession {
-  id              String  @id @default(uuid())
-  calendarEntryId String? // soft link — calendar refreshes replace entries
+  id               String   @id @default(uuid())
+  calendarEntryId  String? // soft link — calendar refreshes replace entries
   locationSourceId Int?
-  locationName    String
-  locationSlug    String
-  saleDate        Int
-  scheduledAt     DateTime // the entry's startedAt
-  url             String   @db.Text
+  locationName     String
+  locationSlug     String
+  saleDate         Int
+  scheduledAt      DateTime // the entry's startedAt
+  url              String   @db.Text
 
   // pending | starting | running | stopping | stopped | failed
   // "stopping" is how the UI asks the worker to close a page (DB as control bus).
@@ -3371,7 +3371,7 @@ model AuctionMonitorSession {
   log        Json? // tail of recent log lines for the UI
 
   // [{ label, url, at }] — capped tail of page captures (S3/CDN urls).
-  screenshots          Json?
+  screenshots           Json?
   // Stamped by the UI to ask the worker for a fresh capture of the live page.
   screenshotRequestedAt DateTime?
 
@@ -3411,14 +3411,14 @@ model ImageCacheJob {
 // Singleton control row for the image scraping/caching subsystem, edited from
 // Settings → Image Cache. The crawler reads it every tick.
 model ImageScrapeConfig {
-  id                 String   @id @default("singleton")
-  paused             Boolean  @default(false)
-  lotsPerTick        Int      @default(6) // lots dispatched per crawler tick (~1/min cron)
-  maxAttempts        Int      @default(5) // proxy retries per image before giving up
-  perSequenceDelayMs Int      @default(0) // optional pause between sequences in the consumer
-  concurrency        Int      @default(4) // bounded parallel image up/downloads per lot
-  concurrentLots     Int      @default(1) // lots processed at once by the consumer (RabbitMQ prefetch)
-  proxyResyncHours   Int      @default(168) // auto re-sync Webshare proxies every N hours (0 = off)
+  id                 String    @id @default("singleton")
+  paused             Boolean   @default(false)
+  lotsPerTick        Int       @default(6) // lots dispatched per crawler tick (~1/min cron)
+  maxAttempts        Int       @default(5) // proxy retries per image before giving up
+  perSequenceDelayMs Int       @default(0) // optional pause between sequences in the consumer
+  concurrency        Int       @default(4) // bounded parallel image up/downloads per lot
+  concurrentLots     Int       @default(1) // lots processed at once by the consumer (RabbitMQ prefetch)
+  proxyResyncHours   Int       @default(168) // auto re-sync Webshare proxies every N hours (0 = off)
   proxyLastSyncAt    DateTime? // last time the proxy inventory was synced from Webshare
 
   // --- Retention: delete cached galleries N days after the auction ---
@@ -3434,8 +3434,8 @@ model ImageScrapeConfig {
   storageBytes      BigInt?
   storageObjects    Int?
   storageComputedAt DateTime?
-  createdAt          DateTime @default(now())
-  updatedAt          DateTime @updatedAt
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
 
   @@map("image_scrape_config")
 }
@@ -4391,18 +4391,22 @@ model EmbedJobRun {
   /// pending | provisioning | running | done | failed | aborted
   status String @default("pending")
 
-  podId        String?
-  podType      String?
+  podId      String?
+  podType    String?
   /// Precio/hora que reporto RunPod al crear el pod.
-  costPerHr    Decimal? @db.Decimal(8, 4)
+  costPerHr  Decimal? @db.Decimal(8, 4)
   /// Coste estimado = costPerHr * horas facturadas.
-  costUsd      Decimal? @db.Decimal(8, 4)
-  gpuSeconds   Int?
+  costUsd    Decimal? @db.Decimal(8, 4)
+  gpuSeconds Int?
 
   startedAt    DateTime  @default(now())
   podReadyAt   DateTime?
   finishedAt   DateTime?
   terminatedAt DateTime?
+  /// Ultima vez que el POD hablo (log o vectores). Es lo unico que distingue un
+  /// pod huerfano de uno trabajando cuando el backend se reinicia: el pod es
+  /// independiente y sigue a lo suyo mientras el contenedor se redespliega.
+  lastSeenAt   DateTime?
   /// Cual de las vias apago el pod: job | deadline | watchdog | boot | self | manual.
   /// Si aparece algo distinto de `job` de forma habitual, hay una via fallando.
   terminatedBy String?
@@ -4435,8 +4439,8 @@ model EmbedJobConfig {
 
   /// Corta-circuitos. Ninguno es opcional: son lo que impide que un fallo se
   /// convierta en un pod encendido 24 horas.
-  maxLotsPerRun  Int @default(20000)
-  maxMinutes     Int @default(180)
+  maxLotsPerRun    Int     @default(20000)
+  maxMinutes       Int     @default(180)
   maxCostUsdPerRun Decimal @default(5.0) @db.Decimal(8, 2)
 
   /// Cada cuanto el vigilante busca pods huerfanos (minutos).
@@ -4445,7 +4449,7 @@ model EmbedJobConfig {
   // ── Reentrenamiento del modelo de precio ──
   /// Ventana movil: solo se entrena con ventas de los ultimos N dias. Precios de
   /// hace medio año no describen el mercado de esta semana.
-  trainingDays Int @default(90)
+  trainingDays   Int       @default(90)
   /// Si false, el modelo nuevo se entrena y se mide pero NO sustituye al que
   /// esta sirviendo aunque gane. Util para observar unas semanas antes de soltar
   /// el automatismo.
@@ -4473,17 +4477,17 @@ model ModelTrainingRun {
   /// interesan: el mercado de salvage se mueve con la chatarra y la temporada.
   trainingDays Int @default(90)
 
-  rowsTrain Int?
-  rowsValid Int?
+  rowsTrain      Int?
+  rowsValid      Int?
   /// Cuantas filas del entrenamiento traian vector de imagen.
   rowsWithImages Int?
 
   /// MAE del modelo que estaba sirviendo, sobre el mismo examen.
-  maeChampion  Decimal? @db.Decimal(10, 2)
+  maeChampion      Decimal? @db.Decimal(10, 2)
   /// MAE del recien entrenado.
-  maeChallenger Decimal? @db.Decimal(10, 2)
+  maeChallenger    Decimal? @db.Decimal(10, 2)
   /// MAE del baseline tonto (mediana por marca/modelo/año/titulo), como suelo.
-  maeBaseline  Decimal? @db.Decimal(10, 2)
+  maeBaseline      Decimal? @db.Decimal(10, 2)
   intervalCoverage Decimal? @db.Decimal(5, 3)
 
   /// Si el nuevo sustituyo al anterior, y por que no si no lo hizo.
@@ -4536,8 +4540,8 @@ model VehicleDocument {
   buyer   Buyer?  @relation(fields: [buyerId], references: [id], onDelete: SetNull)
   media   Media?  @relation(fields: [mediaId], references: [id], onDelete: SetNull)
 
+  @@unique([submissionId])
   @@index([vehicleId, createdAt])
   @@index([tenantId])
-  @@unique([submissionId])
   @@map("vehicle_documents")
 }

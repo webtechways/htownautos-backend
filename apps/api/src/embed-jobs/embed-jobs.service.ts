@@ -230,7 +230,7 @@ export class EmbedJobsService {
     }
     await this.prisma.embedJobRun.update({
       where: { id: runId },
-      data: { lotsDone: { increment: guardados } },
+      data: { lotsDone: { increment: guardados }, lastSeenAt: new Date() },
     }).catch(() => undefined);
     return { guardados };
   }
@@ -391,7 +391,10 @@ export class EmbedJobsService {
     if (!run) return;
     const log = `${run.log ?? ''}[${new Date().toISOString()}] ${linea}\n`;
     await this.prisma.embedJobRun
-      .update({ where: { id: runId }, data: { log: log.slice(-40_000) } })
+      // `lastSeenAt` is the pod's heartbeat: the boot sweep in data-sync uses it
+      // to tell a pod orphaned by a crash from one that is simply outliving a
+      // redeploy of this backend.
+      .update({ where: { id: runId }, data: { log: log.slice(-40_000), lastSeenAt: new Date() } })
       .catch(() => undefined);
   }
 }
