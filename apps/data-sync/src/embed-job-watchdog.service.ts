@@ -2,12 +2,12 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '@htownautos/prisma';
 import { RunpodService } from '@htownautos/common';
-import { EmbedJobService, POD_PREFIX } from './embed-job.service';
+// El tope duro vive en el servicio que crea el pod: quien lo arranca tiene que
+// saber cuanto se le va a dejar vivir, o planifica trabajo que no le cabe.
+import { EmbedJobService, POD_PREFIX, TOPE_DURO_MIN } from './embed-job.service';
 
 /** Margen sobre `maxMinutes` antes de que el vigilante considere colgado un pod. */
 const MARGEN_MIN = 15;
-/** Tope absoluto: nada nuestro vive mas de esto, diga lo que diga la config. */
-const TOPE_DURO_MIN = 360;
 
 /**
  * Vigilante de pods huerfanos.

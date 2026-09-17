@@ -16,6 +16,16 @@ const POLL_MS = 20_000;
  * se baja el modelo y hay un hueco sin lineas.
  */
 const SILENCIO_HUERFANO_MIN = 15;
+/**
+ * Tope duro de vida de un pod, pase lo que pase en la config.
+ *
+ * Vive aqui y no en el vigilante porque es quien crea el pod el que tiene que
+ * respetarlo: si el pod cree que tiene mas tiempo del que el vigilante le va a
+ * dejar, planifica trozos que no le caben y muere a mitad de uno.
+ */
+export const TOPE_DURO_MIN = 360;
+/** Margen para que el worker cierre y reporte antes de que lo corten. */
+const MARGEN_CIERRE_MIN = 15;
 
 /**
  * Job nocturno: convierte las fotos de los lotes nuevos en vectores.
@@ -352,6 +362,18 @@ export class EmbedJobService {
       return null;
     }
 
+    // ── Lo que de verdad dura un pod es el MENOR de los tres limites ──
+    // La config los deja fijar por separado y es facil que se contradigan: con
+    // `maxMinutes` en 600 el pod planifica diez horas mientras el vigilante lo
+    // corta a las seis, y muere a mitad de un trozo perdiendo ese trabajo. Se
+    // calcula aqui, una vez, y es ESTE numero el que viaja al pod.
+    const minutosEfectivos = Math.min(cfg.maxMinutes, TOPE_DURO_MIN - MARGEN_CIERRE_MIN);
+    if (minutosEfectivos < cfg.maxMinutes) {
+      this.logger.warn(
+        `[EmbedJob] maxMinutes=${cfg.maxMinutes} supera el tope duro; el pod usara ${minutosEfectivos} min`,
+      );
+    }
+
     const cabecera =
       `[${new Date().toISOString()}] ${origen}: ${lotes.length} pendientes, ` +
       `${validos.length} con fotos verificadas en B2` +
@@ -415,7 +437,7 @@ export class EmbedJobService {
           RUNPOD_API_KEY: process.env.RUNPOD_API_KEY ?? process.env.RUNPOD ?? '',
           // Via 5: el propio pod se borra al terminar o al vencer el plazo, sin
           // necesitar que este backend siga vivo.
-          MAX_MINUTES: String(cfg.maxMinutes),
+          MAX_MINUTES: String(minutosEfectivos),
         },
       });
       podId = pod.id;
