@@ -4411,6 +4411,10 @@ model EmbedJobRun {
   /// Si aparece algo distinto de `job` de forma habitual, hay una via fallando.
   terminatedBy String?
 
+  /// Esta ejecucion ignora los filtros de la config y coge todo lo pendiente.
+  /// Es la valvula de escape para vaciar la cola sin tocar los ajustes.
+  selectionAll Boolean @default(false)
+
   lotsRequested Int @default(0)
   lotsDone      Int @default(0)
   imagesDone    Int @default(0)
@@ -4442,6 +4446,22 @@ model EmbedJobConfig {
   maxLotsPerRun    Int     @default(20000)
   maxMinutes       Int     @default(180)
   maxCostUsdPerRun Decimal @default(5.0) @db.Decimal(8, 2)
+
+  // ── Que lotes entran en la cola ──
+  // Sin esto la cola era "todo lo pendiente, del mas viejo al mas nuevo", que
+  // gasta GPU en coches ya subastados mientras los que se van a pujar esperan
+  // detras de 218.066 filas. Estos campos deciden QUE entra; el orden (proxima
+  // subasta primero) va fijo en la consulta.
+  /// Lotes con fecha de venta asignada y todavia por subastar.
+  selDated        Boolean @default(true)
+  /// Lotes que Copart aun no ha fechado ("Future Sale"): venderan mas adelante.
+  selFutureSale   Boolean @default(true)
+  /// Lotes ya subastados. No sirven para pujar, si para entrenar: por eso
+  /// existen como opcion, y por eso empiezan apagados.
+  selIncludePast  Boolean @default(false)
+  /// Acota `selDated` a un rango de fechas de venta (YYYYMMDD, inclusive).
+  selSaleDateFrom Int?
+  selSaleDateTo   Int?
 
   /// Cada cuanto el vigilante busca pods huerfanos (minutos).
   watchdogMinutes Int @default(5)

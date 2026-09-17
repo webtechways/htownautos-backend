@@ -40,9 +40,17 @@ export class EmbedJobsService {
       'enabled', 'cronHour', 'gpuTypeIds', 'imageName',
       'maxLotsPerRun', 'maxMinutes', 'maxCostUsdPerRun', 'watchdogMinutes',
       'trainingDays', 'autoPromote',
+      'selDated', 'selFutureSale', 'selIncludePast', 'selSaleDateFrom', 'selSaleDateTo',
     ];
+    // Los dos limites de fecha se pueden BORRAR, asi que `null` tiene que
+    // llegar a la base en vez de tratarse como "no me lo mandaron".
+    const nulables = new Set(['selSaleDateFrom', 'selSaleDateTo']);
     const limpio: Record<string, unknown> = {};
-    for (const k of permitidos) if (data[k] !== undefined) limpio[k] = data[k];
+    for (const k of permitidos) {
+      if (data[k] !== undefined) {
+        limpio[k] = nulables.has(k) && (data[k] === null || data[k] === '') ? null : data[k];
+      }
+    }
     return this.prisma.embedJobConfig.update({ where: { id: CONFIG_ID }, data: limpio });
   }
 
@@ -116,16 +124,68 @@ export class EmbedJobsService {
     return run;
   }
 
-  /** Deja la peticion en el buzon; data-sync la recoge en menos de un minuto. */
-  async requestRun() {
+  /**
+   * Deja la peticion en el buzon; data-sync la recoge en menos de un minuto.
+   *
+   * Con `todo` la ejecucion ignora los filtros de la config y coge la cola
+   * entera, ya subastados incluidos. Es la valvula de escape para vaciarla sin
+   * tener que desmontar y volver a montar los ajustes.
+   */
+  async requestRun(todo = false) {
     const yaHay = await this.prisma.embedJobRun.findFirst({
       where: { status: { in: ['pending', 'provisioning', 'running'] } },
     });
     if (yaHay) return { ok: false, motivo: 'Ya hay una ejecucion en curso', run: yaHay };
     const run = await this.prisma.embedJobRun.create({
-      data: { status: 'pending', log: '[cola] ejecucion pedida a mano\n' },
+      data: {
+        status: 'pending',
+        selectionAll: todo,
+        log: todo
+          ? '[cola] ejecucion pedida a mano: TODO lo pendiente, sin filtros\n'
+          : '[cola] ejecucion pedida a mano\n',
+      },
     });
     return { ok: true, run };
+  }
+
+  /**
+   * Cuantos lotes cogeria cada grupo ahora mismo.
+   *
+   * Existe para que la pantalla no pida una ejecucion a ciegas: los numeros
+   * cambian cada dia segun lo que Copart fecha y lo que el crawler cachea, y la
+   * diferencia entre marcar una casilla u otra son horas de GPU.
+   */
+  async selectionPreview() {
+    const d = new Date();
+    const hoy = d.getUTCFullYear() * 10000 + (d.getUTCMonth() + 1) * 100 + d.getUTCDate();
+    const cfg = await this.config();
+    const rango: string[] = [];
+    if (cfg.selSaleDateFrom) rango.push(`AND l."saleDate" >= ${Number(cfg.selSaleDateFrom)}`);
+    if (cfg.selSaleDateTo) rango.push(`AND l."saleDate" <= ${Number(cfg.selSaleDateTo)}`);
+
+    const [fila] = (await this.prisma.$queryRawUnsafe(
+      `SELECT
+         count(*) FILTER (WHERE l."saleDate" >= ${hoy})::int AS "fechados",
+         count(*) FILTER (WHERE l."saleDate" >= ${hoy} ${rango.join(' ')})::int AS "fechadosEnRango",
+         count(*) FILTER (WHERE l."saleDate" IS NULL)::int   AS "futureSale",
+         count(*) FILTER (WHERE l."saleDate" < ${hoy})::int  AS "yaSubastados",
+         count(*)::int                                       AS "total"
+       FROM auction_listings l
+       LEFT JOIN lot_image_vectors v ON v."lotNumber" = l."lotNumber"
+      WHERE l."galleryCachedAt" IS NOT NULL
+        AND v."lotNumber" IS NULL
+        AND COALESCE((l."galleryCache"::json->>'imageCount')::int, 0) > 0`,
+    )) as {
+      fechados: number; fechadosEnRango: number;
+      futureSale: number; yaSubastados: number; total: number;
+    }[];
+
+    const seleccionados =
+      (cfg.selDated ? fila.fechadosEnRango : 0) +
+      (cfg.selFutureSale ? fila.futureSale : 0) +
+      (cfg.selIncludePast ? fila.yaSubastados : 0);
+
+    return { ...fila, seleccionados, hoy };
   }
 
   /**

@@ -33,8 +33,14 @@ export class EmbedJobsController {
 
   @Post('run')
   @ApiOperation({ summary: 'Pedir una ejecucion ahora (data-sync la recoge en <1 min)' })
-  requestRun() {
-    return this.service.requestRun();
+  requestRun(@Body() body?: { todo?: boolean }) {
+    return this.service.requestRun(body?.todo === true);
+  }
+
+  @Get('selection-preview')
+  @ApiOperation({ summary: 'Cuantos lotes cogeria cada grupo con los filtros de ahora' })
+  selectionPreview() {
+    return this.service.selectionPreview();
   }
 
   @Get('training/status')

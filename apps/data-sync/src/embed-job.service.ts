@@ -202,7 +202,64 @@ export class EmbedJobService {
   }
 
   /** Lotes con fotos cacheadas que todavia no tienen vector. */
-  async pending(limit: number): Promise<{ lot: bigint; imageCount: number }[]> {
+  /** Hoy como YYYYMMDD, que es como `saleDate` guarda las fechas. */
+  private hoyInt(): number {
+    const d = new Date();
+    return d.getUTCFullYear() * 10000 + (d.getUTCMonth() + 1) * 100 + d.getUTCDate();
+  }
+
+  /**
+   * Los lotes que entran en la proxima ejecucion.
+   *
+   * ── El orden es la mitad del trabajo ──
+   * Antes era `saleDate ASC NULLS LAST`: lo mas viejo primero. Como el corpus
+   * arrastra 218.066 lotes YA SUBASTADOS, la cola empezaba por ellos y los
+   * coches que se van a pujar quedaban a unas quince noches de distancia, es
+   * decir, despues de su propia subasta. Los Future Sale, que son el 63% de lo
+   * que entra cada dia, caian los ultimos por el NULLS LAST.
+   *
+   * El orden correcto sale de para que sirve cada grupo:
+   *   1. Fechados por subastar — la prediccion solo vale ANTES del martillo,
+   *      y dentro del grupo primero el que subasta antes.
+   *   2. Future Sale — venderan pronto, fecha pendiente.
+   *   3. Ya subastados — no se puede pujar por ellos; valen como corpus de
+   *      entrenamiento, y ahi el mas reciente primero porque el modelo solo
+   *      mira una ventana de 90 dias.
+   *
+   * `selectionAll` salta los filtros para vaciar la cola sin tocar los ajustes.
+   */
+  async pending(
+    limit: number,
+    sel?: {
+      selDated: boolean;
+      selFutureSale: boolean;
+      selIncludePast: boolean;
+      selSaleDateFrom: number | null;
+      selSaleDateTo: number | null;
+    },
+    todo = false,
+  ): Promise<{ lot: bigint; imageCount: number }[]> {
+    const hoy = this.hoyInt();
+    const cond: string[] = [];
+
+    if (!todo && sel) {
+      const grupos: string[] = [];
+      if (sel.selDated) {
+        // El rango acota SOLO a los fechados: a un Future Sale no se le puede
+        // exigir una fecha que todavia no tiene.
+        const r = [`l."saleDate" >= ${hoy}`];
+        if (sel.selSaleDateFrom) r.push(`l."saleDate" >= ${sel.selSaleDateFrom}`);
+        if (sel.selSaleDateTo) r.push(`l."saleDate" <= ${sel.selSaleDateTo}`);
+        grupos.push(`(${r.join(' AND ')})`);
+      }
+      if (sel.selFutureSale) grupos.push(`l."saleDate" IS NULL`);
+      if (sel.selIncludePast) grupos.push(`l."saleDate" < ${hoy}`);
+      // Sin ningun grupo marcado no hay nada que procesar: devolver la consulta
+      // sin filtro seria mandar el corpus entero por accidente.
+      if (!grupos.length) return [];
+      cond.push(`(${grupos.join(' OR ')})`);
+    }
+
     // El getter de PrismaService devuelve la funcion ya enlazada y pierde la
     // firma generica, asi que el tipo se pone con un cast en el resultado
     // (mismo patron que StatsService.breakdown).
@@ -214,7 +271,13 @@ export class EmbedJobService {
         WHERE l."galleryCachedAt" IS NOT NULL
           AND v."lotNumber" IS NULL
           AND COALESCE((l."galleryCache"::json->>'imageCount')::int, 0) > 0
-        ORDER BY l."saleDate" ASC NULLS LAST
+          ${cond.length ? `AND ${cond.join(' AND ')}` : ''}
+        ORDER BY
+          CASE WHEN l."saleDate" >= ${hoy} THEN 0
+               WHEN l."saleDate" IS NULL   THEN 1
+               ELSE 2 END ASC,
+          CASE WHEN l."saleDate" >= ${hoy} THEN l."saleDate"
+               ELSE -l."saleDate" END ASC NULLS LAST
         LIMIT $1`,
       limit,
     )) as { lot: bigint; n: number }[];
@@ -251,7 +314,10 @@ export class EmbedJobService {
       return null;
     }
     const cfg = await this.config();
-    const lotes = await this.pending(cfg.maxLotsPerRun);
+    const todo = adoptarId
+      ? ((await this.prisma.embedJobRun.findUnique({ where: { id: adoptarId } }))?.selectionAll ?? false)
+      : false;
+    const lotes = await this.pending(cfg.maxLotsPerRun, cfg, todo);
     if (!lotes.length) {
       this.logger.log('[EmbedJob] no hay lotes pendientes');
       if (adoptarId) {
