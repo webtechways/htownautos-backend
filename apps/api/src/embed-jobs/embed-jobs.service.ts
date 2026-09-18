@@ -41,6 +41,7 @@ export class EmbedJobsService {
       'maxLotsPerRun', 'maxMinutes', 'maxCostUsdPerRun', 'watchdogMinutes',
       'trainingDays', 'autoPromote',
       'selDated', 'selFutureSale', 'selIncludePast', 'selSaleDateFrom', 'selSaleDateTo',
+      'selSoldOnly',
       'maxCostPerHr',
     ];
     // Los dos limites de fecha se pueden BORRAR, asi que `null` tiene que

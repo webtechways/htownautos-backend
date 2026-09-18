@@ -4472,6 +4472,12 @@ model EmbedJobConfig {
   /// Acota `selDated` a un rango de fechas de venta (YYYYMMDD, inclusive).
   selSaleDateFrom Int?
   selSaleDateTo   Int?
+  /// Solo lotes con precio de martillo registrado.
+  ///
+  /// Para el corpus de entrenamiento, un lote sin precio no sirve: falta la
+  /// etiqueta. De los 218.066 ya subastados con fotos, solo 95.572 tienen venta
+  /// registrada — sin este filtro se paga GPU por 122.494 que no entrenan nada.
+  selSoldOnly     Boolean @default(false)
 
   /// Cada cuanto el vigilante busca pods huerfanos (minutos).
   watchdogMinutes Int @default(5)

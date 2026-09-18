@@ -246,6 +246,7 @@ export class EmbedJobService {
       selIncludePast: boolean;
       selSaleDateFrom: number | null;
       selSaleDateTo: number | null;
+      selSoldOnly: boolean;
     },
     todo = false,
   ): Promise<{ lot: bigint; imageCount: number }[]> {
@@ -268,6 +269,14 @@ export class EmbedJobService {
       // sin filtro seria mandar el corpus entero por accidente.
       if (!grupos.length) return [];
       cond.push(`(${grupos.join(' OR ')})`);
+      // El corpus de entrenamiento necesita la etiqueta, y la etiqueta es el
+      // precio. Un lote sin venta registrada consume la misma GPU y no aporta
+      // una sola fila entrenable.
+      if (sel.selSoldOnly) {
+        cond.push(`EXISTS (SELECT 1 FROM auction_sale_results r
+                            WHERE r.lot = l."lotNumber"
+                              AND r.matched AND r."finalBid" > 0)`);
+      }
     }
 
     // El getter de PrismaService devuelve la funcion ya enlazada y pierde la
