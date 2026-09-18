@@ -2022,6 +2022,7 @@ model AuctionListing {
   createdAt             DateTime                  @default(now())
   updatedAt             DateTime                  @updatedAt
   analyses              AuctionVehicleAnalysis[]
+  damageAnalyses        LotDamageAnalysis[]
   marketParts           VehicleMarketPart[]
   carfaxReports         CarfaxReport[]
   maxBidRecommendations MaxBidRecommendation[]
@@ -4573,4 +4574,155 @@ model VehicleDocument {
   @@index([vehicleId, createdAt])
   @@index([tenantId])
   @@map("vehicle_documents")
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  Daños por pieza, vistos por un modelo de visión
+//
+//  ── Por que un catalogo y no 180 columnas ──
+//  El objetivo es entrenar: hace falta un vector de features FIJO y ordenado,
+//  con las piezas sanas como hueco. Eso se puede conseguir de dos maneras.
+//
+//  Guardando una fila por lote con 180 piezas x 4 campos = 720 columnas, o una
+//  fila por (lote, pieza) para TODAS las piezas: 1,6M lotes x 180 = 288 millones
+//  de filas, el 95% vacias. Las dos funcionan y las dos son un error: en la
+//  primera, anadir una pieza es un ALTER sobre una tabla de millones de filas;
+//  en la segunda se paga almacenamiento y escritura por informacion que es,
+//  literalmente, la ausencia de informacion.
+//
+//  Aqui se guarda SOLO lo danado, y el vector completo se reconstruye con un
+//  LEFT JOIN contra `damage_parts`. El catalogo es lo que garantiza que los
+//  campos existen, y al ser datos y no DDL, anadir una pieza es un INSERT.
+//
+//  ── El NULL es ambiguo, y para entrenar eso importa ──
+//  Que una pieza no venga puede significar cuatro cosas distintas: que esta
+//  sana, que no salia en ninguna foto, que ese vehiculo no la tiene (la caja de
+//  una camioneta en un sedan), o que el modelo se quedo sin espacio antes de
+//  llegar a ella. Un modelo de precio que trate esos cuatro casos como el mismo
+//  NULL aprende ruido. Por eso `LotDamageAnalysis` guarda que fotos se vieron y
+//  que zonas quedaron cubiertas: con eso, "sana" y "no visible" se distinguen al
+//  construir las features en vez de perderse.
+// ═══════════════════════════════════════════════════════════════════════════
+
+enum DamagePartGroup {
+  exterior
+  interior
+}
+
+enum VehicleSide {
+  left
+  right
+}
+
+/// Tipos de dano. Los siete primeros son los del catalogo original; los tres
+/// ultimos se anadieron porque son los que mueven el precio en salvamento y no
+/// tenian donde encajar: un airbag desplegado no es "broken", un coche quemado
+/// no es "paint_damage", y una inundacion no se parece a nada de la lista.
+enum VehicleDamageType {
+  dent
+  scratch
+  crack
+  missing
+  broken
+  paint_damage
+  misalignment
+  burn
+  water_damage
+  deployed
+}
+
+enum VehicleRepairAction {
+  repair
+  replace
+  inspect
+}
+
+/// Catalogo de piezas: la fuente de verdad de que campos existen.
+///
+/// `orden` fija la posicion de cada pieza en el vector de entrenamiento y NO se
+/// reordena nunca. Si cambiara, las features de hoy dejarian de significar lo
+/// mismo que las que entrenaron el modelo, y este se degradaria sin lanzar un
+/// solo error — el mismo problema que el PCA congelado de los vectores de imagen.
+model DamagePart {
+  code       String          @id
+  grupo      DamagePartGroup
+  /// "front_end", "side_body_left", "safety"...
+  subgrupo   String
+  lado       VehicleSide?
+  /// Piezas que solo existen en camionetas (caja, porton, cubrecaja).
+  soloPickup Boolean         @default(false)
+  /// Posicion fija en el vector de features. Inmutable.
+  orden      Int             @unique
+  /// Se desactiva en vez de borrarse: los analisis viejos la siguen referenciando.
+  activo     Boolean         @default(true)
+
+  damages LotPartDamage[]
+
+  @@index([grupo, subgrupo])
+  @@map("damage_parts")
+}
+
+/// Una pasada de analisis sobre un lote. Guarda de donde salieron los datos.
+model LotDamageAnalysis {
+  id        String @id @default(uuid())
+  lotNumber BigInt
+
+  /// Sin esto no se pueden comparar dos epocas: un cambio de modelo o de prompt
+  /// cambia la distribucion de las features, y el modelo de precio lo nota.
+  modelo        String
+  promptVersion String
+
+  /// Cuantas fotos vio y cuales. Es lo que permite leer un hueco como "sana"
+  /// en vez de como "no habia foto de esa zona".
+  fotosVistas      Int      @default(0)
+  secuenciasVistas Int[]    @default([])
+  /// Subgrupos con cobertura fotografica confirmada.
+  zonasCubiertas   String[] @default([])
+
+  /// done | partial | failed. `partial` = se corto antes de terminar, y sus
+  /// huecos NO significan "sana".
+  status String  @default("done")
+  error  String?
+
+  tokensEntrada Int?
+  tokensSalida  Int?
+  costeUsd      Decimal? @db.Decimal(10, 6)
+  duracionMs    Int?
+
+  createdAt DateTime @default(now())
+
+  listing AuctionListing  @relation(fields: [lotNumber], references: [lotNumber], onDelete: Cascade)
+  damages LotPartDamage[]
+
+  @@index([lotNumber, createdAt])
+  @@index([modelo, createdAt])
+  @@map("lot_damage_analyses")
+}
+
+/// Una pieza danada. Las sanas no se guardan: se reconstruyen con el catalogo.
+model LotPartDamage {
+  analysisId String
+  partCode   String
+  /// Denormalizado a proposito: construir el corpus de entrenamiento filtra por
+  /// lote sobre decenas de millones de filas, y sin esto cada consulta pasa por
+  /// la tabla de analisis.
+  lotNumber  BigInt
+
+  /// Una pieza puede tener varios a la vez: abollada Y rayada.
+  damageTypes  VehicleDamageType[]  @default([])
+  /// 0-10. Nullable a proposito: el modelo puede ver el dano sin saber graduarlo.
+  severity     Int?
+  repairAction VehicleRepairAction?
+  /// 0-100, lo seguro que estaba el modelo. Permite entrenar solo con lo firme.
+  confidence   Int?
+  /// Lo que el modelo describio, para poder auditar a mano.
+  nota         String?
+
+  analysis LotDamageAnalysis @relation(fields: [analysisId], references: [id], onDelete: Cascade)
+  part     DamagePart        @relation(fields: [partCode], references: [code])
+
+  @@id([analysisId, partCode])
+  @@index([lotNumber])
+  @@index([partCode])
+  @@map("lot_part_damages")
 }

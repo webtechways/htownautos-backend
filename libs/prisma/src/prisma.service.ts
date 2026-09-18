@@ -246,6 +246,18 @@ export class PrismaService implements OnModuleInit, OnModuleDestroy {
     return this.prisma.embedJobRun;
   }
 
+  get damagePart() {
+    return this.prisma.damagePart;
+  }
+
+  get lotDamageAnalysis() {
+    return this.prisma.lotDamageAnalysis;
+  }
+
+  get lotPartDamage() {
+    return this.prisma.lotPartDamage;
+  }
+
   get embedJobConfig() {
     return this.prisma.embedJobConfig;
   }
