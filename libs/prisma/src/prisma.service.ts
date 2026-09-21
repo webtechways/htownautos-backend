@@ -270,6 +270,10 @@ export class PrismaService implements OnModuleInit, OnModuleDestroy {
     return this.prisma.modelRebuildRun;
   }
 
+  get spvQuote() {
+    return this.prisma.spvQuote;
+  }
+
   get auctionBidEvent() {
     return this.prisma.auctionBidEvent;
   }

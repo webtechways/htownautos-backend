@@ -4539,6 +4539,41 @@ model EmbedJobConfig {
 /// Guarda las metricas de los DOS modelos —el que estaba en produccion y el
 /// recien entrenado— porque la decision de promover se toma comparandolos, y sin
 /// las dos cifras no hay forma de auditar por que se promovio o por que no.
+/// Una consulta de SPV ya resuelta.
+///
+/// Guardarlas no es solo cache: TxDMV no tiene API y su calculadora es un
+/// formulario publico, asi que cada consulta ahorrada es una peticion que no se
+/// le hace a un servicio del estado. Los valores se recalculan una vez por
+/// semana, asi que una fila de hace tres dias vale exactamente lo mismo que
+/// preguntar de nuevo.
+///
+/// Ojo: esto es la foto de HOY. El impuesto de un tramite se calcula con el SPV
+/// del dia de la operacion, asi que quien cierre un trato debe copiarse el valor
+/// en su propio registro en vez de volver a leer esta tabla mas adelante.
+model SpvQuote {
+  id String @id @default(uuid())
+
+  /// Por ahora siempre TX. Existe para que anadir otro estado no sea migrar.
+  state    String
+  vin      String
+  /// El odometro forma parte de la clave: el valor depende de el.
+  odometer Int
+
+  year  Int?
+  make  String?
+  model String?
+  /// Valor en dolares enteros, como lo publica TxDMV.
+  value Int
+
+  /// De donde salio el numero: txdmv.
+  source    String   @default("txdmv")
+  fetchedAt DateTime @default(now())
+
+  @@unique([state, vin, odometer])
+  @@index([fetchedAt])
+  @@map("spv_quotes")
+}
+
 /// Un ciclo completo: embeber las fotos que faltan y, cuando estan, reentrenar.
 ///
 /// Existe como tabla propia porque son dos procesos de naturaleza distinta —uno
