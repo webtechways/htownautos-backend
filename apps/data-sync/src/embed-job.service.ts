@@ -1,7 +1,10 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '@htownautos/prisma';
-import { RunpodService, PublicS3Service, mapWithConcurrency } from '@htownautos/common';
+import { RunpodService, PublicS3Service, mapWithConcurrency, leerMetaPca } from '@htownautos/common';
+
+/** El servicio del modelo vive en su propio contenedor, fuera de Coolify. */
+const ML_URL = process.env.ML_SERVICE_URL ?? 'http://htownautos-ml:8000';
 
 const CONFIG_ID = 'singleton';
 /** Prefijo por el que el vigilante reconoce NUESTROS pods y no toca los ajenos. */
@@ -312,6 +315,62 @@ export class EmbedJobService {
   }
 
   /**
+   * Los lotes que le tocan a un CICLO, que no son los mismos que los del job
+   * suelto.
+   *
+   * Dos diferencias que importan:
+   *
+   *  - El alcance es "vendido con precio final dentro de la ventana". Un lote
+   *    sin precio no entrena nada, y uno fuera de la ventana no describe el
+   *    mercado que se quiere modelar.
+   *  - Un lote esta resuelto si tiene vector de ESTA agrupacion o una lapida
+   *    (`dims = 0`, sus fotos no estan en B2). Al cambiar de `mean` a `slots`
+   *    los vectores viejos siguen ahi y siguen teniendo 64 dimensiones, pero
+   *    significan otra cosa: el ciclo tiene que volver a calcularlos.
+   *
+   * El orden es por venta mas reciente primero: si el ciclo se corta a medias,
+   * lo que queda cubierto es el mercado de ahora y no el de hace dos meses.
+   */
+  async pendingRebuild(
+    limit: number,
+    windowDays: number,
+    pcaVersion: string,
+  ): Promise<{ lot: bigint; imageCount: number }[]> {
+    const corte = windowDays > 0
+      ? (() => {
+          const d = new Date(Date.now() - windowDays * 86_400_000);
+          return d.getUTCFullYear() * 10000 + (d.getUTCMonth() + 1) * 100 + d.getUTCDate();
+        })()
+      : null;
+
+    const filas = (await this.prisma.$queryRawUnsafe(
+      `SELECT l."lotNumber" AS lot,
+              COALESCE((l."galleryCache"::json->>'imageCount')::int, 0) AS n,
+              (SELECT max(r."saleDate") FROM auction_sale_results r
+                WHERE r.lot = l."lotNumber" AND r.matched AND r."finalBid" > 0) AS sd
+         FROM auction_listings l
+        WHERE l."galleryCachedAt" IS NOT NULL
+          AND COALESCE((l."galleryCache"::json->>'imageCount')::int, 0) > 0
+          AND EXISTS (
+            SELECT 1 FROM auction_sale_results r
+             WHERE r.lot = l."lotNumber" AND r.matched AND r."finalBid" > 0
+               ${corte ? `AND r."saleDate" >= ${corte}` : ''}
+          )
+          AND NOT EXISTS (
+            SELECT 1 FROM lot_image_vectors v
+             WHERE v."lotNumber" = l."lotNumber"
+               AND (v.dims = 0 OR v."pcaVersion" = $2)
+          )
+        ORDER BY sd DESC NULLS LAST
+        LIMIT $1`,
+      Math.max(1, limit),
+      pcaVersion,
+    )) as { lot: bigint; n: number }[];
+
+    return filas.map((f) => ({ lot: f.lot, imageCount: Number(f.n) }));
+  }
+
+  /**
    * Recoge ejecuciones que la API dejo en `pending` al pulsar "ejecutar ahora".
    * La API y data-sync son procesos distintos, asi que la tabla hace de buzon en
    * vez de montar una cola solo para esto.
@@ -333,10 +392,20 @@ export class EmbedJobService {
       return null;
     }
     const cfg = await this.config();
-    const todo = adoptarId
-      ? ((await this.prisma.embedJobRun.findUnique({ where: { id: adoptarId } }))?.selectionAll ?? false)
-      : false;
-    const lotes = await this.pending(cfg.maxLotsPerRun, cfg, todo);
+    const adoptada = adoptarId
+      ? await this.prisma.embedJobRun.findUnique({ where: { id: adoptarId } })
+      : null;
+    const todo = adoptada?.selectionAll ?? false;
+
+    // Una tanda de ciclo no mira los filtros de la config: sus lotes salen de la
+    // ventana del ciclo. Mezclarlos daria una tanda que embebe Future Sales
+    // mientras el ciclo espera lotes vendidos que nunca llegan.
+    const ciclo = adoptada?.rebuildId
+      ? await this.prisma.modelRebuildRun.findUnique({ where: { id: adoptada.rebuildId } })
+      : null;
+    const lotes = ciclo
+      ? await this.pendingRebuild(cfg.maxLotsPerRun, ciclo.windowDays, ciclo.pcaVersion ?? 'mean-64d')
+      : await this.pending(cfg.maxLotsPerRun, cfg, todo);
     if (!lotes.length) {
       this.logger.log('[EmbedJob] no hay lotes pendientes');
       if (adoptarId) {
@@ -606,6 +675,287 @@ export class EmbedJobService {
     }).catch(() => undefined);
 
     await this.append(runId, `apagado por "${via}"${ok ? '' : ' (FALLO al borrar)'}${nota ? `: ${nota}` : ''}`);
+  }
+
+  // ─────────── El ciclo: embeber lo que falte y despues entrenar ───────────
+
+  /**
+   * Avanza el ciclo activo un paso por minuto.
+   *
+   * Es una maquina de estados y no una funcion larga con `await` porque el
+   * ciclo dura horas: un pod de seis, a veces varios seguidos. Cualquier cosa
+   * que lo mantuviera vivo en memoria —una promesa, un bucle— se lo lleva por
+   * delante el primer redespliegue. Asi cada minuto se mira donde estaba,
+   * escrito en la base, y se da el paso siguiente.
+   */
+  @Cron(CronExpression.EVERY_MINUTE)
+  async rebuildTick(): Promise<void> {
+    const ciclo = await this.prisma.modelRebuildRun.findFirst({
+      where: { status: { in: ['queued', 'embedding', 'training'] } },
+      orderBy: { startedAt: 'desc' },
+    });
+    if (!ciclo) return;
+
+    try {
+      if (ciclo.status === 'queued') await this.cicloArrancar(ciclo);
+      else if (ciclo.status === 'embedding') await this.cicloEmbebiendo(ciclo);
+      else if (ciclo.status === 'training') await this.cicloEntrenando(ciclo);
+    } catch (e) {
+      this.logger.error(`[Rebuild] ${ciclo.id}: ${(e as Error).message}`);
+      await this.cicloLog(ciclo.id, `error: ${(e as Error).message}`);
+    }
+  }
+
+  /** Cola → embebiendo, o directo a entrenar si no falta ningun vector. */
+  private async cicloArrancar(ciclo: any): Promise<void> {
+    const cfg = await this.config();
+    const faltan = await this.pendingRebuild(1_000_000, ciclo.windowDays, ciclo.pcaVersion);
+    if (!faltan.length) {
+      await this.cicloLog(ciclo.id, 'no falta ningun vector: se pasa directo a entrenar');
+      await this.lanzarEntrenamiento(ciclo, cfg);
+      return;
+    }
+    await this.prisma.modelRebuildRun.update({
+      where: { id: ciclo.id },
+      data: { status: 'embedding', lotsTarget: faltan.length },
+    });
+    await this.cicloLog(ciclo.id, `${faltan.length} lotes por embeber`);
+    await this.nuevaTanda(ciclo.id);
+  }
+
+  /**
+   * Embebiendo: espera a la tanda en curso y encadena la siguiente.
+   *
+   * Hacen falta varias porque un pod se corta por tiempo (`maxMinutes`) mucho
+   * antes de vaciar la cola: 345 minutos son unos 36.000 lotes, y un ciclo
+   * completo puede pedir el triple.
+   */
+  private async cicloEmbebiendo(ciclo: any): Promise<void> {
+    const cfg = await this.config();
+    const tandas = await this.prisma.embedJobRun.findMany({
+      where: { rebuildId: ciclo.id },
+      orderBy: { startedAt: 'desc' },
+    });
+    const viva = tandas.find((t) => ['pending', 'provisioning', 'running'].includes(t.status));
+
+    const hechos = tandas.reduce((n, t) => n + t.lotsDone, 0);
+    const gastado = tandas.reduce((n, t) => n + Number(t.costUsd ?? 0), 0);
+    await this.prisma.modelRebuildRun.update({
+      where: { id: ciclo.id },
+      data: { lotsDone: hechos, costUsd: gastado, embedRuns: tandas.length },
+    });
+    if (viva) return; // la maquinaria de siempre la esta supervisando
+
+    // ── Corta-circuitos del ciclo entero ──
+    // `maxCostUsdPerRun` acota UNA tanda; sin este tope, un ciclo que encadena
+    // tandas no tiene techo ninguno.
+    if (gastado >= Number(cfg.maxCostUsdPerRebuild)) {
+      await this.cerrarCiclo(ciclo.id, 'failed',
+        `tope de gasto del ciclo alcanzado ($${gastado.toFixed(2)} de $${Number(cfg.maxCostUsdPerRebuild).toFixed(2)})`);
+      return;
+    }
+
+    const faltan = await this.pendingRebuild(1, ciclo.windowDays, ciclo.pcaVersion);
+    if (!faltan.length) {
+      await this.cicloLog(ciclo.id, `embebido completo: ${hechos} lotes en ${tandas.length} tandas, $${gastado.toFixed(2)}`);
+      await this.lanzarEntrenamiento(ciclo, cfg);
+      return;
+    }
+
+    // Una tanda que muere sin hacer un solo lote y se repite es un bucle de
+    // pods ardiendo: si las dos ultimas acabaron en cero, se para.
+    const ultimas = tandas.slice(0, 2);
+    if (ultimas.length === 2 && ultimas.every((t) => t.lotsDone === 0 && t.status !== 'done')) {
+      await this.cerrarCiclo(ciclo.id, 'failed',
+        'dos tandas seguidas terminaron sin embeber ningun lote; se para para no encadenar pods');
+      return;
+    }
+
+    await this.nuevaTanda(ciclo.id);
+  }
+
+  /** Deja la siguiente tanda en el buzon; `pickup` la arranca en menos de un minuto. */
+  private async nuevaTanda(rebuildId: string): Promise<void> {
+    const yaHay = await this.prisma.embedJobRun.findFirst({
+      where: { status: { in: ['pending', 'provisioning', 'running'] } },
+    });
+    if (yaHay) return; // el job suelto tiene una en marcha: se espera turno
+    await this.prisma.embedJobRun.create({
+      data: { status: 'pending', rebuildId, log: '[cola] tanda de un ciclo de rebuild\n' },
+    });
+    await this.cicloLog(rebuildId, 'nueva tanda de pod encolada');
+  }
+
+  /**
+   * Lanza el entrenamiento que cierra el ciclo.
+   *
+   * `force` va cuando la agrupacion cambio: el modelo que sirve fue entrenado
+   * con vectores que significaban otra cosa, asi que compararlos no mide nada
+   * —tienen los mismos nombres de columna y el mismo tamaño— y el campeon
+   * perderia por razones que no son su calidad.
+   */
+  private async lanzarEntrenamiento(ciclo: any, cfg: any): Promise<void> {
+    let pcaServido: string | null = null;
+    try {
+      const r = await fetch(`${ML_URL}/health`, { signal: AbortSignal.timeout(8000) });
+      pcaServido = r.ok ? ((await r.json()).pca_version ?? null) : null;
+    } catch { /* si no responde, el POST de abajo dara el error de verdad */ }
+
+    const cambioAgrupacion = !!pcaServido && pcaServido !== ciclo.pcaVersion;
+    if (cambioAgrupacion) {
+      await this.cicloLog(ciclo.id,
+        `el modelo que sirve usa ${pcaServido} y este ciclo produce ${ciclo.pcaVersion}: ` +
+        'no son comparables, se promueve el nuevo a proposito');
+    }
+
+    const soloConImagenes = cfg.trainingOnlyWithImages;
+    const run = await this.prisma.modelTrainingRun.create({
+      data: {
+        status: 'running',
+        trainingDays: ciclo.windowDays,
+        onlyWithImages: soloConImagenes,
+      },
+    });
+    await this.prisma.modelRebuildRun.update({
+      where: { id: ciclo.id },
+      data: { status: 'training', trainingRunId: run.id },
+    });
+
+    try {
+      const res = await fetch(`${ML_URL}/train`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          days: ciclo.windowDays,
+          autoPromote: cfg.autoPromote,
+          onlyWithImages: soloConImagenes,
+          force: cambioAgrupacion,
+          pcaVersion: ciclo.pcaVersion,
+        }),
+        signal: AbortSignal.timeout(20_000),
+      });
+      const body = await res.json();
+      if (!body.ok) throw new Error(body.error ?? 'el servicio de modelo lo rechazo');
+      await this.cicloLog(ciclo.id, 'entrenando');
+    } catch (e) {
+      await this.prisma.modelTrainingRun.update({
+        where: { id: run.id },
+        data: { status: 'failed', error: (e as Error).message, finishedAt: new Date() },
+      });
+      await this.cerrarCiclo(ciclo.id, 'failed', `no se pudo entrenar: ${(e as Error).message}`);
+    }
+  }
+
+  /**
+   * Entrenando: sondea el servicio y cierra las dos filas cuando termina.
+   *
+   * El cierre se hace aqui y no al abrir la pantalla porque si nadie la abre, la
+   * fila se queda en `running` para siempre y el ciclo siguiente cree que hay
+   * uno en curso.
+   */
+  private async cicloEntrenando(ciclo: any): Promise<void> {
+    let vivo: any = null;
+    try {
+      const r = await fetch(`${ML_URL}/train/status`, { signal: AbortSignal.timeout(8000) });
+      vivo = r.ok ? await r.json() : null;
+    } catch { return; } // reiniciandose: se vuelve a mirar en un minuto
+    if (!vivo || vivo.running || !vivo.result) return;
+
+    const res = vivo.result;
+    if (ciclo.trainingRunId) {
+      await this.prisma.modelTrainingRun.update({
+        where: { id: ciclo.trainingRunId },
+        data: {
+          status: res.cancelled ? 'cancelled' : res.error ? 'failed' : 'done',
+          finishedAt: new Date(),
+          error: res.error ?? null,
+          rowsTrain: res.rowsTrain ?? null,
+          rowsValid: res.rowsValid ?? null,
+          rowsWithImages: res.rowsWithImages ?? null,
+          maeChampion: res.maeChampion ?? null,
+          maeChallenger: res.maeChallenger ?? null,
+          maeBaseline: res.maeBaseline ?? null,
+          intervalCoverage: res.intervalCoverage ?? null,
+          promoted: !!res.promoted,
+          promotedReason: res.promotedReason ?? null,
+          modelVersion: res.modelVersion ?? null,
+          log: (vivo.log ?? []).join('\n').slice(-40_000),
+        },
+      }).catch(() => undefined);
+    }
+
+    if (res.error && !res.cancelled) {
+      await this.cerrarCiclo(ciclo.id, 'failed', `el entrenamiento fallo: ${res.error}`);
+    } else if (res.cancelled) {
+      await this.cerrarCiclo(ciclo.id, 'cancelled', 'entrenamiento cancelado');
+    } else {
+      await this.cerrarCiclo(ciclo.id, 'done',
+        res.promoted
+          ? `modelo ${res.modelVersion} promovido (MAE $${res.maeChallenger})`
+          : `entrenado sin sustituir: ${res.promotedReason ?? 'no gano'}`);
+    }
+  }
+
+  private async cerrarCiclo(id: string, status: string, motivo: string): Promise<void> {
+    await this.cicloLog(id, motivo);
+    await this.prisma.modelRebuildRun.update({
+      where: { id },
+      data: { status, finishedAt: new Date(), error: status === 'failed' ? motivo : null },
+    }).catch(() => undefined);
+    this.logger.log(`[Rebuild] ${id} ${status}: ${motivo}`);
+  }
+
+  private async cicloLog(id: string, linea: string): Promise<void> {
+    const c = await this.prisma.modelRebuildRun.findUnique({ where: { id } });
+    if (!c) return;
+    await this.prisma.modelRebuildRun.update({
+      where: { id },
+      data: { log: `${c.log ?? ''}[${new Date().toISOString()}] ${linea}\n`.slice(-40_000) },
+    }).catch(() => undefined);
+  }
+
+  /**
+   * El ciclo automatico: cada N dias, a la hora fijada.
+   *
+   * Empieza apagado a proposito — encenderlo alquila GPUs — y no arranca nada
+   * si ya hay un ciclo en curso.
+   */
+  @Cron(CronExpression.EVERY_HOUR)
+  async autoRebuildTick(): Promise<void> {
+    const cfg = await this.config();
+    if (!cfg.autoRebuildEnabled) return;
+
+    const hora = Number(
+      new Intl.DateTimeFormat('en-US', {
+        timeZone: 'America/Chicago', hour: 'numeric', hour12: false,
+      }).format(new Date()),
+    );
+    if (hora !== cfg.autoRebuildHour) return;
+
+    const ultimo = cfg.lastAutoRebuildAt?.getTime() ?? 0;
+    if (Date.now() - ultimo < cfg.autoRebuildEveryDays * 86_400_000) return;
+
+    const enCurso = await this.prisma.modelRebuildRun.findFirst({
+      where: { status: { in: ['queued', 'embedding', 'training'] } },
+    });
+    if (enCurso) {
+      this.logger.warn('[Rebuild] toca el ciclo automatico pero ya hay uno en curso');
+      return;
+    }
+
+    const meta = leerMetaPca(cfg.pooling);
+    const ciclo = await this.prisma.modelRebuildRun.create({
+      data: {
+        status: 'queued', trigger: 'scheduled',
+        windowDays: cfg.trainingDays,
+        pooling: meta.pooling, pcaVersion: meta.pcaVersion,
+        log: `[${new Date().toISOString()}] ciclo automatico (cada ${cfg.autoRebuildEveryDays} dias)\n`,
+      },
+    });
+    await this.prisma.embedJobConfig.update({
+      where: { id: CONFIG_ID }, data: { lastAutoRebuildAt: new Date() },
+    });
+    this.logger.log(`[Rebuild] ciclo automatico encolado (${ciclo.id})`);
   }
 
   async append(runId: string, linea: string): Promise<void> {

@@ -1,6 +1,6 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '@htownautos/prisma';
-import { RunpodService } from '@htownautos/common';
+import { RunpodService, leerMetaPca } from '@htownautos/common';
 
 const CONFIG_ID = 'singleton';
 const POD_PREFIX = 'htownautos-embed';
@@ -40,6 +40,9 @@ export class EmbedJobsService {
       'enabled', 'cronHour', 'gpuTypeIds', 'imageName',
       'maxLotsPerRun', 'maxMinutes', 'maxCostUsdPerRun', 'watchdogMinutes',
       'trainingDays', 'autoPromote', 'trainingOnlyWithImages',
+      'pooling', 'imgSlots',
+      'autoRebuildEnabled', 'autoRebuildEveryDays', 'autoRebuildHour',
+      'maxCostUsdPerRebuild',
       'selDated', 'selFutureSale', 'selIncludePast', 'selSaleDateFrom', 'selSaleDateTo',
       'selSoldOnly',
       'maxCostPerHr',
@@ -267,6 +270,155 @@ export class EmbedJobsService {
     }
     this.logger.warn(`[EmbedJobs] apagado manual: ${borrados.length} borrados, ${fallidos.length} fallidos`);
     return { borrados, fallidos };
+  }
+
+  // ─────────── El ciclo completo: embeber y despues entrenar ───────────
+
+  /**
+   * La etiqueta que llevaran los vectores que se calculen ahora.
+   *
+   * Sale del fichero que acompana al PCA que se le sirve al pod, no de una
+   * constante: si algun dia se cambia el PCA y aqui se sigue diciendo
+   * "mean-64d", el ciclo daria por buenos vectores que ya no significan lo
+   * mismo y no habria ningun error que lo delatara.
+   */
+  pcaActivo(cfg: { pooling: string }): { pcaVersion: string; pooling: string } {
+    const meta = leerMetaPca(cfg.pooling);
+    return { pcaVersion: meta.pcaVersion, pooling: meta.pooling };
+  }
+
+  /** `saleDate` es YYYYMMDD; 0 dias significa sin corte. */
+  private corteVentana(windowDays: number): number | null {
+    if (!windowDays || windowDays <= 0) return null;
+    const d = new Date(Date.now() - windowDays * 86_400_000);
+    return d.getUTCFullYear() * 10000 + (d.getUTCMonth() + 1) * 100 + d.getUTCDate();
+  }
+
+  /**
+   * De cuantos lotes habla un ciclo con esta ventana.
+   *
+   * Un lote esta resuelto si tiene vector de la agrupacion activa O una lapida
+   * (`dims = 0`, sus fotos no estan en B2). Sin la segunda condicion, los lotes
+   * irrecuperables volverian a la cola en cada ciclo para siempre.
+   */
+  async rebuildScope(windowDays: number, pcaVersion: string) {
+    const corte = this.corteVentana(windowDays);
+    const [fila] = (await this.prisma.$queryRawUnsafe(
+      `SELECT count(*)::int AS "enVentana",
+              count(*) FILTER (
+                WHERE NOT EXISTS (
+                  SELECT 1 FROM lot_image_vectors v
+                   WHERE v."lotNumber" = l."lotNumber"
+                     AND (v.dims = 0 OR v."pcaVersion" = $1)
+                )
+              )::int AS "pendientes"
+         FROM auction_listings l
+        WHERE l."galleryCachedAt" IS NOT NULL
+          AND COALESCE((l."galleryCache"::json->>'imageCount')::int, 0) > 0
+          AND EXISTS (
+            SELECT 1 FROM auction_sale_results r
+             WHERE r.lot = l."lotNumber" AND r.matched AND r."finalBid" > 0
+               ${corte ? `AND r."saleDate" >= ${corte}` : ''}
+          )`,
+      pcaVersion,
+    )) as { enVentana: number; pendientes: number }[];
+    return { ...fila, corte };
+  }
+
+  /**
+   * Encola un ciclo. Quien lo ejecuta es data-sync, que es donde viven los
+   * crons y la maquinaria de pods; aqui solo se deja la peticion y el registro.
+   */
+  async startRebuild(opts: { windowDays?: number; trigger?: string } = {}) {
+    const cfg = await this.config();
+    const enCurso = await this.prisma.modelRebuildRun.findFirst({
+      where: { status: { in: ['queued', 'embedding', 'training'] } },
+    });
+    if (enCurso) return { ok: false, motivo: 'Ya hay un ciclo en curso', run: enCurso };
+
+    const windowDays = opts.windowDays === undefined
+      ? cfg.trainingDays
+      : Math.max(0, opts.windowDays);
+    const { pcaVersion, pooling } = this.pcaActivo(cfg);
+    const scope = await this.rebuildScope(windowDays, pcaVersion);
+
+    const run = await this.prisma.modelRebuildRun.create({
+      data: {
+        status: 'queued',
+        trigger: opts.trigger ?? 'manual',
+        windowDays, pooling, pcaVersion,
+        lotsTarget: scope.pendientes,
+        log:
+          `[${new Date().toISOString()}] ciclo pedido: ventana ${windowDays || 'completa'}, ` +
+          `agrupacion ${pooling} (${pcaVersion}); ${scope.enVentana} lotes en la ventana, ` +
+          `${scope.pendientes} sin vector\n`,
+      },
+    });
+    return { ok: true, run, scope };
+  }
+
+  /**
+   * Para el ciclo donde este: la tanda de pod en curso o el entrenamiento.
+   *
+   * Nada de lo hecho se pierde — los vectores se guardan trozo a trozo — asi que
+   * volver a lanzarlo retoma por donde iba.
+   */
+  async cancelRebuild() {
+    const run = await this.prisma.modelRebuildRun.findFirst({
+      where: { status: { in: ['queued', 'embedding', 'training'] } },
+      orderBy: { startedAt: 'desc' },
+    });
+    if (!run) return { ok: false, motivo: 'No hay ningun ciclo en curso' };
+
+    if (run.status === 'embedding') await this.pauseRun().catch(() => undefined);
+    if (run.status === 'training') await this.cancelTraining().catch(() => undefined);
+
+    await this.prisma.modelRebuildRun.update({
+      where: { id: run.id },
+      data: {
+        status: 'cancelled',
+        finishedAt: new Date(),
+        log: `${run.log ?? ''}[${new Date().toISOString()}] cancelado desde la pantalla; ` +
+             `los ${run.lotsDone} lotes embebidos quedan guardados\n`,
+      },
+    });
+    return { ok: true, lotesHechos: run.lotsDone };
+  }
+
+  /** Lo que pinta el bloque del ciclo: el activo, el historial y el alcance de ahora. */
+  async rebuildStatus() {
+    const cfg = await this.config();
+    const { pcaVersion, pooling } = this.pcaActivo(cfg);
+    const [activo, ultimos, scope] = await Promise.all([
+      this.prisma.modelRebuildRun.findFirst({
+        where: { status: { in: ['queued', 'embedding', 'training'] } },
+        orderBy: { startedAt: 'desc' },
+      }),
+      this.prisma.modelRebuildRun.findMany({ orderBy: { startedAt: 'desc' }, take: 10 }),
+      this.rebuildScope(cfg.trainingDays, pcaVersion),
+    ]);
+
+    // La tanda de pod que esta corriendo ahora mismo para este ciclo, si la hay:
+    // es de donde sale el "va por X de Y" mientras embebe.
+    const tanda = activo
+      ? await this.prisma.embedJobRun.findFirst({
+          where: { rebuildId: activo.id, status: { in: ['pending', 'provisioning', 'running'] } },
+          orderBy: { startedAt: 'desc' },
+        })
+      : null;
+
+    return {
+      activo, tanda, ultimos, scope,
+      config: {
+        pooling, pcaVersion, imgSlots: cfg.imgSlots,
+        windowDays: cfg.trainingDays,
+        autoRebuildEnabled: cfg.autoRebuildEnabled,
+        autoRebuildEveryDays: cfg.autoRebuildEveryDays,
+        autoRebuildHour: cfg.autoRebuildHour,
+        lastAutoRebuildAt: cfg.lastAutoRebuildAt,
+        maxCostUsdPerRebuild: cfg.maxCostUsdPerRebuild,
+      },
+    };
   }
 
   // ─────────── Lo que llama el pod ───────────

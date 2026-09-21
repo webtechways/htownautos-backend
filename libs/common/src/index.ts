@@ -109,3 +109,8 @@ export type {
 // RunPod: alquiler de GPU por horas para el job nocturno de vectores
 export { RunpodService } from './runpod/runpod.service';
 export type { RunpodPod, CreatePodInput } from './runpod/runpod.service';
+
+// PCA de los vectores de imagen: lo leen la API (para servirlo al pod) y
+// data-sync (para saber que vectores estan al dia).
+export { rutaAsset, ficheroPca, leerMetaPca } from './embed/pca-assets';
+export type { MetaPca } from './embed/pca-assets';

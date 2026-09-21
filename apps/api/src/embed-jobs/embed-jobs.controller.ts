@@ -75,6 +75,30 @@ export class EmbedJobsController {
     return this.service.corpus();
   }
 
+  @Post('rebuild')
+  @ApiOperation({
+    summary: 'Encolar un ciclo completo: embeber lo que falte y despues reentrenar',
+    description:
+      'Coge los lotes vendidos con precio final y fotos dentro de la ventana, ' +
+      'manda a la GPU los que no tengan vector de la agrupacion activa y, cuando ' +
+      'no quede ninguno, reentrena. data-sync lo recoge en menos de un minuto.',
+  })
+  startRebuild(@Body() body?: { windowDays?: number }) {
+    return this.service.startRebuild({ windowDays: body?.windowDays });
+  }
+
+  @Post('rebuild/cancel')
+  @ApiOperation({ summary: 'Parar el ciclo en curso; lo embebido se conserva' })
+  cancelRebuild() {
+    return this.service.cancelRebuild();
+  }
+
+  @Get('rebuild/status')
+  @ApiOperation({ summary: 'Ciclo activo, su tanda de pod, historial y alcance de la ventana' })
+  rebuildStatus() {
+    return this.service.rebuildStatus();
+  }
+
   @Post('pause')
   @ApiOperation({ summary: 'Pausar la ejecucion de vectores en curso (lo hecho se conserva)' })
   pause() {

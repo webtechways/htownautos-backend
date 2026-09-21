@@ -1,0 +1,8 @@
+{
+  "pcaVersion": "mean-64d",
+  "pooling": "mean",
+  "slots": 0,
+  "dims": 64,
+  "encoder": "facebook/dinov2-giant@518",
+  "nota": "La etiqueta viaja al lado del .npz para que el backend no tenga que leer un binario de numpy. Si se regenera el PCA, se regenera este fichero."
+}

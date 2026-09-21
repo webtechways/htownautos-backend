@@ -81,9 +81,19 @@ export class PricePredictionService {
     // nativa y el lote recibe respuesta sin fotos, algo peor y ya esta.
     const fila = await this.prisma.lotImageVector.findUnique({
       where: { lotNumber },
-      select: { vector: true, dims: true },
+      select: { vector: true, dims: true, pcaVersion: true },
     });
-    const imageVector = fila ? this.unpack(fila.vector, fila.dims) : null;
+
+    // Un vector de otra agrupacion NO es un vector peor: tiene las mismas 64
+    // columnas y significa otra cosa. Mandarselo al modelo no da ningun error,
+    // da un precio inventado con toda la seguridad del mundo. Al cambiar de
+    // `mean` a `slots` hay horas en las que conviven los dos tipos, y este es el
+    // unico sitio donde se puede distinguir.
+    const pcaModelo = await this.pcaDelModelo();
+    const desfasado = !!fila && fila.dims > 0 && !!pcaModelo
+      && !!fila.pcaVersion && fila.pcaVersion !== pcaModelo;
+
+    const imageVector = fila && !desfasado ? this.unpack(fila.vector, fila.dims) : null;
 
     // Sin vector no se predice. Se distinguen los dos casos porque la accion del
     // usuario es distinta: "todavia no procesado" se resuelve solo esta noche;
@@ -93,7 +103,10 @@ export class PricePredictionService {
       return {
         lot,
         disponible: false,
-        motivo: marcado
+        motivo: desfasado
+          ? 'Las fotos de este lote estan convertidas con otra agrupacion que la ' +
+            'que usa el modelo servido. Se recalculan en el proximo ciclo.'
+          : marcado
           ? 'Este lote no tiene fotos disponibles en el almacenamiento, asi que no se puede valorar con imagenes.'
           : imageCount > 0
             ? 'Las fotos de este lote aun no se han procesado. El proceso nocturno las convierte y manana habra prediccion.'
@@ -199,6 +212,29 @@ export class PricePredictionService {
    * Si el tamano no cuadra con `dims` se devuelve null en vez de interpretar los
    * bytes a medias: un vector mal leido no da error, da un precio equivocado.
    */
+  /**
+   * Con que agrupacion de fotos se entreno el modelo que esta sirviendo.
+   *
+   * Se cachea cinco minutos: se consulta en cada prediccion y solo cambia
+   * cuando se promueve un modelo nuevo.
+   */
+  private pcaCache: { at: number; value: string | null } | null = null;
+
+  private async pcaDelModelo(): Promise<string | null> {
+    if (this.pcaCache && Date.now() - this.pcaCache.at < 300_000) return this.pcaCache.value;
+    let value: string | null = null;
+    try {
+      const res = await fetch(`${ML_URL}/health`, { signal: AbortSignal.timeout(3000) });
+      if (res.ok) value = ((await res.json()).pca_version as string) ?? null;
+    } catch {
+      // Sin respuesta no se bloquea nada: se prefiere predecir con el vector que
+      // hay a dejar la pantalla sin numero por un fallo de red.
+      value = this.pcaCache?.value ?? null;
+    }
+    this.pcaCache = { at: Date.now(), value };
+    return value;
+  }
+
   private unpack(buf: Uint8Array, dims: number): number[] | null {
     // dims 0 es una lapida: el lote se intento y sus fotos no estan en B2. No es
     // un vector vacio, es la ausencia de vector.

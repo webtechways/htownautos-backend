@@ -122,7 +122,33 @@ class Fotos(Dataset):
             return self.blank, 0
 
 
-def procesar(items, proc, model, dev, comps, mean, pcav):
+def agrupar(fotos, pooling, n_slots, dim):
+    """Las fotos de UN lote en el vector que espera el PCA.
+
+    `mean` promedia todas y difumina: mezcla el morro destrozado con el interior
+    intacto. `slots` le da su propio bloque a las primeras `n_slots` secuencias y
+    promedia el resto, que es mas afilado si la secuencia significa siempre lo
+    mismo (foto 1 = frontal).
+
+    Los huecos van a CERO, no se saltan: el PCA se ajusto sobre una matriz donde
+    un slot ausente era cero, y cualquier otra cosa lo proyectaria a un sitio que
+    no significa nada. Tiene que ser identico a `pool_slots` de 04_features.py.
+    """
+    if pooling != "slots":
+        return np.mean([e for _, e in fotos], axis=0)
+
+    x = np.zeros((n_slots + 1) * dim, dtype=np.float32)
+    for s in range(1, n_slots + 1):
+        propias = [e for q, e in fotos if q == s]
+        if propias:
+            x[(s - 1) * dim:s * dim] = np.mean(propias, axis=0)
+    resto = [e for q, e in fotos if q > n_slots]
+    if resto:
+        x[n_slots * dim:] = np.mean(resto, axis=0)
+    return x
+
+
+def procesar(items, proc, model, dev, comps, mean, pcav, pooling, n_slots):
     """Embebe un trozo y devuelve (vectores listos, lotes sin ninguna foto)."""
     dl = DataLoader(Fotos(items, proc), batch_size=BATCH, num_workers=WORKERS,
                     pin_memory=True, prefetch_factor=2)
@@ -141,16 +167,20 @@ def procesar(items, proc, model, dev, comps, mean, pcav):
 
     E = np.concatenate(vecs)
     ok = np.concatenate(oks) == 1
-    por_lote: dict[str, list[np.ndarray]] = {}
+    # Se guarda la secuencia junto al embedding: con `slots` la posicion de la
+    # foto ES la informacion, y sin ella no se puede reconstruir el vector.
+    por_lote: dict[str, list[tuple[int, np.ndarray]]] = {}
     for i, it in enumerate(items):
         if ok[i]:
-            por_lote.setdefault(it["lot"], []).append(E[i])
+            por_lote.setdefault(it["lot"], []).append((int(it["seq"]), E[i]))
 
+    dim = E.shape[1]
     salida = [
         {"lot": lot,
-         "vector": ((np.mean(arr, axis=0) - mean) @ comps.T).astype(np.float32).tolist(),
-         "imageCount": len(arr)}
-        for lot, arr in por_lote.items()
+         "vector": ((agrupar(fotos, pooling, n_slots, dim) - mean) @ comps.T)
+                   .astype(np.float32).tolist(),
+         "imageCount": len(fotos)}
+        for lot, fotos in por_lote.items()
     ]
     # Lotes cuyas fotos no estan en B2 aunque la base diga que si: se reportan
     # para marcarlos y que no vuelvan a la cola cada noche.
@@ -164,7 +194,13 @@ def main() -> int:
     pca = np.load("/app/pca_img.npz", allow_pickle=True)
     comps, mean = pca["components"].astype(np.float32), pca["mean"].astype(np.float32)
     pcav = str(pca["pcaVersion"]) if "pcaVersion" in pca else "v1"
-    log(f"PCA congelado {comps.shape[1]} -> {comps.shape[0]} dims (version {pcav})")
+    # La agrupacion viaja DENTRO del PCA: el pod no elige nada, y asi no puede
+    # haber un pod promediando mientras el PCA espera bloques por secuencia.
+    pooling = str(pca["pooling"]) if "pooling" in pca else "mean"
+    n_slots = int(pca["slots"]) if "slots" in pca else 0
+    log(f"PCA congelado {comps.shape[1]} -> {comps.shape[0]} dims "
+        f"(version {pcav}, agrupacion {pooling}"
+        f"{f' x{n_slots} slots' if pooling == 'slots' else ''})")
 
     dev = "cuda" if torch.cuda.is_available() else "cpu"
     proc = AutoImageProcessor.from_pretrained(
@@ -203,7 +239,7 @@ def main() -> int:
 
         t_trozo = time.time()
         salida, sin_ninguna, ok_n, mal_n = procesar(
-            items, proc, model, dev, comps, mean, pcav)
+            items, proc, model, dev, comps, mean, pcav, pooling, n_slots)
         imgs_ok += ok_n
         imgs_mal += mal_n
 

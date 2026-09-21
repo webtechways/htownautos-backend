@@ -4412,6 +4412,11 @@ model EmbedJobRun {
   /// Si aparece algo distinto de `job` de forma habitual, hay una via fallando.
   terminatedBy String?
 
+  /// El ciclo de rebuild que la pidio, si no fue una ejecucion suelta. Cuando
+  /// viene de un ciclo, los lotes NO salen de los filtros de la config sino de
+  /// la ventana del ciclo.
+  rebuildId String?
+
   /// Esta ejecucion ignora los filtros de la config y coge todo lo pendiente.
   /// Es la valvula de escape para vaciar la cola sin tocar los ajustes.
   selectionAll Boolean @default(false)
@@ -4482,6 +4487,29 @@ model EmbedJobConfig {
   /// Cada cuanto el vigilante busca pods huerfanos (minutos).
   watchdogMinutes Int @default(5)
 
+  // ── Como se agrupan las fotos de un lote en un solo vector ──
+  /// `mean` promedia todas las fotos; `slots` da columnas propias a las
+  /// primeras `imgSlots` secuencias y promedia el resto.
+  ///
+  /// Cambiarlo invalida TODOS los vectores ya calculados: siguen teniendo 64
+  /// dimensiones pero significan otra cosa, y mezclarlos con los nuevos no
+  /// lanza ningun error — solo predicciones peores. Por eso cada vector lleva
+  /// su `pcaVersion` y el ciclo trata como pendiente lo que no coincide.
+  pooling  String @default("mean")
+  imgSlots Int    @default(4)
+
+  // ── Rebuild automatico ──
+  /// Rehace el ciclo entero (embeber lo que falte + reentrenar) cada N dias.
+  /// Arranca apagado: alquila GPUs, asi que encenderlo es una decision.
+  autoRebuildEnabled   Boolean   @default(false)
+  autoRebuildEveryDays Int       @default(30)
+  autoRebuildHour      Int       @default(3)
+  lastAutoRebuildAt    DateTime?
+  /// Tope de gasto para UN ciclo completo, sumando todas sus tandas de pod.
+  /// `maxCostUsdPerRun` acota una tanda; sin este, un ciclo con veinte tandas
+  /// no tiene techo.
+  maxCostUsdPerRebuild Decimal   @default(20.0) @db.Decimal(8, 2)
+
   // ── Reentrenamiento del modelo de precio ──
   /// Ventana movil: solo se entrena con ventas de los ultimos N dias. Precios de
   /// hace medio año no describen el mercado de esta semana. 0 = todo el
@@ -4511,6 +4539,49 @@ model EmbedJobConfig {
 /// Guarda las metricas de los DOS modelos —el que estaba en produccion y el
 /// recien entrenado— porque la decision de promover se toma comparandolos, y sin
 /// las dos cifras no hay forma de auditar por que se promovio o por que no.
+/// Un ciclo completo: embeber las fotos que faltan y, cuando estan, reentrenar.
+///
+/// Existe como tabla propia porque son dos procesos de naturaleza distinta —uno
+/// alquila GPUs durante horas y el otro son minutos de CPU— y hasta ahora habia
+/// que encadenarlos a mano: lanzar vectores, volver al dia siguiente, mirar si
+/// termino y entonces entrenar. El estado vive en la base y no en memoria para
+/// que un redespliegue a mitad de ciclo no lo pierda.
+model ModelRebuildRun {
+  id String @id @default(uuid())
+
+  /// queued | embedding | training | done | failed | cancelled
+  status  String @default("queued")
+  /// manual | scheduled
+  trigger String @default("manual")
+
+  /// Ventana de dias de venta que entra en el ciclo. 0 = todo el historico.
+  windowDays Int
+  /// Con que agrupacion se embebio: lo que no coincida se considera pendiente.
+  pooling    String
+  pcaVersion String?
+
+  /// Lotes en la ventana a los que les faltaba el vector al empezar.
+  lotsTarget Int     @default(0)
+  /// Lotes ya embebidos por este ciclo.
+  lotsDone   Int     @default(0)
+  /// Cuantas tandas de pod han hecho falta.
+  embedRuns  Int     @default(0)
+  /// Lo que lleva gastado el ciclo entero, sumando sus tandas.
+  costUsd    Decimal @default(0) @db.Decimal(8, 4)
+
+  /// El entrenamiento que cerro el ciclo.
+  trainingRunId String?
+
+  startedAt  DateTime  @default(now())
+  finishedAt DateTime?
+  error      String?   @db.Text
+  log        String?   @db.Text
+
+  @@index([startedAt])
+  @@index([status])
+  @@map("model_rebuild_runs")
+}
+
 model ModelTrainingRun {
   id     String @id @default(uuid())
   /// pending | running | done | failed

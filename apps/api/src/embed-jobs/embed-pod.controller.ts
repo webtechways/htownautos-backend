@@ -6,12 +6,14 @@ import { join } from 'node:path';
 import { Public } from '@htownautos/auth';
 import { AuctionIngestGuard } from '../auction-sale-results/auction-ingest.guard';
 import { EmbedJobsService } from './embed-jobs.service';
+import { ficheroPca, rutaAsset } from '@htownautos/common';
 
 /** Ficheros que el pod se descarga al arrancar. Nada mas se sirve por aqui. */
 const ASSETS: Record<string, string> = {
   'bootstrap.sh': 'text/x-shellscript',
   'worker.py': 'text/x-python',
-  'pca_img.npz': 'application/octet-stream',
+  'pca_img_mean.npz': 'application/octet-stream',
+  'pca_img_slots.npz': 'application/octet-stream',
 };
 
 /**
@@ -45,10 +47,26 @@ export class EmbedPodController {
     this.sendAsset('worker.py', res);
   }
 
-  /** El PCA congelado, versionado junto al backend. */
+  /**
+   * El PCA congelado, versionado junto al backend.
+   *
+   * Se sirve el que corresponde a la agrupacion activa (`mean` o `slots`): el
+   * pod no elige nada, aplica el que le llega y devuelve la etiqueta que trae
+   * dentro. Asi no puede haber un pod calculando con una agrupacion y una
+   * config diciendo otra.
+   */
   @Get('pca_img.npz')
-  pca(@Res() res: Response): void {
-    this.sendAsset('pca_img.npz', res);
+  async pca(@Res() res: Response): Promise<void> {
+    const cfg = await this.service.config();
+    const nombre = ficheroPca(cfg.pooling);
+    // Si el PCA de esa agrupacion no esta desplegado, mejor 404 que servir el
+    // otro en silencio: los vectores saldrian con la etiqueta equivocada.
+    if (!rutaAsset(nombre)) {
+      res.status(404).send(`asset ${nombre} no desplegado`);
+      return;
+    }
+    res.setHeader('Content-Type', 'application/octet-stream');
+    createReadStream(rutaAsset(nombre)!).pipe(res);
   }
 
   @Get(':runId/manifest')

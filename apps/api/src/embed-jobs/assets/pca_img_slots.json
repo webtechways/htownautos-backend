@@ -1,0 +1,8 @@
+{
+  "pcaVersion": "slots4-64d",
+  "pooling": "slots",
+  "slots": 4,
+  "dims": 64,
+  "encoder": "facebook/dinov2-giant@518",
+  "nota": "Las 4 primeras posiciones de foto llevan bloque propio y el resto se promedia: 5 x 1536 = 7680 columnas que el PCA reduce a 64. Conserva el 87,9% de la varianza."
+}
