@@ -3,12 +3,12 @@ import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { EmbedJobsService } from './embed-jobs.service';
 
 /**
- * Panel de Auction Data → Vectores de Imagen.
+ * Panel de Auction Data → AI Training.
  *
  * Sin `@Public()`: esto alquila GPUs y las apaga, asi que va tras el guard global
  * como el resto del dashboard.
  */
-@ApiTags('Image Vectors')
+@ApiTags('AI Training')
 @Controller('embed-jobs')
 export class EmbedJobsController {
   constructor(private readonly service: EmbedJobsService) {}
@@ -50,9 +50,35 @@ export class EmbedJobsController {
   }
 
   @Post('training/run')
-  @ApiOperation({ summary: 'Reentrenar el modelo con la ventana movil de dias' })
-  startTraining(@Body() body: { days?: number; force?: boolean }) {
-    return this.service.startTraining(body?.days, body?.force === true);
+  @ApiOperation({
+    summary: 'Reentrenar el modelo',
+    description:
+      'days=0 entrena con todo el historico; onlyWithImages lo limita a las ' +
+      'ventas cuyo lote ya tiene vector de imagen (el modelo visor).',
+  })
+  startTraining(
+    @Body()
+    body: { days?: number; force?: boolean; onlyWithImages?: boolean; autoPromote?: boolean },
+  ) {
+    return this.service.startTraining(body ?? {});
+  }
+
+  @Post('training/cancel')
+  @ApiOperation({ summary: 'Parar el entrenamiento en curso; produccion no se toca' })
+  cancelTraining() {
+    return this.service.cancelTraining();
+  }
+
+  @Get('corpus')
+  @ApiOperation({ summary: 'Ventas con precio, con fotos y con vector: el material entrenable' })
+  corpus() {
+    return this.service.corpus();
+  }
+
+  @Post('pause')
+  @ApiOperation({ summary: 'Pausar la ejecucion de vectores en curso (lo hecho se conserva)' })
+  pause() {
+    return this.service.pauseRun();
   }
 
   @Post('kill-all')

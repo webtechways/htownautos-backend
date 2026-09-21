@@ -39,7 +39,7 @@ export class EmbedJobsService {
     const permitidos = [
       'enabled', 'cronHour', 'gpuTypeIds', 'imageName',
       'maxLotsPerRun', 'maxMinutes', 'maxCostUsdPerRun', 'watchdogMinutes',
-      'trainingDays', 'autoPromote',
+      'trainingDays', 'autoPromote', 'trainingOnlyWithImages',
       'selDated', 'selFutureSale', 'selIncludePast', 'selSaleDateFrom', 'selSaleDateTo',
       'selSoldOnly',
       'maxCostPerHr',
@@ -165,13 +165,26 @@ export class EmbedJobsService {
     if (cfg.selSaleDateFrom) rango.push(`AND l."saleDate" >= ${Number(cfg.selSaleDateFrom)}`);
     if (cfg.selSaleDateTo) rango.push(`AND l."saleDate" <= ${Number(cfg.selSaleDateTo)}`);
 
+    // `vendido` es la etiqueta: sin precio de martillo el lote consume la misma
+    // GPU y no aporta una sola fila entrenable. Se cuenta por grupo para que la
+    // pantalla pueda ensenar el antes y el despues de marcar la casilla.
+    const vendido = `EXISTS (SELECT 1 FROM auction_sale_results r
+                              WHERE r.lot = l."lotNumber"
+                                AND r.matched AND r."finalBid" > 0)`;
+
     const [fila] = (await this.prisma.$queryRawUnsafe(
       `SELECT
          count(*) FILTER (WHERE l."saleDate" >= ${hoy})::int AS "fechados",
          count(*) FILTER (WHERE l."saleDate" >= ${hoy} ${rango.join(' ')})::int AS "fechadosEnRango",
          count(*) FILTER (WHERE l."saleDate" IS NULL)::int   AS "futureSale",
          count(*) FILTER (WHERE l."saleDate" < ${hoy})::int  AS "yaSubastados",
-         count(*)::int                                       AS "total"
+         count(*)::int                                       AS "total",
+         count(*) FILTER (WHERE l."saleDate" >= ${hoy} ${rango.join(' ')} AND ${vendido})::int
+                                                             AS "fechadosEnRangoVendidos",
+         count(*) FILTER (WHERE l."saleDate" IS NULL AND ${vendido})::int
+                                                             AS "futureSaleVendidos",
+         count(*) FILTER (WHERE l."saleDate" < ${hoy} AND ${vendido})::int
+                                                             AS "yaSubastadosVendidos"
        FROM auction_listings l
        LEFT JOIN lot_image_vectors v ON v."lotNumber" = l."lotNumber"
       WHERE l."galleryCachedAt" IS NOT NULL
@@ -180,14 +193,51 @@ export class EmbedJobsService {
     )) as {
       fechados: number; fechadosEnRango: number;
       futureSale: number; yaSubastados: number; total: number;
+      fechadosEnRangoVendidos: number; futureSaleVendidos: number;
+      yaSubastadosVendidos: number;
     }[];
 
+    // Mismo criterio que `pending()` en data-sync: los grupos se suman y
+    // `selSoldOnly` recorta cada uno. Si se cambia alli, se cambia aqui.
+    const sol = cfg.selSoldOnly;
     const seleccionados =
-      (cfg.selDated ? fila.fechadosEnRango : 0) +
-      (cfg.selFutureSale ? fila.futureSale : 0) +
-      (cfg.selIncludePast ? fila.yaSubastados : 0);
+      (cfg.selDated ? (sol ? fila.fechadosEnRangoVendidos : fila.fechadosEnRango) : 0) +
+      (cfg.selFutureSale ? (sol ? fila.futureSaleVendidos : fila.futureSale) : 0) +
+      (cfg.selIncludePast ? (sol ? fila.yaSubastadosVendidos : fila.yaSubastados) : 0);
 
     return { ...fila, seleccionados, hoy };
+  }
+
+  /**
+   * Pausa la ejecucion en curso.
+   *
+   * No hay nada que "reanudar" porque no hay nada que perder: los vectores se
+   * escriben trozo a trozo segun llegan, y la cola es "lo que aun no tiene
+   * vector". Parar y volver a lanzar retoma exactamente donde iba, sin repetir
+   * una sola imagen ya pagada.
+   */
+  async pauseRun() {
+    const activa = await this.prisma.embedJobRun.findFirst({
+      where: { status: { in: ['pending', 'provisioning', 'running'] } },
+      orderBy: { startedAt: 'desc' },
+    });
+    if (!activa) return { ok: false, motivo: 'No hay ninguna ejecucion en curso' };
+
+    let podBorrado = false;
+    if (activa.podId) {
+      podBorrado = await this.runpod.deletePod(activa.podId).catch(() => false);
+    }
+    await this.prisma.embedJobRun.update({
+      where: { id: activa.id },
+      data: {
+        status: 'aborted',
+        finishedAt: new Date(),
+        terminatedAt: new Date(),
+        terminatedBy: 'manual',
+        log: `${activa.log ?? ''}[pausa] parado desde la pantalla; los ${activa.lotsDone} lotes ya procesados quedan guardados\n`,
+      },
+    });
+    return { ok: true, lotesHechos: activa.lotsDone, podBorrado };
   }
 
   /**
@@ -351,23 +401,36 @@ export class EmbedJobsService {
    * registro, porque el historial de que modelo gano a cual es auditoria y debe
    * sobrevivir a que el contenedor se reinicie.
    */
-  async startTraining(days?: number, force = false) {
+  async startTraining(opts: {
+    days?: number;
+    force?: boolean;
+    onlyWithImages?: boolean;
+    autoPromote?: boolean;
+  } = {}) {
     const cfg = await this.config();
     const enCurso = await this.prisma.modelTrainingRun.findFirst({
       where: { status: { in: ['pending', 'running'] } },
     });
     if (enCurso) return { ok: false, motivo: 'Ya hay un entrenamiento en curso', run: enCurso };
 
-    const dias = days ?? cfg.trainingDays;
+    // `days: 0` es una peticion legitima —todo el historico—, asi que no puede
+    // caer en el `??` y convertirse en la ventana de la config.
+    const dias = opts.days === undefined ? cfg.trainingDays : Math.max(0, opts.days);
+    const soloConImagenes = opts.onlyWithImages ?? cfg.trainingOnlyWithImages;
+    const autoPromote = opts.autoPromote ?? cfg.autoPromote;
+    const force = opts.force === true;
+
     const run = await this.prisma.modelTrainingRun.create({
-      data: { status: 'running', trainingDays: dias },
+      data: { status: 'running', trainingDays: dias, onlyWithImages: soloConImagenes },
     });
 
     try {
       const res = await fetch(`${ML_URL}/train`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ days: dias, autoPromote: cfg.autoPromote, force }),
+        body: JSON.stringify({
+          days: dias, autoPromote, force, onlyWithImages: soloConImagenes,
+        }),
         signal: AbortSignal.timeout(20_000),
       });
       const body = await res.json();
@@ -416,7 +479,9 @@ export class EmbedJobsService {
       await this.prisma.modelTrainingRun.update({
         where: { id: run.id },
         data: {
-          status: r.error ? 'failed' : 'done',
+          // Cancelar no es fallar: el modelo que sirve quedo intacto y no hay
+          // nada que investigar. Mezclarlos ensucia el historial de auditoria.
+          status: r.cancelled ? 'cancelled' : r.error ? 'failed' : 'done',
           finishedAt: new Date(),
           error: r.error ?? null,
           rowsTrain: r.rowsTrain ?? null,
@@ -434,18 +499,111 @@ export class EmbedJobsService {
       });
     }
 
-    const [ultimas, cfg] = await Promise.all([
+    const [ultimas, cfg, corpus] = await Promise.all([
       this.prisma.modelTrainingRun.findMany({ orderBy: { startedAt: 'desc' }, take: 15 }),
       this.config(),
+      this.corpus(),
     ]);
     return {
       corriendo: !!vivo?.running,
-      logVivo: vivo?.running ? (vivo.log ?? []).slice(-40) : [],
+      cancelando: !!vivo?.cancelling,
+      progreso: vivo?.progress ?? null,
+      // El log completo mientras corre: es lo unico que cuenta que esta pasando
+      // dentro de los minutos que tarda.
+      logVivo: vivo?.running ? (vivo.log ?? []).slice(-80) : [],
       modeloServido: vivo?.modelVersion ?? null,
-      config: { trainingDays: cfg.trainingDays, autoPromote: cfg.autoPromote,
-                lastTrainingAt: cfg.lastTrainingAt },
+      /** Lo que el modelo que sirve sabe de si mismo: version, MAE, si mira fotos. */
+      salud: vivo?.health ?? null,
+      servicioCaido: vivo === null,
+      corpus,
+      config: {
+        trainingDays: cfg.trainingDays,
+        autoPromote: cfg.autoPromote,
+        trainingOnlyWithImages: cfg.trainingOnlyWithImages,
+        lastTrainingAt: cfg.lastTrainingAt,
+      },
       ejecuciones: ultimas,
     };
+  }
+
+  /**
+   * De que material dispone el entrenamiento ahora mismo.
+   *
+   * Es la cifra que decide si tiene sentido pulsar "entrenar": el modelo visor
+   * solo puede aprender de ventas cuyo lote tenga vector, y esas son hoy una
+   * fraccion de las ventas con precio. Sin verlo, se entrena con 8.000 filas
+   * creyendo que son 174.000.
+   */
+  private corpusCache: { at: number; data: any } | null = null;
+
+  async corpus() {
+    // La consulta agrega 174.000 filas y la pantalla sondea cada 20 s: un minuto
+    // de cache la deja en una vez por refresco largo sin envejecer de verdad.
+    if (this.corpusCache && Date.now() - this.corpusCache.at < 60_000) {
+      return this.corpusCache.data;
+    }
+    const [fila] = (await this.prisma.$queryRawUnsafe(
+      `SELECT
+         count(*)::int                        AS "ventas",
+         count(DISTINCT s.lot)::int           AS "lotes",
+         count(DISTINCT s.lot) FILTER (
+           WHERE l."galleryCachedAt" IS NOT NULL
+             AND COALESCE((l."galleryCache"::json->>'imageCount')::int, 0) > 0
+         )::int                               AS "lotesConFotos",
+         count(DISTINCT s.lot) FILTER (
+           WHERE v."lotNumber" IS NOT NULL AND v.dims > 0
+         )::int                               AS "lotesConVector",
+         count(*) FILTER (
+           WHERE v."lotNumber" IS NOT NULL AND v.dims > 0
+         )::int                               AS "ventasConVector",
+         min(s."saleDate")::int               AS "desde",
+         max(s."saleDate")::int               AS "hasta"
+       FROM auction_sale_results s
+       LEFT JOIN auction_listings l  ON l."lotNumber" = s.lot
+       LEFT JOIN lot_image_vectors v ON v."lotNumber" = s.lot
+      WHERE s.matched AND s."finalBid" IS NOT NULL AND s."finalBid" > 0`,
+    )) as any[];
+
+    const data = {
+      ...fila,
+      /** Lotes vendidos con fotos a los que todavia les falta el vector. */
+      lotesPendientes: Math.max(0, (fila?.lotesConFotos ?? 0) - (fila?.lotesConVector ?? 0)),
+    };
+    this.corpusCache = { at: Date.now(), data };
+    return data;
+  }
+
+  /**
+   * Para el entrenamiento en curso.
+   *
+   * El contenedor de ML lo atiende en el proximo arbol. No deshace nada: el
+   * modelo que sirve solo cambia al final y solo si gana, asi que cancelar a
+   * mitad deja produccion exactamente como estaba.
+   */
+  async cancelTraining() {
+    const run = await this.prisma.modelTrainingRun.findFirst({
+      where: { status: { in: ['pending', 'running'] } },
+      orderBy: { startedAt: 'desc' },
+    });
+    try {
+      const res = await fetch(`${ML_URL}/train/cancel`, {
+        method: 'POST',
+        signal: AbortSignal.timeout(10_000),
+      });
+      const body = await res.json();
+      if (!body.ok && !run) return { ok: false, motivo: 'No hay ningun entrenamiento en curso' };
+    } catch (err: any) {
+      return { ok: false, motivo: `No responde el servicio de modelo: ${err.message}` };
+    }
+    // La fila se cierra cuando el sondeo vea que el servicio ya no corre; aqui
+    // solo se deja constancia de que alguien lo pidio.
+    if (run) {
+      await this.prisma.modelTrainingRun.update({
+        where: { id: run.id },
+        data: { log: `${run.log ?? ''}[cancelacion pedida desde la pantalla]\n` },
+      }).catch(() => undefined);
+    }
+    return { ok: true };
   }
 
   async appendLog(runId: string, linea: string) {

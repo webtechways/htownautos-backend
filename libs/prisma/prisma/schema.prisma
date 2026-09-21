@@ -4484,13 +4484,20 @@ model EmbedJobConfig {
 
   // ── Reentrenamiento del modelo de precio ──
   /// Ventana movil: solo se entrena con ventas de los ultimos N dias. Precios de
-  /// hace medio año no describen el mercado de esta semana.
-  trainingDays   Int       @default(90)
+  /// hace medio año no describen el mercado de esta semana. 0 = todo el
+  /// historico, que es lo que se pide al reconstruir desde cero.
+  trainingDays           Int       @default(90)
   /// Si false, el modelo nuevo se entrena y se mide pero NO sustituye al que
   /// esta sirviendo aunque gane. Util para observar unas semanas antes de soltar
   /// el automatismo.
-  autoPromote    Boolean   @default(true)
-  lastTrainingAt DateTime?
+  autoPromote            Boolean   @default(true)
+  /// Entrenar SOLO con ventas cuyo lote tiene vector de imagen: el modelo visor.
+  ///
+  /// Ninguna fila entra a ciegas, pero el corpus se encoge a lo que el job de
+  /// vectores haya procesado. Encenderlo antes de haber embebido los vendidos
+  /// deja el entrenamiento en unos miles de filas en vez de cientos de miles.
+  trainingOnlyWithImages Boolean   @default(false)
+  lastTrainingAt         DateTime?
 
   lastRunAt DateTime?
   createdAt DateTime  @default(now())
@@ -4511,7 +4518,11 @@ model ModelTrainingRun {
 
   /// Ventana movil de dias de ventas usada para entrenar. Los precios viejos no
   /// interesan: el mercado de salvage se mueve con la chatarra y la temporada.
+  /// 0 = todo el historico, para reconstruir el modelo desde cero.
   trainingDays Int @default(90)
+
+  /// Si la ejecucion se limito a las ventas con vector de imagen.
+  onlyWithImages Boolean @default(false)
 
   rowsTrain      Int?
   rowsValid      Int?
