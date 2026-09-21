@@ -30,10 +30,17 @@ ENV NODE_ENV=production
 # no el de Debian a proposito: bookworm trae el cliente 15 y el servidor va por
 # delante — un pg_dump mas viejo que el servidor falla en seco. Al reves si
 # funciona, asi que se coge el ultimo cliente.
+#
+# El curl va con reintentos y sobre HTTP/1.1: el 21-sep-2026 un deploy sano fallo
+# entero con "HTTP/2 stream 1 was not closed cleanly" bajando esta clave, tras
+# 108 s colgado. Es una descarga de 3 KB en un paso sin red de seguridad, y tira
+# abajo la imagen completa cuando el otro extremo hipa.
 RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates gnupg curl gzip openssl \
     && install -d /usr/share/postgresql-common/pgdg \
-    && curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+    && curl -fsSL --http1.1 --retry 5 --retry-delay 3 --retry-all-errors \
+         --connect-timeout 20 --max-time 120 \
+         https://www.postgresql.org/media/keys/ACCC4CF8.asc \
          -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
     && echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] \
 https://apt.postgresql.org/pub/repos/apt bookworm-pgdg main" \
