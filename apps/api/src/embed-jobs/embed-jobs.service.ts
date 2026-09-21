@@ -301,7 +301,18 @@ export class EmbedJobsService {
    * (`dims = 0`, sus fotos no estan en B2). Sin la segunda condicion, los lotes
    * irrecuperables volverian a la cola en cada ciclo para siempre.
    */
+  private scopeCache: { clave: string; at: number; data: any } | null = null;
+
   async rebuildScope(windowDays: number, pcaVersion: string) {
+    // La consulta cruza 88.000 listings contra las ventas y tarda ~2,3 s. La
+    // pantalla la pide cada 5 s mientras hay un ciclo vivo, asi que sin cache
+    // son dos segundos de base de datos por cada pestaña abierta. Lo que mide
+    // cambia al ritmo de la GPU —minutos— no al del sondeo.
+    const clave = `${windowDays}|${pcaVersion}`;
+    if (this.scopeCache && this.scopeCache.clave === clave
+        && Date.now() - this.scopeCache.at < 60_000) {
+      return this.scopeCache.data;
+    }
     const corte = this.corteVentana(windowDays);
     const [fila] = (await this.prisma.$queryRawUnsafe(
       `SELECT count(*)::int AS "enVentana",
@@ -322,7 +333,9 @@ export class EmbedJobsService {
           )`,
       pcaVersion,
     )) as { enVentana: number; pendientes: number }[];
-    return { ...fila, corte };
+    const data = { ...fila, corte };
+    this.scopeCache = { clave, at: Date.now(), data };
+    return data;
   }
 
   /**
