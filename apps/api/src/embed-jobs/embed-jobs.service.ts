@@ -496,8 +496,16 @@ export class EmbedJobsService {
         }
       : null;
 
+    // Lo que le queda AL CICLO ACTIVO, recalculado: su `lotsTarget` es una foto
+    // del arranque y la ventana es movil, asi que el objetivo envejece mientras
+    // el ciclo corre. Sin esto la barra puede pasar del 100% y seguir habiendo
+    // trabajo, que es justo lo que confunde.
+    const pendientesActivo = activo
+      ? (await this.rebuildScope(activo.windowDays, activo.pcaVersion ?? pcaVersion)).pendientes
+      : null;
+
     return {
-      activo, tanda, ultimos, scope, reanudable,
+      activo, tanda, ultimos, scope, reanudable, pendientesActivo,
       config: {
         pooling, pcaVersion, imgSlots: cfg.imgSlots,
         windowDays: cfg.trainingDays,
@@ -846,12 +854,19 @@ export class EmbedJobsService {
    * fraccion de las ventas con precio. Sin verlo, se entrena con 8.000 filas
    * creyendo que son 174.000.
    */
-  private corpusCache: { at: number; data: any } | null = null;
+  private corpusCache: { clave: string; at: number; data: any } | null = null;
 
   async corpus() {
-    // La consulta agrega 174.000 filas y la pantalla sondea cada 20 s: un minuto
+    // Un vector de OTRA agrupacion no cuenta como material: tiene las mismas 64
+    // columnas y significa otra cosa. Contarlo dice "corpus procesado" mientras
+    // el modelo visor todavia no tiene con que entrenar.
+    const cfg = await this.config();
+    const { pcaVersion } = this.pcaActivo(cfg);
+
+    // La consulta agrega 184.000 filas y la pantalla sondea cada 20 s: un minuto
     // de cache la deja en una vez por refresco largo sin envejecer de verdad.
-    if (this.corpusCache && Date.now() - this.corpusCache.at < 60_000) {
+    if (this.corpusCache && this.corpusCache.clave === pcaVersion
+        && Date.now() - this.corpusCache.at < 60_000) {
       return this.corpusCache.data;
     }
     const [fila] = (await this.prisma.$queryRawUnsafe(
@@ -863,10 +878,10 @@ export class EmbedJobsService {
              AND COALESCE((l."galleryCache"::json->>'imageCount')::int, 0) > 0
          )::int                               AS "lotesConFotos",
          count(DISTINCT s.lot) FILTER (
-           WHERE v."lotNumber" IS NOT NULL AND v.dims > 0
+           WHERE v."pcaVersion" = $1 AND v.dims > 0
          )::int                               AS "lotesConVector",
          count(*) FILTER (
-           WHERE v."lotNumber" IS NOT NULL AND v.dims > 0
+           WHERE v."pcaVersion" = $1 AND v.dims > 0
          )::int                               AS "ventasConVector",
          min(s."saleDate")::int               AS "desde",
          max(s."saleDate")::int               AS "hasta"
@@ -874,14 +889,16 @@ export class EmbedJobsService {
        LEFT JOIN auction_listings l  ON l."lotNumber" = s.lot
        LEFT JOIN lot_image_vectors v ON v."lotNumber" = s.lot
       WHERE s.matched AND s."finalBid" IS NOT NULL AND s."finalBid" > 0`,
+      pcaVersion,
     )) as any[];
 
     const data = {
       ...fila,
-      /** Lotes vendidos con fotos a los que todavia les falta el vector. */
+      pcaVersion,
+      /** Lotes vendidos con fotos sin vector de la agrupacion activa. */
       lotesPendientes: Math.max(0, (fila?.lotesConFotos ?? 0) - (fila?.lotesConVector ?? 0)),
     };
-    this.corpusCache = { at: Date.now(), data };
+    this.corpusCache = { clave: pcaVersion, at: Date.now(), data };
     return data;
   }
 
