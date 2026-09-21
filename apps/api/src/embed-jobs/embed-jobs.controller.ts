@@ -87,6 +87,17 @@ export class EmbedJobsController {
     return this.service.startRebuild({ windowDays: body?.windowDays });
   }
 
+  @Post('rebuild/resume')
+  @ApiOperation({
+    summary: 'Retomar el ultimo ciclo detenido donde se quedo',
+    description:
+      'Lo devuelve a la cola sin repetir trabajo: la cola es lo que aun no tiene ' +
+      'vector, asi que los lotes ya embebidos quedan fuera por definicion.',
+  })
+  resumeRebuild(@Body() body?: { id?: string }) {
+    return this.service.resumeRebuild(body?.id);
+  }
+
   @Post('rebuild/cancel')
   @ApiOperation({ summary: 'Parar el ciclo en curso; lo embebido se conserva' })
   cancelRebuild() {

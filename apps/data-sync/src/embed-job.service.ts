@@ -370,6 +370,34 @@ export class EmbedJobService {
     return filas.map((f) => ({ lot: f.lot, imageCount: Number(f.n) }));
   }
 
+  /** Cuantos lotes le quedan al ciclo. Igual que `pendingRebuild` pero sin traerlos. */
+  async countPendingRebuild(windowDays: number, pcaVersion: string): Promise<number> {
+    const corte = windowDays > 0
+      ? (() => {
+          const d = new Date(Date.now() - windowDays * 86_400_000);
+          return d.getUTCFullYear() * 10000 + (d.getUTCMonth() + 1) * 100 + d.getUTCDate();
+        })()
+      : null;
+    const filas = (await this.prisma.$queryRawUnsafe(
+      `SELECT count(*)::int AS n
+         FROM auction_listings l
+        WHERE l."galleryCachedAt" IS NOT NULL
+          AND COALESCE((l."galleryCache"::json->>'imageCount')::int, 0) > 0
+          AND EXISTS (
+            SELECT 1 FROM auction_sale_results r
+             WHERE r.lot = l."lotNumber" AND r.matched AND r."finalBid" > 0
+               ${corte ? `AND r."saleDate" >= ${corte}` : ''}
+          )
+          AND NOT EXISTS (
+            SELECT 1 FROM lot_image_vectors v
+             WHERE v."lotNumber" = l."lotNumber"
+               AND (v.dims = 0 OR v."pcaVersion" = $1)
+          )`,
+      pcaVersion,
+    )) as { n: number }[];
+    return Number(filas[0]?.n ?? 0);
+  }
+
   /**
    * Recoge ejecuciones que la API dejo en `pending` al pulsar "ejecutar ahora".
    * La API y data-sync son procesos distintos, asi que la tabla hace de buzon en
@@ -709,17 +737,26 @@ export class EmbedJobService {
   /** Cola → embebiendo, o directo a entrenar si no falta ningun vector. */
   private async cicloArrancar(ciclo: any): Promise<void> {
     const cfg = await this.config();
-    const faltan = await this.pendingRebuild(1_000_000, ciclo.windowDays, ciclo.pcaVersion);
-    if (!faltan.length) {
+    const faltan = await this.countPendingRebuild(ciclo.windowDays, ciclo.pcaVersion);
+    if (!faltan) {
       await this.cicloLog(ciclo.id, 'no falta ningun vector: se pasa directo a entrenar');
       await this.lanzarEntrenamiento(ciclo, cfg);
       return;
     }
+
+    // Un ciclo reanudado ya tiene lotes hechos: si el objetivo fuera solo lo que
+    // falta, la barra retrocederia al reanudar y diria 41.000 de 47.000.
+    const tandas = await this.prisma.embedJobRun.findMany({ where: { rebuildId: ciclo.id } });
+    const hechos = tandas.reduce((n, t) => n + t.lotsDone, 0);
+
     await this.prisma.modelRebuildRun.update({
       where: { id: ciclo.id },
-      data: { status: 'embedding', lotsTarget: faltan.length },
+      data: { status: 'embedding', lotsTarget: hechos + faltan, lotsDone: hechos },
     });
-    await this.cicloLog(ciclo.id, `${faltan.length} lotes por embeber`);
+    await this.cicloLog(ciclo.id,
+      hechos
+        ? `reanudado: ${hechos} lotes hechos, ${faltan} por embeber`
+        : `${faltan} lotes por embeber`);
     await this.nuevaTanda(ciclo.id);
   }
 
@@ -755,8 +792,8 @@ export class EmbedJobService {
       return;
     }
 
-    const faltan = await this.pendingRebuild(1, ciclo.windowDays, ciclo.pcaVersion);
-    if (!faltan.length) {
+    const faltan = await this.countPendingRebuild(ciclo.windowDays, ciclo.pcaVersion);
+    if (!faltan) {
       await this.cicloLog(ciclo.id, `embebido completo: ${hechos} lotes en ${tandas.length} tandas, $${gastado.toFixed(2)}`);
       await this.lanzarEntrenamiento(ciclo, cfg);
       return;

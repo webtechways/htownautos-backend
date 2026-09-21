@@ -398,6 +398,65 @@ export class EmbedJobsService {
     return { ok: true, lotesHechos: run.lotsDone };
   }
 
+  /**
+   * Retoma un ciclo detenido en vez de empezar otro.
+   *
+   * Hay dos maneras de que un ciclo se pare y solo una se arregla sola: si el
+   * pod muere, la maquina de estados levanta otra tanda al minuto siguiente. Lo
+   * que no tenia salida era lo demas —tope de gasto alcanzado, cancelado a mano,
+   * entrenamiento fallido—, donde el ciclo quedaba cerrado y la unica opcion era
+   * lanzar uno nuevo: fila nueva, historial partido en dos y el motivo original
+   * enterrado.
+   *
+   * Reanudar es solo devolverlo a la cola. No repite trabajo: la cola es "lo que
+   * aun no tiene vector de esta agrupacion", asi que los lotes ya embebidos
+   * quedan fuera por definicion.
+   */
+  async resumeRebuild(id?: string) {
+    const activo = await this.prisma.modelRebuildRun.findFirst({
+      where: { status: { in: ['queued', 'embedding', 'training'] } },
+    });
+    if (activo) return { ok: false, motivo: 'Ya hay un ciclo en curso', run: activo };
+
+    const run = id
+      ? await this.prisma.modelRebuildRun.findUnique({ where: { id } })
+      : await this.prisma.modelRebuildRun.findFirst({
+          where: { status: { in: ['failed', 'cancelled'] } },
+          orderBy: { startedAt: 'desc' },
+        });
+    if (!run) return { ok: false, motivo: 'No hay ningun ciclo detenido que reanudar' };
+
+    // El tope de gasto es la razon mas probable de que se parara. Reanudar sin
+    // subirlo primero lo mataria en el mismo sitio, y la pantalla habria dicho
+    // "reanudado" para nada.
+    const cfg = await this.config();
+    const gastado = Number(run.costUsd ?? 0);
+    const tope = Number(cfg.maxCostUsdPerRebuild);
+    if (gastado >= tope) {
+      return {
+        ok: false,
+        motivo: `Este ciclo ya lleva $${gastado.toFixed(2)} y el tope por ciclo es ` +
+                `$${tope.toFixed(2)}. Sube el tope antes de reanudar o se parara igual.`,
+        run,
+      };
+    }
+
+    const { pcaVersion } = this.pcaActivo(cfg);
+    const scope = await this.rebuildScope(run.windowDays, run.pcaVersion ?? pcaVersion);
+
+    const actualizado = await this.prisma.modelRebuildRun.update({
+      where: { id: run.id },
+      data: {
+        status: 'queued',
+        error: null,
+        finishedAt: null,
+        log: `${run.log ?? ''}[${new Date().toISOString()}] reanudado a mano: ` +
+             `${run.lotsDone} lotes ya embebidos, ${scope.pendientes} pendientes\n`,
+      },
+    });
+    return { ok: true, run: actualizado, scope };
+  }
+
   /** Lo que pinta el bloque del ciclo: el activo, el historial y el alcance de ahora. */
   async rebuildStatus() {
     const cfg = await this.config();
@@ -420,8 +479,25 @@ export class EmbedJobsService {
         })
       : null;
 
+    // El ultimo ciclo detenido es el candidato a reanudar. Se calcula aqui y no
+    // en la pantalla para que el boton sepa cuanto queda sin tener que adivinar.
+    const parado = !activo
+      ? ultimos.find((r) => r.status === 'failed' || r.status === 'cancelled') ?? null
+      : null;
+    const reanudable = parado
+      ? {
+          id: parado.id,
+          status: parado.status,
+          lotsDone: parado.lotsDone,
+          error: parado.error,
+          pendientes: (await this.rebuildScope(
+            parado.windowDays, parado.pcaVersion ?? pcaVersion,
+          )).pendientes,
+        }
+      : null;
+
     return {
-      activo, tanda, ultimos, scope,
+      activo, tanda, ultimos, scope, reanudable,
       config: {
         pooling, pcaVersion, imgSlots: cfg.imgSlots,
         windowDays: cfg.trainingDays,
