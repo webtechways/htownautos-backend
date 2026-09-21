@@ -10,6 +10,18 @@ import { EmbedJobService, POD_PREFIX, TOPE_DURO_MIN } from './embed-job.service'
 const MARGEN_MIN = 15;
 
 /**
+ * Silencio tras el cual un pod se da por muerto aunque siga encendido.
+ *
+ * El pod habla constantemente: el bootstrap manda log cada 10 s y cada trozo
+ * escribe vectores, asi que veinticinco minutos callado significa que el worker
+ * murio. Sin esta comprobacion el unico corte era el limite de 360 min: un pod
+ * que pierde la red a los cien minutos —un mantenimiento del host, sin ir mas
+ * lejos— seguia facturando cuatro horas sin hacer nada, porque su ejecucion se
+ * quedaba en `running` y nadie la cerraba.
+ */
+const SILENCIO_MAX_MIN = 25;
+
+/**
  * Vigilante de pods huerfanos.
  *
  * Existe porque las otras vias de apagado comparten un punto debil: todas viven
@@ -100,6 +112,15 @@ export class EmbedJobWatchdogService {
     const minutos = (Date.now() - arranque) / 60_000;
     if (minutos > limiteMin) {
       return `lleva ${Math.round(minutos)} min encendido (limite ${limiteMin})`;
+    }
+
+    // Encendido pero mudo. Se mide desde el arranque cuando todavia no ha dado
+    // ninguna señal: bajar el modelo son unos minutos, y por eso el umbral es
+    // holgado.
+    const ultimaSeñal = (run.lastSeenAt ?? run.startedAt).getTime();
+    const callado = (Date.now() - ultimaSeñal) / 60_000;
+    if (callado > SILENCIO_MAX_MIN) {
+      return `lleva ${Math.round(callado)} min sin dar señal (limite ${SILENCIO_MAX_MIN})`;
     }
 
     return null;
