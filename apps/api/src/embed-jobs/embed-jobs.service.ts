@@ -457,18 +457,30 @@ export class EmbedJobsService {
     return { ok: true, run: actualizado, scope };
   }
 
-  /** Lo que pinta el bloque del ciclo: el activo, el historial y el alcance de ahora. */
+  /**
+   * Lo que pinta el bloque del ciclo: el activo, el historial y el alcance de ahora.
+   *
+   * El alcance es una consulta de 3,4 s que agrega 96.000 listings contra las
+   * ventas; lo demas son lecturas de milisegundos. Iban juntas en un
+   * `Promise.all`, asi que un fallo de la pesada dejaba la pantalla entera sin
+   * ciclo, sin ajustes y sin historial — y el usuario leyendo "todavia no se ha
+   * ejecutado ningun ciclo" con uno vivo por detras. Ahora la pesada puede
+   * fallar sola y lo barato llega igual.
+   */
   async rebuildStatus() {
     const cfg = await this.config();
     const { pcaVersion, pooling } = this.pcaActivo(cfg);
-    const [activo, ultimos, scope] = await Promise.all([
+    const [activo, ultimos] = await Promise.all([
       this.prisma.modelRebuildRun.findFirst({
         where: { status: { in: ['queued', 'embedding', 'training'] } },
         orderBy: { startedAt: 'desc' },
       }),
       this.prisma.modelRebuildRun.findMany({ orderBy: { startedAt: 'desc' }, take: 10 }),
-      this.rebuildScope(cfg.trainingDays, pcaVersion),
     ]);
+    const scope = await this.rebuildScope(cfg.trainingDays, pcaVersion).catch((e) => {
+      this.logger.error(`[Rebuild] alcance de la ventana fallo: ${e.message}`);
+      return null;
+    });
 
     // La tanda de pod que esta corriendo ahora mismo para este ciclo, si la hay:
     // es de donde sale el "va por X de Y" mientras embebe.
@@ -490,9 +502,9 @@ export class EmbedJobsService {
           status: parado.status,
           lotsDone: parado.lotsDone,
           error: parado.error,
-          pendientes: (await this.rebuildScope(
+          pendientes: await this.rebuildScope(
             parado.windowDays, parado.pcaVersion ?? pcaVersion,
-          )).pendientes,
+          ).then((r) => r.pendientes).catch(() => 0),
         }
       : null;
 
@@ -501,7 +513,9 @@ export class EmbedJobsService {
     // el ciclo corre. Sin esto la barra puede pasar del 100% y seguir habiendo
     // trabajo, que es justo lo que confunde.
     const pendientesActivo = activo
-      ? (await this.rebuildScope(activo.windowDays, activo.pcaVersion ?? pcaVersion)).pendientes
+      ? await this.rebuildScope(activo.windowDays, activo.pcaVersion ?? pcaVersion)
+          .then((r) => r.pendientes)
+          .catch(() => null)
       : null;
 
     return {

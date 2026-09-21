@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Patch, Post } from '@nestjs/common';
+import { Body, Controller, Get, Logger, Param, Patch, Post } from '@nestjs/common';
 import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { EmbedJobsService } from './embed-jobs.service';
 
@@ -11,6 +11,8 @@ import { EmbedJobsService } from './embed-jobs.service';
 @ApiTags('AI Training')
 @Controller('embed-jobs')
 export class EmbedJobsController {
+  private readonly logger = new Logger(EmbedJobsController.name);
+
   constructor(private readonly service: EmbedJobsService) {}
 
   @Get('status')
@@ -106,8 +108,16 @@ export class EmbedJobsController {
 
   @Get('rebuild/status')
   @ApiOperation({ summary: 'Ciclo activo, su tanda de pod, historial y alcance de la ventana' })
-  rebuildStatus() {
-    return this.service.rebuildStatus();
+  async rebuildStatus() {
+    // Esta ruta se cayo en produccion sin dejar una linea en el log, y la
+    // pantalla lo pintaba como "no hay ningun ciclo". Que vuelva a pasar sin
+    // rastro no es aceptable.
+    try {
+      return await this.service.rebuildStatus();
+    } catch (e: any) {
+      this.logger.error(`[Rebuild] status fallo: ${e?.message}`, e?.stack);
+      throw e;
+    }
   }
 
   @Post('pause')
