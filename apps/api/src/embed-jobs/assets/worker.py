@@ -122,6 +122,28 @@ class Fotos(Dataset):
             return self.blank, 0
 
 
+def pedir(metodo, url, **kw):
+    """HTTP contra la API con reintentos.
+
+    Sin esto, cualquier hipo del backend mata el pod: un redespliegue de treinta
+    segundos cae justo encima de un POST de vectores y se pierde el trozo entero
+    —trece minutos de GPU ya pagados— ademas de la tanda. Cinco intentos con
+    espera creciente cubren de sobra un redespliegue.
+    """
+    ultimo = None
+    for intento in range(5):
+        try:
+            r = requests.request(metodo, url, **kw)
+            r.raise_for_status()
+            return r
+        except Exception as e:
+            ultimo = e
+            espera = min(60, 5 * 2 ** intento)
+            log(f"  API no responde ({e}); reintento {intento + 1}/5 en {espera}s")
+            time.sleep(espera)
+    raise ultimo
+
+
 def agrupar(fotos, pooling, n_slots, dim):
     """Las fotos de UN lote en el vector que espera el PCA.
 
@@ -227,8 +249,8 @@ def main() -> int:
             break
 
         log(f"requesting manifest at offset {offset:,}")
-        man = requests.get(
-            f"{API}/embed-pod/{RUN}/manifest",
+        man = pedir(
+            "GET", f"{API}/embed-pod/{RUN}/manifest",
             params={"maxSeq": MAXSEQ, "offset": offset, "lots": CHUNK},
             headers=H, timeout=180,
         ).json()
@@ -244,12 +266,12 @@ def main() -> int:
         imgs_mal += mal_n
 
         for i in range(0, len(salida), 500):
-            requests.post(f"{API}/embed-pod/{RUN}/vectors", headers=H, timeout=180,
-                          json={"items": salida[i:i + 500],
-                                "encoder": f"{ENCODER}@{SIZE}", "pcaVersion": pcav})
+            pedir("POST", f"{API}/embed-pod/{RUN}/vectors", headers=H, timeout=180,
+                  json={"items": salida[i:i + 500],
+                        "encoder": f"{ENCODER}@{SIZE}", "pcaVersion": pcav})
         if sin_ninguna:
-            requests.post(f"{API}/embed-pod/{RUN}/complete", headers=H, timeout=60,
-                          json={"parcial": True, "lotsWithoutImages": sin_ninguna})
+            pedir("POST", f"{API}/embed-pod/{RUN}/complete", headers=H, timeout=60,
+                  json={"parcial": True, "lotsWithoutImages": sin_ninguna})
 
         lotes_ok += len(salida)
         lotes_sin += len(sin_ninguna)
@@ -259,8 +281,8 @@ def main() -> int:
         log(f"trozo hasta {offset:,}: +{len(salida):,} lotes "
             f"({lotes_ok:,} en total) · {ritmo:.0f} img/s")
 
-    requests.post(f"{API}/embed-pod/{RUN}/complete", headers=H, timeout=60,
-                  json={"imagesDone": imgs_ok, "imagesFailed": imgs_mal})
+    pedir("POST", f"{API}/embed-pod/{RUN}/complete", headers=H, timeout=60,
+          json={"imagesDone": imgs_ok, "imagesFailed": imgs_mal})
     log(f"listo: {lotes_ok:,} lotes, {imgs_ok:,} imagenes, "
         f"{lotes_sin:,} sin fotos, en {(time.time()-t0)/60:.1f} min")
     return 0

@@ -453,6 +453,17 @@ export class EmbedJobsService {
     const run = await this.prisma.embedJobRun.findUnique({ where: { id: runId } });
     if (!run) throw new NotFoundException('Ejecucion no encontrada');
 
+    // ── Una tanda de ciclo pide OTRA cosa ──
+    // El pod saca su trabajo de aqui, no de la lista que calculo data-sync. Con
+    // la consulta de siempre, una tanda de ciclo embebia el pendiente global
+    // —ignorando la ventana— y, peor, nunca veia los lotes que ya tienen vector
+    // de OTRA agrupacion: para esta consulta ya estaban hechos. El ciclo pedia
+    // 88.467 lotes que el pod no podia entregar jamas, y habria encadenado
+    // tandas hasta el tope de gasto sin llegar nunca a cero.
+    if (run.rebuildId) {
+      return this.manifestRebuild(run.rebuildId, runId, maxSeq, lots);
+    }
+
     const filas = (await this.prisma.$queryRawUnsafe(
       `WITH elegidos AS (
          SELECT l."lotNumber", l."galleryCache"
@@ -479,6 +490,66 @@ export class EmbedJobsService {
       agotado: filas.length === 0,
       // La clave se construye aqui y no en el pod para que el formato viva en un
       // solo sitio (lo escribe gallery-cache.service.ts al subir a B2).
+      items: filas.map((f) => ({ lot: f.lot, seq: f.seq, key: `gallery/${f.lot}/${f.seq}_hrs.jpg` })),
+    };
+  }
+
+  /**
+   * El manifiesto de una tanda que pertenece a un ciclo.
+   *
+   * Mismo criterio que `pendingRebuild` en data-sync: vendido con precio dentro
+   * de la ventana, y sin vector de la agrupacion del ciclo — un vector `mean`
+   * NO cuenta cuando el ciclo produce `slots`.
+   *
+   * ── Sin OFFSET, a proposito ──
+   * El pod pagina sumando el tamaño del trozo, pero los lotes que ya tienen
+   * vector desaparecen de esta consulta segun se van guardando. Con OFFSET, el
+   * trozo 2 empezaba 1.000 filas mas alla de donde debia y se saltaba mil lotes
+   * en cada vuelta. Como los procesados salen solos del conjunto, devolver
+   * siempre los primeros pendientes avanza sin huecos y sin repetir.
+   */
+  private async manifestRebuild(rebuildId: string, runId: string, maxSeq: number, lots: number) {
+    const ciclo = await this.prisma.modelRebuildRun.findUnique({ where: { id: rebuildId } });
+    if (!ciclo) throw new NotFoundException('Ciclo no encontrado');
+    const corte = this.corteVentana(ciclo.windowDays);
+    const pca = ciclo.pcaVersion ?? 'mean-64d';
+
+    const filas = (await this.prisma.$queryRawUnsafe(
+      `WITH elegidos AS (
+         SELECT l."lotNumber", l."galleryCache",
+                (SELECT max(r."saleDate") FROM auction_sale_results r
+                  WHERE r.lot = l."lotNumber" AND r.matched AND r."finalBid" > 0) AS sd
+           FROM auction_listings l
+          WHERE l."galleryCachedAt" IS NOT NULL
+            AND COALESCE((l."galleryCache"::json->>'imageCount')::int, 0) > 0
+            AND EXISTS (
+              SELECT 1 FROM auction_sale_results r
+               WHERE r.lot = l."lotNumber" AND r.matched AND r."finalBid" > 0
+                 ${corte ? `AND r."saleDate" >= ${corte}` : ''}
+            )
+            AND NOT EXISTS (
+              SELECT 1 FROM lot_image_vectors v
+               WHERE v."lotNumber" = l."lotNumber"
+                 AND (v.dims = 0 OR v."pcaVersion" = $1)
+            )
+          ORDER BY sd DESC NULLS LAST, l."lotNumber"
+          LIMIT $2
+       )
+       SELECT e."lotNumber"::text AS lot, (img->>'sequence')::int AS seq
+         FROM elegidos e
+         CROSS JOIN LATERAL json_array_elements(e."galleryCache"::json->'images') AS img
+        WHERE (img->>'sequence')::int <= $3
+        ORDER BY e."lotNumber", 2`,
+      pca,
+      Math.min(Math.max(lots, 1), 5000),
+      maxSeq,
+    )) as { lot: string; seq: number }[];
+
+    return {
+      runId,
+      offset: 0,
+      lots,
+      agotado: filas.length === 0,
       items: filas.map((f) => ({ lot: f.lot, seq: f.seq, key: `gallery/${f.lot}/${f.seq}_hrs.jpg` })),
     };
   }
