@@ -4442,6 +4442,11 @@ model EmbedJobConfig {
   /// Hora local (Central) a la que arranca. Los lotes se cachean con dias de
   /// antelacion, asi que de madrugada llega de sobra.
   cronHour Int @default(3)
+  /// Cada cuantas horas se repite. 24 o mas = una vez al dia a `cronHour`, el
+  /// comportamiento de siempre. Menos = cada N horas, sin mirar la hora: los
+  /// remates son a todas horas y un lote que se subasta a las 14:00 no lo
+  /// salva un trabajo que solo pasa de madrugada.
+  cronEveryHours Int @default(24)
 
   /// GPUs a intentar, en orden. RunPod alquila la primera disponible.
   gpuTypeIds String @default("NVIDIA A40,NVIDIA RTX A5000,NVIDIA A100 80GB PCIe")

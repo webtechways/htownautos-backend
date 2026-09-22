@@ -206,10 +206,20 @@ export class EmbedJobService {
         timeZone: 'America/Chicago', hour: 'numeric', hour12: false,
       }).format(new Date()),
     );
-    if (hora !== cfg.cronHour) return;
-
     const ultima = cfg.lastRunAt?.getTime() ?? 0;
-    if (Date.now() - ultima < 20 * 3_600_000) return; // una vez al dia
+    const cada = Math.max(1, cfg.cronEveryHours ?? 24);
+
+    if (cada >= 24) {
+      // Comportamiento de siempre: a una hora concreta, una vez al dia.
+      if (hora !== cfg.cronHour) return;
+      if (Date.now() - ultima < 20 * 3_600_000) return;
+    } else {
+      // Cada N horas, sin mirar la hora. Los remates son a todas horas y las
+      // fotos se cachean durante todo el dia: un lote listado esta manana y
+      // subastado a las 14:00 nunca llegaria a tener vector con una sola
+      // pasada de madrugada.
+      if (Date.now() - ultima < cada * 3_600_000) return;
+    }
 
     await this.run('cron');
   }

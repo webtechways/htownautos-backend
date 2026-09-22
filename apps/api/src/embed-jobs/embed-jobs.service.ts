@@ -45,7 +45,7 @@ export class EmbedJobsService {
       'pooling', 'imgSlots',
       'autoRebuildEnabled', 'autoRebuildEveryDays', 'autoRebuildHour',
       'maxCostUsdPerRebuild',
-      'selDated', 'selFutureSale', 'selIncludePast', 'selSaleDateFrom', 'selSaleDateTo',
+      'cronEveryHours', 'selDated', 'selFutureSale', 'selIncludePast', 'selSaleDateFrom', 'selSaleDateTo',
       'selSoldOnly',
       'maxCostPerHr',
     ];
@@ -549,6 +549,12 @@ export class EmbedJobsService {
    * queden partidas entre dos trozos: el vector es el promedio de todas, y un
    * lote a medias daria un vector distinto del que daria completo.
    */
+  /** Hoy como YYYYMMDD, que es como `saleDate` guarda las fechas. */
+  private hoyInt(): number {
+    const d = new Date();
+    return d.getUTCFullYear() * 10000 + (d.getUTCMonth() + 1) * 100 + d.getUTCDate();
+  }
+
   async manifest(runId: string, maxSeq = 9, offset = 0, lots = 2000) {
     const run = await this.prisma.embedJobRun.findUnique({ where: { id: runId } });
     if (!run) throw new NotFoundException('Ejecucion no encontrada');
@@ -564,13 +570,34 @@ export class EmbedJobsService {
       return this.manifestRebuild(run.rebuildId, runId, maxSeq, lots);
     }
 
+    const hoy = this.hoyInt();
     const filas = (await this.prisma.$queryRawUnsafe(
       `WITH elegidos AS (
          SELECT l."lotNumber", l."galleryCache"
            FROM auction_listings l
            LEFT JOIN lot_image_vectors v ON v."lotNumber" = l."lotNumber"
           WHERE l."galleryCachedAt" IS NOT NULL AND v."lotNumber" IS NULL
-          ORDER BY l."saleDate" ASC NULLS LAST, l."lotNumber"
+          -- ── El orden es lo que hace util a este trabajo ──
+          -- Antes era saleDate ASC NULLS LAST a secas. Como los lotes YA
+          -- SUBASTADOS tienen la fecha mas pequena, se llevaban toda la GPU:
+          -- se convertian coches vendidos hace semanas mientras los que se
+          -- rematan hoy seguian sin vector, y un precio que llega despues del
+          -- martillo no sirve de nada.
+          -- Ahora: primero lo que se subasta antes, luego lo que aun no tiene
+          -- fecha, y al final el pasado —que hace falta para entrenar pero no
+          -- corre prisa— empezando por lo mas reciente.
+          ORDER BY
+            CASE
+              WHEN l."saleDate" >= ${hoy} THEN 0
+              WHEN l."saleDate" IS NULL   THEN 1
+              ELSE 2
+            END,
+            CASE
+              WHEN l."saleDate" IS NULL   THEN 0
+              WHEN l."saleDate" >= ${hoy} THEN l."saleDate"
+              ELSE -l."saleDate"
+            END,
+            l."lotNumber"
           OFFSET $1 LIMIT $2
        )
        SELECT e."lotNumber"::text AS lot, (img->>'sequence')::int AS seq
