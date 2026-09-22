@@ -1,8 +1,9 @@
-import { Body, Controller, Get, Param, Post } from '@nestjs/common';
+import { Body, Controller, Get, Param, Patch, Post } from '@nestjs/common';
 import { ApiOperation, ApiParam, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 import { Public } from '@htownautos/auth';
 import { PricePredictionService } from './price-prediction.service';
+import { BulkPredictService } from './bulk-predict.service';
 
 /**
  * Precio esperado para un lote aun no rematado. `@Public()` para seguir el mismo
@@ -12,7 +13,40 @@ import { PricePredictionService } from './price-prediction.service';
 @Controller('price-prediction')
 @Throttle({ default: { limit: 120, ttl: 60_000 } })
 export class PricePredictionController {
-  constructor(private readonly service: PricePredictionService) {}
+  constructor(
+    private readonly service: PricePredictionService,
+    private readonly bulk: BulkPredictService,
+  ) {}
+
+  /**
+   * Prediccion masiva de lotes futuros.
+   *
+   * Estas rutas van declaradas ANTES de `@Get(':lot')`: si fueran despues,
+   * Nest leeria "bulk" como si fuera un numero de lote.
+   */
+  @Get('bulk/status')
+  @ApiOperation({ summary: 'Ajustes, cobertura y ultimas pasadas' })
+  bulkStatus() {
+    return this.bulk.estado();
+  }
+
+  @Post('bulk/preview')
+  @ApiOperation({ summary: 'Cuantos lotes entrarian con estos ajustes' })
+  bulkPreview(@Body() patch: Record<string, unknown>) {
+    return this.bulk.vistaPrevia(patch);
+  }
+
+  @Patch('bulk/config')
+  @ApiOperation({ summary: 'Guardar los ajustes' })
+  bulkConfig(@Body() patch: Record<string, unknown>) {
+    return this.bulk.guardar(patch);
+  }
+
+  @Post('bulk/run')
+  @ApiOperation({ summary: 'Lanzar una pasada ahora' })
+  bulkRun() {
+    return this.bulk.ejecutar('manual');
+  }
 
   @Get(':lot')
   @Public()

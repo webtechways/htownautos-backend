@@ -4849,3 +4849,114 @@ model LotPartDamage {
   @@index([partCode])
   @@map("lot_part_damages")
 }
+
+/// Configuracion de la prediccion masiva de lotes futuros.
+///
+/// Va en su propia tabla y no en `EmbedJobConfig` porque son dos trabajos
+/// distintos: aquel llena el material de entrenamiento con ventas pasadas,
+/// este tasa coches que todavia no se han subastado. Comparten la GPU y poco
+/// mas, y mezclar sus ajustes obliga a leer el nombre del campo para saber a
+/// cual pertenece.
+model PricePredictConfig {
+  id String @id @default("singleton")
+
+  // ── Que lotes entran ──────────────────────────────────────────────────────
+  /// Copart ya les puso fecha de subasta.
+  selDated        Boolean @default(true)
+  /// Aun sin fecha: se venderan, pero no se sabe cuando.
+  selUndated      Boolean @default(false)
+  selSaleDateFrom Int?
+  selSaleDateTo   Int?
+  /// Estados y marcas, separados por coma. Vacio = todos.
+  selStates       String  @default("")
+  selMakes        String  @default("")
+  selMinRetail    Int?
+  selMaxRetail    Int?
+
+  // ── Que se vuelve a predecir ──────────────────────────────────────────────
+  /// Saltarse los que ya tienen prediccion. Apagado = se recalculan todos.
+  skipAlreadyPredicted Boolean @default(true)
+  /// Aunque tengan prediccion, rehacerla si la hizo otra version del modelo:
+  /// un precio de un modelo retirado no es comparable con uno de hoy.
+  redoIfModelChanged   Boolean @default(true)
+  /// Y rehacerla si es mas vieja que esto. 0 = no caduca.
+  redoOlderThanDays    Int     @default(7)
+
+  // ── Fotos ─────────────────────────────────────────────────────────────────
+  /// conVector   solo lotes que ya tienen vector — no gasta GPU
+  /// embeber     los que falten se mandan primero al pod
+  /// sinFotos    se predice igual, sin fotos, peor y mas barato
+  photoMode          String @default("embeber")
+  /// Tope de lotes a embeber en una pasada, aparte del tope de prediccion.
+  maxLotsToEmbed     Int    @default(5000)
+
+  // ── Limites de la pasada ──────────────────────────────────────────────────
+  maxLotsPerRun    Int     @default(20000)
+  /// Lotes por llamada a /predict/batch. Muy alto agota la memoria del
+  /// servicio; muy bajo desperdicia el viaje.
+  batchSize        Int     @default(500)
+  maxMinutes       Int     @default(120)
+  maxCostUsdPerRun Decimal @default(5.0) @db.Decimal(8, 2)
+
+  // ── Cuando se ejecuta sola ────────────────────────────────────────────────
+  enabled   Boolean   @default(false)
+  cronHour  Int       @default(5)
+  everyDays Int       @default(1)
+  lastRunAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("price_predict_config")
+}
+
+/// Una pasada de prediccion masiva.
+model PricePredictRun {
+  id        String    @id @default(uuid())
+  startedAt DateTime  @default(now())
+  finishedAt DateTime?
+  /// pending | embedding | predicting | done | failed | aborted
+  status    String    @default("pending")
+  /// manual | cron
+  trigger   String    @default("manual")
+
+  /// Cuantos cumplian el filtro y cuantos se llegaron a tasar.
+  lotesElegibles Int @default(0)
+  lotesPredichos Int @default(0)
+  /// De los tasados, cuantos llevaban fotos: es lo que separa una prediccion
+  /// buena de una a ciegas.
+  lotesConFotos  Int @default(0)
+  lotesEmbebidos Int @default(0)
+
+  /// Version del modelo que firmo estas predicciones.
+  modelVersion String?
+  costUsd      Decimal @default(0) @db.Decimal(8, 4)
+  error        String?
+  /// Traza de la pasada, como en los demas trabajos.
+  log          Json?
+
+  @@index([startedAt])
+  @@map("price_predict_runs")
+}
+
+/// La prediccion de un lote, con la version del modelo que la hizo.
+///
+/// Tabla aparte y no columnas en `AuctionListing` porque el mismo lote se
+/// vuelve a tasar cuando cambia el modelo, y conviene poder comparar que decia
+/// la version anterior antes de creerse la nueva.
+model LotPricePrediction {
+  lot          BigInt   @id
+  esperado     Int
+  p10          Int
+  p90          Int
+  /// (p90 - p10) / esperado. Cuanto mas alto, menos sabe el modelo.
+  incertidumbre Decimal  @db.Decimal(6, 3)
+  conImagenes  Boolean  @default(false)
+  modelVersion String
+  runId        String?
+  predictedAt  DateTime @default(now())
+
+  @@index([predictedAt])
+  @@index([modelVersion])
+  @@map("lot_price_predictions")
+}

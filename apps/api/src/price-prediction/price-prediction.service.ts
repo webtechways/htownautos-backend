@@ -118,8 +118,43 @@ export class PricePredictionService {
     const num = (v: unknown): number | null =>
       v === null || v === undefined ? null : Number(v);
 
-    const payload = {
+    const payload = this.payloadDeLote(listing, imageVector, prebids.length, imageCount);
+
+    const res = await this.call(payload);
+    const health = await this.health();
+
+    return {
       lot,
+      disponible: true,
+      esperado: res.esperado,
+      p10: res.p10,
+      p90: res.p90,
+      incertidumbre: res.incertidumbre ?? null,
+      modelVersion: res.modelVersion ?? 'desconocida',
+      entrenadoCon: health?.entrenado_con ?? 0,
+      faltan: this.missing(payload),
+      conImagenes: res.conImagenes === true,
+    };
+  }
+
+  /**
+   * Un lote de la base en la forma que espera el servicio de ML.
+   *
+   * Vive aqui y no en quien lo llama porque la prediccion de uno en uno y la
+   * masiva tienen que mandar EXACTAMENTE los mismos campos: si divergen, los
+   * precios de la rejilla y los del trabajo nocturno dejarian de coincidir sin
+   * que nada avise.
+   */
+  payloadDeLote(
+    listing: any,
+    imageVector: number[] | null,
+    prebidBidders: number,
+    imageCount: number,
+  ): Record<string, unknown> {
+    const num = (v: unknown): number | null =>
+      v === null || v === undefined ? null : Number(v);
+    return {
+      lot: String(listing.lotNumber),
       year: listing.year ?? null,
       make: listing.make ?? null,
       model: listing.modelGroup ?? null,
@@ -156,25 +191,33 @@ export class PricePredictionService {
       odometerBrand: listing.odometerBrand ?? null,
       vehicleType: listing.vehicleType ?? null,
       imageCount,
-      prebidBidders: prebids.length,
+      prebidBidders,
       ...(imageVector ? { imageVector } : {}),
     };
+  }
 
-    const res = await this.call(payload);
-    const health = await this.health();
+  /** El PCA que usa el modelo servido, para que el masivo no lo recalcule. */
+  pcaServido() {
+    return this.pcaDelModelo();
+  }
 
-    return {
-      lot,
-      disponible: true,
-      esperado: res.esperado,
-      p10: res.p10,
-      p90: res.p90,
-      incertidumbre: res.incertidumbre ?? null,
-      modelVersion: res.modelVersion ?? 'desconocida',
-      entrenadoCon: health?.entrenado_con ?? 0,
-      faltan: this.missing(payload),
-      conImagenes: res.conImagenes === true,
-    };
+  /** Version del modelo servido. */
+  async versionServida(): Promise<string | null> {
+    const h = await this.health();
+    return h?.version ?? null;
+  }
+
+  /** Predice muchos lotes de una llamada. Devuelve en el mismo orden. */
+  async predecirLote(payloads: Record<string, unknown>[]): Promise<any[]> {
+    if (!payloads.length) return [];
+    // El servicio devuelve { results: [...], modelVersion }.
+    const res = await this.call({ items: payloads }, '/predict/batch');
+    return res?.results ?? [];
+  }
+
+  /** Desempaqueta un vector guardado, para quien lo necesite fuera. */
+  vectorDeFila(vector: Uint8Array | Buffer | null, dims: number): number[] | null {
+    return this.unpack(vector as any, dims);
   }
 
   /**
@@ -266,9 +309,9 @@ export class PricePredictionService {
     return importantes.filter((k) => p[k] === null || p[k] === undefined);
   }
 
-  private async call(payload: unknown): Promise<any> {
+  private async call(payload: unknown, ruta = '/predict'): Promise<any> {
     try {
-      const res = await fetch(`${ML_URL}/predict`, {
+      const res = await fetch(`${ML_URL}${ruta}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),

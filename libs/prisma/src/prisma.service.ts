@@ -454,6 +454,18 @@ export class PrismaService implements OnModuleInit, OnModuleDestroy {
     return this.prisma.notification;
   }
 
+  get pricePredictConfig() {
+    return this.prisma.pricePredictConfig;
+  }
+
+  get pricePredictRun() {
+    return this.prisma.pricePredictRun;
+  }
+
+  get lotPricePrediction() {
+    return this.prisma.lotPricePrediction;
+  }
+
   get vehicleDocument() {
     return this.prisma.vehicleDocument;
   }
