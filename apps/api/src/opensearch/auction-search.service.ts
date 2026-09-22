@@ -6,6 +6,7 @@ import { RabbitMQService } from '@htownautos/rabbitmq';
 import { CopartImagesService, GALLERY_CACHE_QUEUE, codesForTitleCategories, deriveTitleCategory, allKnownCodes, geocodeZip, boundingBox, normalizeToken, houstonSaleDate } from '@htownautos/common';
 import type { TitleCategory, TitleOverrides, GalleryImage, GalleryResponse, GalleryCacheMessage } from '@htownautos/common';
 import { TitleMappingService } from '../title-mapping/title-mapping.service';
+import { PricePredictionService } from '../price-prediction/price-prediction.service';
 import { AuctionAnalysisType, Prisma } from '@prisma/client';
 import { SearchAuctionsDto } from './dto/search-auctions.dto';
 
@@ -88,6 +89,8 @@ export class AuctionSearchService {
     private readonly copartImages: CopartImagesService,
     private readonly syncService: AuctionSyncService,
     private readonly titleMapping: TitleMappingService,
+    // Solo para saber con que agrupacion de fotos se entreno el modelo servido.
+    private readonly precios: PricePredictionService,
   ) {}
 
   async search(dto: SearchAuctionsDto): Promise<AuctionSearchResult> {
@@ -133,7 +136,22 @@ export class AuctionSearchService {
     const titleOverrides = await this.titleMapping.getOverrides();
 
     // Build query
-    const query = this.buildQuery(dto, carfaxSourceIds, inspectableYardNames, titleOverrides);
+    // La agrupacion del modelo que sirve ahora. Si no hay modelo no existe el
+    // concepto de «listo», y devolver todo seria ensenar lotes que NO se pueden
+    // tasar: se corta aqui.
+    let servedPca: string | null = null;
+    if (dto.readyForPricing) {
+      servedPca = await this.precios.pcaServido();
+      if (!servedPca) {
+        return {
+          data: [],
+          meta: { page, limit, total: 0, totalPages: 0, hasNextPage: false, hasPreviousPage: false },
+        };
+      }
+    }
+
+    const query = this.buildQuery(
+      dto, carfaxSourceIds, inspectableYardNames, titleOverrides, undefined, servedPca);
 
     // Build sort
     const sort = this.buildSort(sortBy, sortOrder);
@@ -241,6 +259,7 @@ export class AuctionSearchService {
     inspectableYardNames?: string[],
     titleOverrides?: TitleOverrides,
     omitFacet?: FacetKey,
+    servedPca?: string | null,
   ): any {
     const must: any[] = [];
     const filter: any[] = [];
@@ -525,6 +544,13 @@ export class AuctionSearchService {
     // Sale light filter
     if (keep('saleLight') && dto.saleLight && dto.saleLight.length > 0) {
       filter.push({ terms: { 'saleLight.keyword': dto.saleLight } });
+    }
+
+    // «Listos para tasar»: tienen vector Y de la agrupacion que usa el modelo
+    // servido. Un vector `mean` no le vale a un modelo `slots`: no es peor,
+    // significa otra cosa, y el precio saldria inventado con total seguridad.
+    if (dto.readyForPricing && servedPca) {
+      filter.push({ term: { vectorPca: servedPca } });
     }
 
     // Buy-It-Now filter (only listings with a buy-it-now price > 0)

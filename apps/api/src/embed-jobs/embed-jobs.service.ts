@@ -1,6 +1,7 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '@htownautos/prisma';
 import { RunpodService, leerMetaPca } from '@htownautos/common';
+import { OpenSearchService, AUCTION_INDEX_NAME } from '@htownautos/opensearch';
 
 const CONFIG_ID = 'singleton';
 const POD_PREFIX = 'htownautos-embed';
@@ -25,6 +26,7 @@ export class EmbedJobsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly runpod: RunpodService,
+    private readonly openSearch: OpenSearchService,
   ) {}
 
   async config() {
@@ -678,6 +680,18 @@ export class EmbedJobsService {
       where: { id: runId },
       data: { lotsDone: { increment: guardados }, lastSeenAt: new Date() },
     }).catch(() => undefined);
+
+    // El buscador tiene que enterarse de que estos lotes ya se pueden tasar.
+    // Se actualiza solo ese campo y no el documento entero: reindexar el lote
+    // obligaria a releerlo de Postgres, y son cientos de miles.
+    if (items.length) {
+      await this.openSearch
+        .bulkUpdate(
+          AUCTION_INDEX_NAME,
+          items.map((it) => ({ id: `copart_${it.lot}`, doc: { vectorPca: pcaVersion } })),
+        )
+        .catch(() => undefined);
+    }
     return { guardados };
   }
 

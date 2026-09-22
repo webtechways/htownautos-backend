@@ -374,6 +374,17 @@ export class SearchAuctionsDto {
   @IsBoolean()
   discarded?: boolean;
 
+  @ApiPropertyOptional({
+    description:
+      'Solo lotes que el modelo puede tasar ya: sus fotos estan convertidas y ' +
+      'con la misma agrupacion que usa el modelo servido',
+  })
+  @IsOptional()
+  @Transform(({ value }) => value === 'true' || value === true)
+  @IsBoolean()
+  readyForPricing?: boolean;
+
+
   @ApiPropertyOptional({ description: 'When true, restrict results to lots located in yards that have physicalInspectionAvailable=true' })
   @IsOptional()
   @Transform(({ value }) => value === 'true' || value === true)

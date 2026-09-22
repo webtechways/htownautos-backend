@@ -5,6 +5,7 @@ import { ProxyService, CopartImagesService } from '@htownautos/common';
 import { OpenSearchLibModule } from '@htownautos/opensearch';
 import { TitleMappingModule } from '../title-mapping/title-mapping.module';
 import { AuctionAliasModule } from '../auction-alias/auction-alias.module';
+import { PricePredictionModule } from '../price-prediction/price-prediction.module';
 import { AuctionSearchService } from './auction-search.service';
 import { AuctionSearchController } from './auction-search.controller';
 import { AuctionFacetsService } from './auction-facets.service';
@@ -17,6 +18,7 @@ import { AuctionFacetsController } from './auction-facets.controller';
  */
 @Module({
   imports: [
+    PricePredictionModule,
     ConfigModule,
     PrismaModule,
     OpenSearchLibModule,

@@ -137,6 +137,32 @@ export class OpenSearchService implements OnModuleInit {
     }
   }
 
+  /**
+   * Cambia unos pocos campos de varios documentos sin reindexarlos enteros.
+   *
+   * Existe para los datos que se calculan DESPUES de indexar —el vector de las
+   * fotos, por ejemplo—: reindexar el lote entero por un campo obligaria a
+   * volver a leerlo de Postgres, y son cientos de miles.
+   */
+  async bulkUpdate(
+    indexName: string,
+    documentos: Array<{ id: string; doc: Record<string, unknown> }>,
+  ): Promise<number> {
+    if (!documentos.length) return 0;
+    const body = documentos.flatMap((d) => [
+      { update: { _index: indexName, _id: d.id } },
+      { doc: d.doc },
+    ]);
+    try {
+      const res = await this.client.bulk({ body, refresh: false });
+      const items = (res.body?.items ?? []) as any[];
+      return items.filter((i) => !i.update?.error).length;
+    } catch (e: any) {
+      this.logger.warn(`bulkUpdate en ${indexName}: ${e?.message}`);
+      return 0;
+    }
+  }
+
   async deleteDocument(indexName: string, id: string): Promise<boolean> {
     try {
       await this.client.delete({

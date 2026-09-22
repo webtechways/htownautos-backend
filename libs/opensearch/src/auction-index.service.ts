@@ -46,6 +46,12 @@ export class AuctionIndexService implements OnModuleInit {
       },
       mappings: {
         properties: {
+          // Agrupacion del vector de fotos de este lote ("slots4-64d", "mean-64d"…),
+          // o null si aun no se ha convertido. Se indexa el NOMBRE y no un
+          // booleano porque "listo" depende del modelo que este sirviendo: un
+          // vector `mean` no le sirve a un modelo entrenado con `slots`.
+          vectorPca: { type: 'keyword' },
+
           // === IDENTIFIERS ===
           id: { type: 'keyword' },
           source: { type: 'keyword' },

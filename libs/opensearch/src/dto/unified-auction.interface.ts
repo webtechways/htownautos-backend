@@ -87,6 +87,8 @@ export interface UnifiedAuction {
   geoPoint: { lat: number; lon: number } | null; // from locationZip centroid
 
   // Discard state (written on discard/un-discard, absent on legacy docs → treated as not discarded)
+  /** Agrupacion del vector de fotos ("slots4-64d"…), o null si no se ha convertido. */
+  vectorPca?: string | null;
   discarded?: boolean;
   discardReason?: string | null;
   discardedAt?: string | null;

@@ -130,9 +130,21 @@ export class AuctionSyncService {
 
       if (listings.length === 0) break;
 
+      // La agrupacion del vector de cada lote, en una sola consulta por tanda.
+      // Va aparte y no como `include` porque `LotImageVector` no tiene relacion
+      // declarada con `AuctionListing`: se unen por numero de lote.
+      const vectores = await this.prisma.lotImageVector.findMany({
+        where: { lotNumber: { in: listings.map((l) => l.lotNumber) }, dims: { gt: 0 } },
+        select: { lotNumber: true, pcaVersion: true },
+      });
+      const pcaPorLote = new Map(vectores.map((v) => [String(v.lotNumber), v.pcaVersion]));
+
       const documents = listings.map((listing) => ({
         id: `copart_${listing.lotNumber.toString()}`,
-        body: this.mapCopartToUnified(listing),
+        body: this.mapCopartToUnified({
+          ...listing,
+          vectorPca: pcaPorLote.get(String(listing.lotNumber)) ?? null,
+        } as any),
       }));
 
       const result = await this.openSearchService.bulkIndex(AUCTION_INDEX_NAME, documents);
@@ -326,6 +338,9 @@ export class AuctionSyncService {
         const g = geocodeZip(listing.locationZip);
         return g ? { lat: g.lat, lon: g.lon } : null;
       })(),
+
+      // Lo pone el join con lot_image_vectors; null = sin convertir todavia.
+      vectorPca: (listing as any).vectorPca ?? null,
 
       // Discard state — incremental: written each time a lot is discarded/un-discarded
       discarded: listing.discarded ?? false,
