@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '@htownautos/prisma';
 import { PricePredictionService } from './price-prediction.service';
+import { EmbedJobsService } from '../embed-jobs/embed-jobs.service';
 
 /**
  * Tasa en masa los lotes que todavia no se han subastado.
@@ -24,6 +25,7 @@ export class BulkPredictService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly precios: PricePredictionService,
+    private readonly embebido: EmbedJobsService,
   ) {}
 
   async config() {
@@ -82,6 +84,10 @@ export class BulkPredictService {
       if (cfg.redoOlderThanDays > 0) {
         motivos.push(`p."predictedAt" < now() - interval '${Number(cfg.redoOlderThanDays)} days'`);
       }
+      // Y SIEMPRE: si se taso sin fotos y ahora ya las tiene convertidas, vuelve
+      // a entrar. Sin esto, una prediccion a ciegas bloquea la buena hasta que
+      // caduque — justo al reves de lo que interesa.
+      motivos.push(`(p."conImagenes" = false AND v."lotNumber" IS NOT NULL AND v.dims > 0)`);
       w.push(`(${motivos.join(' OR ')})`);
     }
 
@@ -170,19 +176,49 @@ export class BulkPredictService {
       }).catch(() => undefined);
     };
 
+    const limite = t0 + Number(cfg.maxMinutes) * 60_000;
     const version = (await this.precios.versionServida()) ?? 'desconocida';
     const pca = await this.precios.pcaServido();
     await apuntar(`modelo ${version} · agrupacion ${pca ?? 'n/d'}`);
 
-    const filas: any[] = (await this.seleccionar(cfg, cfg.maxLotsPerRun, false)) as any[];
+    let filas: any[] = (await this.seleccionar(cfg, cfg.maxLotsPerRun, false)) as any[];
     await apuntar(`${filas.length} lotes seleccionados`);
+
+    // ── Convertir las fotos que falten ───────────────────────────────────────
+    // Un lote sin vector se tasaria a ciegas, y a ciegas no interesa: el precio
+    // sale peor y ademas ocupa el sitio del bueno. Asi que primero se convierten
+    // y despues se tasa lo que haya quedado listo.
+    if (cfg.photoMode === 'embeber') {
+      const faltan = await this.sinVector(filas.map((f) => BigInt(f.lot)));
+      if (faltan > 0) {
+        await this.prisma.pricePredictRun.update({
+          where: { id: runId }, data: { status: 'embedding' },
+        });
+        await apuntar(`${faltan} lotes sin fotos convertidas: se pide una tanda de GPU`);
+        const r = await this.embebido.requestRun(false).catch((e) => ({ ok: false, motivo: e?.message }));
+        if (!r.ok) {
+          await apuntar(`no se pudo pedir la tanda (${(r as any).motivo}); se sigue con lo que ya esta listo`);
+        } else {
+          const embebidos = await this.esperarEmbebido(limite, apuntar);
+          await this.prisma.pricePredictRun.update({
+            where: { id: runId }, data: { lotesEmbebidos: embebidos },
+          });
+          // La seleccion se rehace: los que acaban de recibir vector ya entran.
+          filas = (await this.seleccionar(cfg, cfg.maxLotsPerRun, false)) as any[];
+          await apuntar(`tras convertir: ${filas.length} lotes en cola de tasacion`);
+        }
+      }
+      await this.prisma.pricePredictRun.update({
+        where: { id: runId }, data: { status: 'predicting' },
+      });
+    }
     await this.prisma.pricePredictRun.update({
       where: { id: runId }, data: { lotesElegibles: filas.length, modelVersion: version },
     });
 
-    const limite = t0 + Number(cfg.maxMinutes) * 60_000;
     let predichos = 0;
     let conFotos = 0;
+    let saltados = 0;
     const tam = Math.max(1, Number(cfg.batchSize));
 
     for (let i = 0; i < filas.length; i += tam) {
@@ -191,11 +227,16 @@ export class BulkPredictService {
         break;
       }
       const trozo = filas.slice(i, i + tam).map((f) => BigInt(f.lot));
-      const { payloads, conVector } = await this.payloads(trozo, pca);
+      const { payloads, conVector, sinVector } = await this.payloads(trozo, pca, cfg.photoMode);
+      saltados += sinVector;
       if (!payloads.length) continue;
 
       const res = await this.precios.predecirLote(payloads);
-      const escritos = await this.guardarPredicciones(res, runId, version);
+      const conFoto = new Set(
+        payloads.filter((p) => Array.isArray((p as any).imageVector))
+          .map((p) => String((p as any).lot)),
+      );
+      const escritos = await this.guardarPredicciones(res, runId, version, conFoto);
       predichos += escritos;
       conFotos += conVector;
       await this.prisma.pricePredictRun.update({
@@ -205,7 +246,9 @@ export class BulkPredictService {
       if (i % (tam * 10) === 0) await apuntar(`${predichos} lotes tasados`);
     }
 
-    await apuntar(`fin: ${predichos} tasados, ${conFotos} con fotos`);
+    await apuntar(
+      `fin: ${predichos} tasados, ${conFotos} con fotos` +
+      (saltados ? `, ${saltados} saltados por no tener fotos convertidas` : ''));
     await this.prisma.pricePredictRun.update({
       where: { id: runId },
       data: { status: 'done', finishedAt: new Date(), lotesPredichos: predichos, lotesConFotos: conFotos },
@@ -215,8 +258,49 @@ export class BulkPredictService {
     });
   }
 
+  /** Cuantos de estos lotes no tienen vector utilizable. */
+  private async sinVector(lots: bigint[]): Promise<number> {
+    if (!lots.length) return 0;
+    const con = await this.prisma.lotImageVector.count({
+      where: { lotNumber: { in: lots }, dims: { gt: 0 } },
+    });
+    return lots.length - con;
+  }
+
+  /**
+   * Espera a que la tanda de GPU termine, sin pasarse del tiempo de la pasada.
+   *
+   * Se sondea en vez de encadenar promesas porque el trabajo de embebido lo
+   * ejecuta otro proceso —data-sync y el propio pod— y aqui solo se puede mirar
+   * el estado que va dejando en la base.
+   */
+  private async esperarEmbebido(limite: number, apuntar: (t: string) => Promise<void>) {
+    let hechos = 0;
+    let ultimoAviso = 0;
+    for (;;) {
+      if (Date.now() > limite) {
+        await apuntar('se acabo el tiempo de la pasada mientras convertia: se tasa lo que este listo');
+        return hechos;
+      }
+      const run = await this.prisma.embedJobRun.findFirst({
+        where: { status: { in: ['pending', 'provisioning', 'running'] } },
+        orderBy: { startedAt: 'desc' },
+      });
+      if (!run) {
+        await apuntar(`conversion terminada: ${hechos} lotes`);
+        return hechos;
+      }
+      hechos = run.lotsDone ?? hechos;
+      if (Date.now() - ultimoAviso > 120_000) {
+        ultimoAviso = Date.now();
+        await apuntar(`convirtiendo… ${hechos} lotes`);
+      }
+      await new Promise((r) => setTimeout(r, 30_000));
+    }
+  }
+
   /** Convierte un grupo de lotes en payloads para el servicio de ML. */
-  private async payloads(lots: bigint[], pca: string | null) {
+  private async payloads(lots: bigint[], pca: string | null, modo: string) {
     const [listings, vectores, prebids] = await Promise.all([
       this.prisma.auctionListing.findMany({ where: { lotNumber: { in: lots } } }),
       this.prisma.lotImageVector.findMany({
@@ -239,19 +323,27 @@ export class BulkPredictService {
 
     const payloads: Record<string, unknown>[] = [];
     let conVector = 0;
+    let sinVector = 0;
     for (const l of listings) {
       const v = porLote.get(String(l.lotNumber));
       // Un vector de otra agrupacion no es peor: significa otra cosa. Se
       // descarta, o el modelo devuelve un precio inventado con total seguridad.
       const sirve = !!v && v.dims > 0 && (!pca || !v.pcaVersion || v.pcaVersion === pca);
       const vec = sirve ? this.precios.vectorDeFila(v!.vector as any, v!.dims) : null;
+      // Sin fotos no se tasa, salvo que el modo lo pida expresamente. Guardar un
+      // precio a ciegas es peor que no guardar ninguno: ocupa el sitio del bueno
+      // y nadie distingue uno de otro mirando la cifra.
+      if (!vec && modo !== 'sinFotos') {
+        sinVector += 1;
+        continue;
+      }
       if (vec) conVector += 1;
       payloads.push(
         this.precios.payloadDeLote(l, vec, pujas.get(String(l.lotNumber)) ?? 0,
           this.contarFotos(l.galleryCache)),
       );
     }
-    return { payloads, conVector };
+    return { payloads, conVector, sinVector };
   }
 
   private contarFotos(gallery: unknown): number {
@@ -264,7 +356,16 @@ export class BulkPredictService {
     return 0;
   }
 
-  private async guardarPredicciones(res: any[], runId: string, version: string) {
+  /**
+   * `conImagenes` lo decide QUIEN MANDO el vector, no la respuesta.
+   *
+   * `/predict/batch` del servicio de ML no devuelve ese campo —solo lo hace
+   * `/predict`, de uno en uno— asi que leerlo de ahi marcaba como ciegas
+   * predicciones que si habian usado las fotos. Aqui se sabe con certeza.
+   */
+  private async guardarPredicciones(
+    res: any[], runId: string, version: string, conFoto: Set<string>,
+  ) {
     let n = 0;
     for (const r of res) {
       if (!r?.lot || r.esperado == null) continue;
@@ -275,12 +376,12 @@ export class BulkPredictService {
         create: {
           lot, esperado: Math.round(r.esperado), p10: Math.round(r.p10),
           p90: Math.round(r.p90), incertidumbre: r.incertidumbre ?? 0,
-          conImagenes: r.conImagenes === true, modelVersion: version, runId,
+          conImagenes: conFoto.has(String(r.lot)), modelVersion: version, runId,
         },
         update: {
           esperado: Math.round(r.esperado), p10: Math.round(r.p10),
           p90: Math.round(r.p90), incertidumbre: r.incertidumbre ?? 0,
-          conImagenes: r.conImagenes === true, modelVersion: version, runId,
+          conImagenes: conFoto.has(String(r.lot)), modelVersion: version, runId,
           predictedAt: new Date(),
         },
       }).then(() => { n += 1; }).catch(() => undefined);
