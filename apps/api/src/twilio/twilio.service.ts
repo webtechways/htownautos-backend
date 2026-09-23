@@ -1,6 +1,19 @@
 import { Injectable, Logger, BadRequestException } from '@nestjs/common';
 import { Twilio } from 'twilio';
 import { jwt } from 'twilio';
+import type { WhatsAppTemplateView } from '@htownautos/social';
+
+const TWILIO_CONTENT_API_URL = 'https://content.twilio.com/v1/Content';
+
+interface TwilioContentItem {
+  sid: string;
+  language?: string;
+  types?: Record<string, { body?: string }>;
+}
+
+interface TwilioContentListResponse {
+  contents?: TwilioContentItem[];
+}
 
 export interface AvailablePhoneNumber {
   phoneNumber: string;
@@ -263,30 +276,65 @@ export class TwilioService {
   }
 
   /**
+   * Points one Twilio number's SMS URL + status callback at our webhook —
+   * used by `POST /inbox/twilio/sync-webhooks` (`InboxService`) to fix up
+   * numbers that predate this suite or were added outside `purchaseNumber`
+   * (ported numbers, manual Twilio console changes).
+   */
+  async syncSmsWebhook(twilioSid: string, tenantId: string, phoneId: string): Promise<void> {
+    this.ensureClient();
+    const smsUrl = this.buildWebhookUrl('sms', tenantId, phoneId);
+    try {
+      await this.client.incomingPhoneNumbers(twilioSid).update({
+        smsUrl,
+        smsMethod: 'POST',
+        statusCallback: `${smsUrl}/status`,
+        statusCallbackMethod: 'POST',
+      });
+    } catch (error) {
+      this.logger.error(`Error syncing SMS webhook for ${twilioSid}: ${error.message}`);
+      throw new BadRequestException(`Failed to sync webhook: ${error.message}`);
+    }
+  }
+
+  /**
    * Send an SMS message
    * Uses messaging service if provided, otherwise uses from number
    */
   async sendSms(params: {
     to: string;
-    body: string;
+    /** Omitted for a WhatsApp Content API template send (`contentSid` set) — Twilio rejects `body` alongside it. */
+    body?: string;
     from?: string;
     messagingServiceSid?: string;
     statusCallback?: string;
+    /** Signed GET URLs — Twilio fetches each once to attach as MMS/WhatsApp media. */
+    mediaUrl?: string[];
+    /** WhatsApp Content API template (`HX…`) — mutually exclusive with `body`. */
+    contentSid?: string;
+    /** JSON-stringified `{"1": "...", "2": "..."}` — required alongside `contentSid` when the template has variables. */
+    contentVariables?: string;
   }): Promise<{ sid: string; status: string }> {
     this.ensureClient();
 
     if (!params.from && !params.messagingServiceSid) {
       throw new BadRequestException('Either from number or messagingServiceSid is required');
     }
+    if (!params.contentSid && params.body === undefined) {
+      throw new BadRequestException('Either body or contentSid is required');
+    }
 
     try {
       const message = await this.client.messages.create({
         to: params.to,
-        body: params.body,
+        ...(params.contentSid
+          ? { contentSid: params.contentSid, ...(params.contentVariables ? { contentVariables: params.contentVariables } : {}) }
+          : { body: params.body }),
         ...(params.messagingServiceSid
           ? { messagingServiceSid: params.messagingServiceSid }
           : { from: params.from }),
         ...(params.statusCallback && { statusCallback: params.statusCallback }),
+        ...(params.mediaUrl && params.mediaUrl.length > 0 && { mediaUrl: params.mediaUrl }),
       });
 
       this.logger.log(`SMS sent to ${params.to}, SID: ${message.sid}`);
@@ -299,6 +347,36 @@ export class TwilioService {
       this.logger.error(`Error sending SMS: ${error.message}`);
       throw new BadRequestException(`Failed to send SMS: ${error.message}`);
     }
+  }
+
+  /**
+   * Lists the tenant-wide Twilio WhatsApp Content API templates (`HX…` sids) —
+   * Content is account-level, not per-sender, so this ignores which phone
+   * number will send. Mapped onto `WhatsAppTemplateView` with `name = sid`
+   * (per CONTRACT.md — the sid is what `SendMessageRequest.template.name`
+   * must carry for a Twilio send). `status`/`category` have no equivalent in
+   * this basic listing endpoint (that's the separate Content Approval
+   * Requests API) — left as `'unknown'`/`'twilio_content'` rather than
+   * guessed.
+   */
+  async listWhatsAppContentTemplates(): Promise<WhatsAppTemplateView[]> {
+    const accountSid = process.env.TWILIO_ACCOUNT_SID;
+    const authToken = process.env.TWILIO_AUTH_TOKEN;
+    if (!accountSid || !authToken) {
+      this.logger.warn('No se pueden listar plantillas de Twilio: falta TWILIO_ACCOUNT_SID/TWILIO_AUTH_TOKEN');
+      return [];
+    }
+
+    const basicAuth = Buffer.from(`${accountSid}:${authToken}`).toString('base64');
+    const res = await fetch(`${TWILIO_CONTENT_API_URL}?PageSize=100`, { headers: { Authorization: `Basic ${basicAuth}` } });
+    if (!res.ok) throw new BadRequestException(`No se pudieron listar las plantillas de Twilio: status ${res.status}`);
+    const data = (await res.json()) as TwilioContentListResponse;
+
+    return (data.contents ?? []).map((c) => {
+      const bodyText = Object.values(c.types ?? {})[0]?.body ?? '';
+      const variableCount = (bodyText.match(/\{\{\d+\}\}/g) ?? []).length;
+      return { name: c.sid, language: c.language ?? '', category: 'twilio_content', status: 'unknown', bodyText, variableCount };
+    });
   }
 
   /**

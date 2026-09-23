@@ -418,6 +418,83 @@ export class PrismaService implements OnModuleInit, OnModuleDestroy {
     return this.prisma.socialGroupAccount;
   }
 
+  // Social Suite (Buffer clone + unified inbox)
+  get socialPostingSchedule() {
+    return this.prisma.socialPostingSchedule;
+  }
+
+  get socialGoal() {
+    return this.prisma.socialGoal;
+  }
+
+  get socialSettings() {
+    return this.prisma.socialSettings;
+  }
+
+  get socialMedia() {
+    return this.prisma.socialMedia;
+  }
+
+  get socialPost() {
+    return this.prisma.socialPost;
+  }
+
+  get socialPostTarget() {
+    return this.prisma.socialPostTarget;
+  }
+
+  get socialTag() {
+    return this.prisma.socialTag;
+  }
+
+  get socialTemplate() {
+    return this.prisma.socialTemplate;
+  }
+
+  get socialHashtagGroup() {
+    return this.prisma.socialHashtagGroup;
+  }
+
+  get socialIdeaGroup() {
+    return this.prisma.socialIdeaGroup;
+  }
+
+  get socialIdea() {
+    return this.prisma.socialIdea;
+  }
+
+  get socialFeed() {
+    return this.prisma.socialFeed;
+  }
+
+  get socialFeedItem() {
+    return this.prisma.socialFeedItem;
+  }
+
+  get socialComment() {
+    return this.prisma.socialComment;
+  }
+
+  get socialAccountMetricDaily() {
+    return this.prisma.socialAccountMetricDaily;
+  }
+
+  get socialStartPage() {
+    return this.prisma.socialStartPage;
+  }
+
+  get socialStartPageStat() {
+    return this.prisma.socialStartPageStat;
+  }
+
+  get inboxConversation() {
+    return this.prisma.inboxConversation;
+  }
+
+  get inboxMessage() {
+    return this.prisma.inboxMessage;
+  }
+
   get partOrder() {
     return this.prisma.partOrder;
   }

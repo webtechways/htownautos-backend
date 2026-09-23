@@ -47,6 +47,8 @@ export const API_SCOPE_RESOURCES: ApiScopeResource[] = [
   { slug: 'sms', label: 'SMS', description: 'SMS messages' },
   { slug: 'email-messages', label: 'Email Messages', description: 'Email thread history' },
   { slug: 'social-accounts', label: 'Social Accounts', description: 'Connected social media accounts' },
+  { slug: 'social', label: 'Social Suite', description: 'Social Suite: posts, media, organize, comments, insights, start pages, settings' },
+  { slug: 'inbox', label: 'Unified Inbox', description: 'Unified inbox: SMS/MMS, WhatsApp and social DMs' },
 
   // — Shipping —
   { slug: 'shippo', label: 'Shipping (Shippo)', description: 'Addresses, rates, labels, tracking, pickups' },

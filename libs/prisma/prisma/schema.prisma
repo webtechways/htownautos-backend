@@ -564,6 +564,27 @@ model Tenant {
   depositReleaseRequests  DepositReleaseRequest[]
   contactMessages         ContactMessage[]
 
+  // Social Suite (Buffer clone + unified inbox)
+  socialPostingSchedules    SocialPostingSchedule[]
+  socialGoals               SocialGoal[]
+  socialSettings            SocialSettings?
+  socialMediaItems          SocialMedia[]
+  socialPosts               SocialPost[]
+  socialPostTargets         SocialPostTarget[]
+  socialTags                SocialTag[]
+  socialTemplates           SocialTemplate[]
+  socialHashtagGroups       SocialHashtagGroup[]
+  socialIdeaGroups          SocialIdeaGroup[]
+  socialIdeas               SocialIdea[]
+  socialFeeds               SocialFeed[]
+  socialFeedItems           SocialFeedItem[]
+  socialComments            SocialComment[]
+  socialAccountMetricsDaily SocialAccountMetricDaily[]
+  socialStartPages          SocialStartPage[]
+  socialStartPageStats      SocialStartPageStat[]
+  inboxConversations        InboxConversation[]
+  inboxMessages             InboxMessage[]
+
   @@index([clerkOrgId])
   @@index([slug])
   @@index([subdomain])
@@ -674,37 +695,43 @@ model RolePermission {
 }
 
 model TenantUser {
-  id                        String             @id @default(uuid())
-  tenantId                  String
-  userId                    String
-  username                  String? // username for tenant email: username@subdomain.htownautos.com (nullable for migration)
-  tenantEmail               String? // computed: username@subdomain.htownautos.com
-  extension                 String? // Phone extension number (e.g., "101", "102")
-  permissions               Json?
-  isActive                  Boolean            @default(true)
-  createdAt                 DateTime           @default(now())
-  updatedAt                 DateTime           @updatedAt
-  roleId                    String
-  acceptedAt                DateTime?
-  invitationCode            String?            @unique
-  invitationSentAt          DateTime?
-  invitedBy                 String?
-  status                    String             @default("pending")
-  removedAt                 DateTime?
-  role                      Role               @relation(fields: [roleId], references: [id])
-  tenant                    Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  user                      User               @relation(fields: [userId], references: [id], onDelete: Cascade)
-  buyersAsSalesperson       Buyer[]            @relation("BuyerSalesperson")
-  buyersAsBdc               Buyer[]            @relation("BuyerBdcAgent")
-  tasksAssigned             Task[]             @relation("TaskAssignedTo")
-  tasksCreated              Task[]             @relation("TaskCreatedBy")
-  notesCreated              Note[]             @relation("NoteCreatedBy")
-  phoneCalls                PhoneCall[]        @relation("PhoneCallCaller")
-  phoneCallsTransferredTo   PhoneCall[]        @relation("PhoneCallTransferredTo")
-  phoneCallsTransferredFrom PhoneCall[]        @relation("PhoneCallTransferredFrom")
-  smsMessages               SmsMessage[]       @relation("SmsMessageSender")
-  emailMessages             EmailMessage[]     @relation("EmailMessageSender")
-  twilioPhoneNumber         TwilioPhoneNumber?
+  id                         String              @id @default(uuid())
+  tenantId                   String
+  userId                     String
+  username                   String? // username for tenant email: username@subdomain.htownautos.com (nullable for migration)
+  tenantEmail                String? // computed: username@subdomain.htownautos.com
+  extension                  String? // Phone extension number (e.g., "101", "102")
+  permissions                Json?
+  isActive                   Boolean             @default(true)
+  createdAt                  DateTime            @default(now())
+  updatedAt                  DateTime            @updatedAt
+  roleId                     String
+  acceptedAt                 DateTime?
+  invitationCode             String?             @unique
+  invitationSentAt           DateTime?
+  invitedBy                  String?
+  status                     String              @default("pending")
+  removedAt                  DateTime?
+  role                       Role                @relation(fields: [roleId], references: [id])
+  tenant                     Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user                       User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  buyersAsSalesperson        Buyer[]             @relation("BuyerSalesperson")
+  buyersAsBdc                Buyer[]             @relation("BuyerBdcAgent")
+  tasksAssigned              Task[]              @relation("TaskAssignedTo")
+  tasksCreated               Task[]              @relation("TaskCreatedBy")
+  notesCreated               Note[]              @relation("NoteCreatedBy")
+  phoneCalls                 PhoneCall[]         @relation("PhoneCallCaller")
+  phoneCallsTransferredTo    PhoneCall[]         @relation("PhoneCallTransferredTo")
+  phoneCallsTransferredFrom  PhoneCall[]         @relation("PhoneCallTransferredFrom")
+  smsMessages                SmsMessage[]        @relation("SmsMessageSender")
+  emailMessages              EmailMessage[]      @relation("EmailMessageSender")
+  twilioPhoneNumber          TwilioPhoneNumber?
+  socialMediaCreated         SocialMedia[]       @relation("SocialMediaCreatedBy")
+  socialPostsCreated         SocialPost[]        @relation("SocialPostCreatedBy")
+  socialPostsApproved        SocialPost[]        @relation("SocialPostApprovedBy")
+  socialIdeasCreated         SocialIdea[]        @relation("SocialIdeaCreatedBy")
+  inboxConversationsAssigned InboxConversation[] @relation("InboxConversationAssignedTo")
+  inboxMessagesSent          InboxMessage[]      @relation("InboxMessageSentBy")
 
   @@unique([tenantId, userId])
   @@unique([tenantId, username])
@@ -927,6 +954,7 @@ model Buyer {
   depositReleaseRequests   DepositReleaseRequest[]
   contactMessages          ContactMessage[]
   matchExclusions          BuyerMatchExclusion[]
+  inboxConversations       InboxConversation[]
 
   @@unique([tenantId, phoneMain])
   @@index([tenantId])
@@ -2687,7 +2715,7 @@ model SmsMessage {
 
   // Participants
   senderId String? // TenantUser who sent (null for inbound from buyer)
-  buyerId  String
+  buyerId  String? // nullable: inbound SMS from an unknown (not-yet-linked) number has no buyer
 
   // Message details
   direction   String // inbound, outbound
@@ -2720,9 +2748,10 @@ model SmsMessage {
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
 
-  tenant Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  sender TenantUser? @relation("SmsMessageSender", fields: [senderId], references: [id])
-  buyer  Buyer       @relation(fields: [buyerId], references: [id], onDelete: Cascade)
+  tenant       Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  sender       TenantUser?   @relation("SmsMessageSender", fields: [senderId], references: [id])
+  buyer        Buyer?        @relation(fields: [buyerId], references: [id], onDelete: SetNull)
+  inboxMessage InboxMessage?
 
   @@index([tenantId])
   @@index([senderId])
@@ -2842,9 +2871,10 @@ model TwilioPhoneNumber {
   updatedAt DateTime @updatedAt
 
   // Relations
-  tenant     Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  assignedTo TenantUser? @relation(fields: [assignedToId], references: [id], onDelete: SetNull)
-  callFlow   CallFlow?   @relation(fields: [callFlowId], references: [id], onDelete: SetNull)
+  tenant             Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  assignedTo         TenantUser?         @relation(fields: [assignedToId], references: [id], onDelete: SetNull)
+  callFlow           CallFlow?           @relation(fields: [callFlowId], references: [id], onDelete: SetNull)
+  inboxConversations InboxConversation[]
 
   @@index([tenantId])
   @@index([phoneNumber])
@@ -3096,18 +3126,20 @@ model CopartStaging {
 }
 
 model ShortUrl {
-  id          String    @id @default(uuid())
-  code        String    @unique
-  originalUrl String
-  tenantId    String
-  createdBy   String?
-  clicks      Int       @default(0)
-  expiresAt   DateTime?
-  createdAt   DateTime  @default(now())
+  id                 String    @id @default(uuid())
+  code               String    @unique
+  originalUrl        String
+  tenantId           String
+  createdBy          String?
+  clicks             Int       @default(0)
+  expiresAt          DateTime?
+  createdAt          DateTime  @default(now())
+  socialPostTargetId String? // link back to the SocialPostTarget whose published text this shortened URL came from
 
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@index([tenantId])
+  @@index([socialPostTargetId])
   @@map("short_urls")
 }
 
@@ -3626,28 +3658,40 @@ model Investment {
 // ─── Social Media ─────────────────────────────────────────
 
 model SocialAccount {
-  id                String    @id @default(uuid())
-  tenantId          String
-  platform          String // facebook, instagram, tiktok, youtube, linkedin, pinterest, threads, bluesky, gbp
-  platformAccountId String // external account/page ID from the platform
-  name              String // display name (page name, handle, etc.)
-  username          String? // @handle if applicable
-  avatarUrl         String? // profile picture URL
-  accessToken       String? // OAuth access token (encrypted at app level)
-  refreshToken      String? // OAuth refresh token (encrypted at app level)
-  tokenExpiresAt    DateTime? // when the access token expires
-  scopes            String[]  @default([]) // granted OAuth scopes
-  pageId            String? // for Facebook Pages (page ID vs user ID)
-  isActive          Boolean   @default(true)
-  lastSyncAt        DateTime?
-  lastErrorAt       DateTime?
-  lastErrorMsg      String?
-  metaValue         Json? // platform-specific extra data
-  createdAt         DateTime  @default(now())
-  updatedAt         DateTime  @updatedAt
+  id                  String    @id @default(uuid())
+  tenantId            String
+  platform            String // facebook, instagram, tiktok, youtube, linkedin, pinterest, threads, bluesky, gbp
+  platformAccountId   String // external account/page ID from the platform
+  name                String // display name (page name, handle, etc.)
+  username            String? // @handle if applicable
+  avatarUrl           String? // profile picture URL
+  accessToken         String? // OAuth access token (encrypted at app level)
+  refreshToken        String? // OAuth refresh token (encrypted at app level)
+  tokenExpiresAt      DateTime? // when the access token expires
+  scopes              String[]  @default([]) // granted OAuth scopes
+  pageId              String? // for Facebook Pages (page ID vs user ID)
+  isActive            Boolean   @default(true)
+  lastSyncAt          DateTime?
+  lastErrorAt         DateTime?
+  lastErrorMsg        String?
+  metaValue           Json? // platform-specific extra data
+  accountType         String? // page | group | business | creator | personal | profile | organization | channel | location | phone_number
+  publishMethod       String    @default("api") // api | reminder | none
+  status              String    @default("active") // active | expired | error | disconnected
+  profileUrl          String?
+  encryptedSecrets    String? // AES-256-GCM blob (v1:<iv>:<tag>:<ct>); supersedes accessToken/refreshToken going forward
+  webhookSubscribedAt DateTime?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
 
-  tenant Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  groups SocialGroupAccount[]
+  tenant             Tenant                     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  groups             SocialGroupAccount[]
+  postingSchedule    SocialPostingSchedule?
+  goal               SocialGoal?
+  postTargets        SocialPostTarget[]
+  comments           SocialComment[]
+  metricsDaily       SocialAccountMetricDaily[]
+  inboxConversations InboxConversation[]
 
   @@unique([tenantId, platform, platformAccountId])
   @@index([tenantId])
@@ -3768,6 +3812,465 @@ model SocialGroupAccount {
 
   @@unique([socialGroupId, socialAccountId])
   @@map("social_group_accounts")
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Social Suite — Buffer clone (compose/schedule/publish/organize/insights)
+// + unified inbox for every DM channel and every Twilio number.
+// Wire contract: docs/social-suite/contract.ts
+// ─────────────────────────────────────────────────────────────────────────
+
+/// Cola de publicacion de un canal: dias/horas fijos + timezone. 1:1 con SocialAccount.
+model SocialPostingSchedule {
+  id        String   @id @default(uuid())
+  tenantId  String
+  accountId String   @unique
+  timezone  String   @default("America/Chicago")
+  paused    Boolean  @default(false)
+  slots     Json     @default("[]") // ScheduleSlot[] — { day: 0..6, time: "HH:mm" }
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant  Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  account SocialAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@map("social_posting_schedules")
+}
+
+/// Meta semanal de publicaciones por canal. 1:1 con SocialAccount.
+model SocialGoal {
+  id           String   @id @default(uuid())
+  tenantId     String
+  accountId    String   @unique
+  postsPerWeek Int      @default(3)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  tenant  Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  account SocialAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@map("social_goals")
+}
+
+/// Configuracion del tenant para el Social Suite. Fila unica (lazy: se crea al primer GET).
+model SocialSettings {
+  id               String   @id @default(uuid())
+  tenantId         String   @unique
+  approvalRequired Boolean  @default(false)
+  defaultTimezone  String   @default("America/Chicago")
+  shortenLinks     Boolean  @default(false)
+  utmEnabled       Boolean  @default(false)
+  utmSource        String?
+  utmMedium        String   @default("social")
+  utmCampaign      String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@map("social_settings")
+}
+
+/// Archivo (imagen/video/gif/documento) de la libreria de medios del Social Suite.
+/// `key` es la llave S3 en el bucket privado (prefijo social/<tenantId>/).
+model SocialMedia {
+  id           String   @id @default(uuid())
+  tenantId     String
+  key          String   @unique
+  kind         String // image | video | gif | document
+  mimeType     String
+  fileName     String?
+  sizeBytes    Int
+  width        Int?
+  height       Int?
+  durationSec  Float?
+  altText      String?
+  thumbnailKey String?
+  createdById  String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  tenant    Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdBy TenantUser? @relation("SocialMediaCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@index([tenantId])
+  @@map("social_media")
+}
+
+/// Publicacion compuesta por el usuario: texto + medios base que cada SocialPostTarget puede sobreescribir.
+model SocialPost {
+  id            String    @id @default(uuid())
+  tenantId      String
+  status        String    @default("draft") // draft | pending_approval | scheduled | publishing | published | partial | failed
+  content       String    @db.Text
+  mediaIds      String[]  @default([])
+  scheduleMode  String    @default("draft") // draft | queue | next | now | custom
+  aiGenerated   Boolean   @default(false)
+  ideaId        String?
+  createdById   String?
+  approvedById  String?
+  approvedAt    DateTime?
+  rejectionNote String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  tenant     Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  idea       SocialIdea?        @relation(fields: [ideaId], references: [id], onDelete: SetNull)
+  createdBy  TenantUser?        @relation("SocialPostCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  approvedBy TenantUser?        @relation("SocialPostApprovedBy", fields: [approvedById], references: [id], onDelete: SetNull)
+  targets    SocialPostTarget[]
+  tags       SocialTag[]
+
+  @@index([tenantId])
+  @@index([tenantId, status])
+  @@map("social_posts")
+}
+
+/// Un canal de destino de un SocialPost: su propio contenido/medios opcionales, estado de
+/// publicacion y metricas. La unidad real que el publisher de data-sync reclama y publica.
+model SocialPostTarget {
+  id               String    @id @default(uuid())
+  tenantId         String
+  postId           String
+  accountId        String
+  status           String    @default("draft") // draft | pending_approval | scheduled | publishing | published | failed | reminder_due | cancelled
+  content          String?   @db.Text
+  mediaOverride    Json?
+  options          Json      @default("{}")
+  thread           Json      @default("[]")
+  firstComment     String?
+  scheduledAt      DateTime?
+  slotted          Boolean   @default(false)
+  publishedAt      DateTime?
+  externalId       String?
+  externalUrl      String?
+  error            String?
+  attempts         Int       @default(0)
+  lockedAt         DateTime?
+  nextAttemptAt    DateTime?
+  metrics          Json?
+  metricsUpdatedAt DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  tenant   Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  post     SocialPost      @relation(fields: [postId], references: [id], onDelete: Cascade)
+  account  SocialAccount   @relation(fields: [accountId], references: [id])
+  comments SocialComment[]
+
+  @@index([status, scheduledAt])
+  @@index([tenantId, accountId, scheduledAt])
+  @@map("social_post_targets")
+}
+
+/// Etiqueta de tenant para posts e ideas.
+model SocialTag {
+  id        String   @id @default(uuid())
+  tenantId  String
+  name      String
+  color     String   @default("#6366F1")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  posts  SocialPost[]
+  ideas  SocialIdea[]
+
+  @@unique([tenantId, name])
+  @@index([tenantId])
+  @@map("social_tags")
+}
+
+/// Plantilla de texto reutilizable. El GET del endpoint le suma ~12 built-ins en memoria.
+model SocialTemplate {
+  id        String   @id @default(uuid())
+  tenantId  String
+  name      String
+  content   String   @db.Text
+  category  String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@map("social_templates")
+}
+
+/// Grupo de hashtags reutilizable (texto libre separado por espacios, cada uno con #).
+model SocialHashtagGroup {
+  id        String   @id @default(uuid())
+  tenantId  String
+  name      String
+  hashtags  String   @db.Text
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@map("social_hashtag_groups")
+}
+
+/// Columna del tablero de ideas (To Do / In Progress / Done, creadas en el primer GET).
+model SocialIdeaGroup {
+  id        String   @id @default(uuid())
+  tenantId  String
+  name      String
+  position  Float    @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  ideas  SocialIdea[]
+
+  @@index([tenantId])
+  @@map("social_idea_groups")
+}
+
+/// Idea de contenido en el tablero. `groupId` null = columna "Unassigned".
+model SocialIdea {
+  id          String   @id @default(uuid())
+  tenantId    String
+  groupId     String?
+  title       String
+  content     String   @db.Text
+  mediaIds    String[] @default([])
+  position    Float    @default(0)
+  sourceUrl   String?
+  createdById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  tenant    Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  group     SocialIdeaGroup? @relation(fields: [groupId], references: [id], onDelete: SetNull)
+  createdBy TenantUser?      @relation("SocialIdeaCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  tags      SocialTag[]
+  posts     SocialPost[]
+
+  @@index([tenantId])
+  @@index([tenantId, groupId])
+  @@map("social_ideas")
+}
+
+/// Feed RSS/Atom que el tenant sigue para inspirarse al crear posts.
+model SocialFeed {
+  id            String    @id @default(uuid())
+  tenantId      String
+  url           String
+  title         String?
+  siteUrl       String?
+  lastFetchedAt DateTime?
+  lastError     String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  tenant Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  items  SocialFeedItem[]
+
+  @@unique([tenantId, url])
+  @@index([tenantId])
+  @@map("social_feeds")
+}
+
+model SocialFeedItem {
+  id          String    @id @default(uuid())
+  tenantId    String
+  feedId      String
+  guid        String
+  title       String
+  link        String
+  summary     String?   @db.Text
+  imageUrl    String?
+  publishedAt DateTime?
+  createdAt   DateTime  @default(now())
+
+  tenant Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  feed   SocialFeed @relation(fields: [feedId], references: [id], onDelete: Cascade)
+
+  @@unique([feedId, guid])
+  @@index([tenantId])
+  @@map("social_feed_items")
+}
+
+/// Comentario/mencion/review normalizado de cualquier plataforma social, ingerido por webhook o poll.
+model SocialComment {
+  id                String    @id @default(uuid())
+  tenantId          String
+  accountId         String
+  platform          String
+  kind              String // comment | mention | review
+  status            String    @default("open") // open | done
+  externalId        String
+  parentId          String?
+  externalParentId  String?
+  externalPostId    String?
+  postTargetId      String?
+  postPreview       Json?
+  authorName        String
+  authorHandle      String?
+  authorAvatarUrl   String?
+  authorExternalId  String?
+  body              String    @db.Text
+  permalink         String?
+  rating            Int?
+  fromUs            Boolean   @default(false)
+  isHidden          Boolean   @default(false)
+  likedByUs         Boolean   @default(false)
+  repliedAt         DateTime?
+  platformCreatedAt DateTime
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  tenant     Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  account    SocialAccount     @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  parent     SocialComment?    @relation("SocialCommentReplies", fields: [parentId], references: [id], onDelete: SetNull)
+  replies    SocialComment[]   @relation("SocialCommentReplies")
+  postTarget SocialPostTarget? @relation(fields: [postTargetId], references: [id], onDelete: SetNull)
+
+  @@unique([accountId, externalId])
+  @@index([tenantId, kind, status, platformCreatedAt])
+  @@map("social_comments")
+}
+
+/// Metricas diarias por cuenta (followers/impressions/...), una fila por dia.
+model SocialAccountMetricDaily {
+  id           String   @id @default(uuid())
+  tenantId     String
+  accountId    String
+  date         DateTime @db.Date
+  followers    Int?
+  impressions  Int?
+  reach        Int?
+  engagements  Int?
+  profileViews Int?
+  videoViews   Int?
+  clicks       Int?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  tenant  Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  account SocialAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@unique([accountId, date])
+  @@index([tenantId])
+  @@map("social_account_metrics_daily")
+}
+
+/// Pagina "link in bio" publica del tenant.
+model SocialStartPage {
+  id            String   @id @default(uuid())
+  tenantId      String
+  slug          String   @unique
+  title         String
+  bio           String?
+  avatarMediaId String?
+  theme         Json     @default("{}")
+  blocks        Json     @default("[]")
+  published     Boolean  @default(false)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  tenant Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  stats  SocialStartPageStat[]
+
+  @@index([tenantId])
+  @@map("social_start_pages")
+}
+
+/// Agregado diario de vistas/clicks de una start page, por bloque (blockId "" = la pagina entera).
+model SocialStartPageStat {
+  id        String   @id @default(uuid())
+  tenantId  String
+  pageId    String
+  date      DateTime @db.Date
+  blockId   String   @default("")
+  views     Int      @default(0)
+  clicks    Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  page   SocialStartPage @relation(fields: [pageId], references: [id], onDelete: Cascade)
+
+  @@unique([pageId, date, blockId])
+  @@index([tenantId])
+  @@map("social_start_page_stats")
+}
+
+/// Bandeja unificada: una conversacion por (tenant, canal, remitente-nuestro, contacto).
+/// Cubre SMS/MMS (Twilio), WhatsApp y los DMs de cada red social conectada.
+model InboxConversation {
+  id                  String    @id @default(uuid())
+  tenantId            String
+  channel             String // sms | whatsapp | messenger | instagram | x | bluesky | mastodon
+  provider            String // twilio | meta | x | bluesky | mastodon
+  senderKind          String // twilio_number | social_account
+  senderKey           String // twilioPhoneNumberId o socialAccountId, denormalizado para la unique key
+  socialAccountId     String?
+  twilioPhoneNumberId String?
+  contactExternalId   String
+  contactName         String?
+  contactHandle       String?
+  contactPhone        String?
+  contactAvatarUrl    String?
+  buyerId             String?
+  status              String    @default("open") // open | done
+  assignedToId        String?
+  unreadCount         Int       @default(0)
+  lastMessageAt       DateTime?
+  lastMessagePreview  String?
+  lastDirection       String?
+  lastInboundAt       DateTime?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  tenant            Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  socialAccount     SocialAccount?     @relation(fields: [socialAccountId], references: [id], onDelete: SetNull)
+  twilioPhoneNumber TwilioPhoneNumber? @relation(fields: [twilioPhoneNumberId], references: [id], onDelete: SetNull)
+  buyer             Buyer?             @relation(fields: [buyerId], references: [id], onDelete: SetNull)
+  assignedTo        TenantUser?        @relation("InboxConversationAssignedTo", fields: [assignedToId], references: [id], onDelete: SetNull)
+  messages          InboxMessage[]
+
+  @@unique([tenantId, channel, senderKey, contactExternalId])
+  @@index([tenantId, status, lastMessageAt])
+  @@index([assignedToId])
+  @@index([buyerId])
+  @@map("inbox_conversations")
+}
+
+/// Un mensaje dentro de una InboxConversation. Idempotente en (channel, externalId).
+/// `smsMessageId` la enlaza 1:1 con la fila espejo en SmsMessage cuando channel = "sms".
+model InboxMessage {
+  id                String    @id @default(uuid())
+  tenantId          String
+  conversationId    String
+  channel           String
+  direction         String // inbound | outbound
+  body              String?   @db.Text
+  attachments       Json      @default("[]")
+  status            String // queued | sent | delivered | read | failed | received
+  error             String?
+  sentById          String?
+  externalId        String?
+  smsMessageId      String?   @unique
+  platformCreatedAt DateTime
+  deliveredAt       DateTime?
+  readAt            DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  tenant       Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  conversation InboxConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  sentBy       TenantUser?       @relation("InboxMessageSentBy", fields: [sentById], references: [id], onDelete: SetNull)
+  smsMessage   SmsMessage?       @relation(fields: [smsMessageId], references: [id], onDelete: SetNull)
+
+  @@unique([channel, externalId])
+  @@index([tenantId])
+  @@index([conversationId])
+  @@map("inbox_messages")
 }
 
 /// Customer order for parts (e-commerce)
@@ -4441,7 +4944,7 @@ model EmbedJobConfig {
 
   /// Hora local (Central) a la que arranca. Los lotes se cachean con dias de
   /// antelacion, asi que de madrugada llega de sobra.
-  cronHour Int @default(3)
+  cronHour       Int @default(3)
   /// Cada cuantas horas se repite. 24 o mas = una vez al dia a `cronHour`, el
   /// comportamiento de siempre. Menos = cada N horas, sin mirar la hora: los
   /// remates son a todas horas y un lote que se subasta a las 14:00 no lo
@@ -4891,9 +5394,9 @@ model PricePredictConfig {
   /// conVector   solo lotes que ya tienen vector — no gasta GPU
   /// embeber     los que falten se mandan primero al pod
   /// sinFotos    se predice igual, sin fotos, peor y mas barato
-  photoMode          String @default("embeber")
+  photoMode      String @default("embeber")
   /// Tope de lotes a embeber en una pasada, aparte del tope de prediccion.
-  maxLotsToEmbed     Int    @default(5000)
+  maxLotsToEmbed Int    @default(5000)
 
   // ── Limites de la pasada ──────────────────────────────────────────────────
   maxLotsPerRun    Int     @default(20000)
@@ -4917,13 +5420,13 @@ model PricePredictConfig {
 
 /// Una pasada de prediccion masiva.
 model PricePredictRun {
-  id        String    @id @default(uuid())
-  startedAt DateTime  @default(now())
+  id         String    @id @default(uuid())
+  startedAt  DateTime  @default(now())
   finishedAt DateTime?
   /// pending | embedding | predicting | done | failed | aborted
-  status    String    @default("pending")
+  status     String    @default("pending")
   /// manual | cron
-  trigger   String    @default("manual")
+  trigger    String    @default("manual")
 
   /// Cuantos cumplian el filtro y cuantos se llegaron a tasar.
   lotesElegibles Int @default(0)
@@ -4950,16 +5453,16 @@ model PricePredictRun {
 /// vuelve a tasar cuando cambia el modelo, y conviene poder comparar que decia
 /// la version anterior antes de creerse la nueva.
 model LotPricePrediction {
-  lot          BigInt   @id
-  esperado     Int
-  p10          Int
-  p90          Int
+  lot           BigInt   @id
+  esperado      Int
+  p10           Int
+  p90           Int
   /// (p90 - p10) / esperado. Cuanto mas alto, menos sabe el modelo.
   incertidumbre Decimal  @db.Decimal(6, 3)
-  conImagenes  Boolean  @default(false)
-  modelVersion String
-  runId        String?
-  predictedAt  DateTime @default(now())
+  conImagenes   Boolean  @default(false)
+  modelVersion  String
+  runId         String?
+  predictedAt   DateTime @default(now())
 
   @@index([predictedAt])
   @@index([modelVersion])

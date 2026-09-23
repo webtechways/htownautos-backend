@@ -9,8 +9,10 @@ import {
   HttpStatus,
   Logger,
   Res,
+  Req,
   Headers,
   Header,
+  ForbiddenException,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiParam, ApiExcludeEndpoint } from '@nestjs/swagger';
 import * as express from 'express';
@@ -20,6 +22,7 @@ import { TwimlGeneratorService, CallContext } from '../call-flow/twiml-generator
 import { CallFlowStep, CallFlowStepType, MenuStepConfig } from '../call-flow/dto/call-flow.dto';
 import { PhoneCallService } from '../phone-call/phone-call.service';
 import { SmsService } from '../sms/sms.service';
+import { TwilioService } from './twilio.service';
 
 // Twilio Voice Webhook DTO (subset of Twilio's webhook payload)
 interface TwilioVoiceWebhookDto {
@@ -69,6 +72,8 @@ interface TwilioSmsWebhookDto {
   ToCountry?: string;
   MediaUrl0?: string;
   MediaContentType0?: string;
+  /** Twilio sends `MediaUrl<n>`/`MediaContentType<n>` for every attachment, n = 0..NumMedia-1. */
+  [key: string]: string | undefined;
 }
 
 // Twilio Status Callback DTO
@@ -96,7 +101,26 @@ export class TwilioWebhookController {
     private readonly twimlGenerator: TwimlGeneratorService,
     private readonly phoneCallService: PhoneCallService,
     private readonly smsService: SmsService,
+    private readonly twilioService: TwilioService,
   ) {}
+
+  /**
+   * Validates `X-Twilio-Signature` against the public webhook URL (§3.7 of
+   * docs/social-suite/CONTRACT.md). `TWILIO_VALIDATE_SIGNATURE=false` is an
+   * emergency escape hatch — kept default-on. Throws 403 on mismatch.
+   */
+  private assertValidTwilioSignature(req: express.Request, signature: string | undefined): void {
+    if (process.env.TWILIO_VALIDATE_SIGNATURE === 'false') return;
+
+    const base = process.env.PUBLIC_API_URL || `${req.headers['x-forwarded-proto'] || req.protocol}://${req.headers['x-forwarded-host'] || req.get('host')}`;
+    const url = `${base}${req.originalUrl.split('?')[0]}`;
+    const params = (req.body ?? {}) as Record<string, string>;
+
+    if (!signature || !this.twilioService.validateWebhookSignature(signature, url, params)) {
+      this.logger.warn(`Firma de Twilio inválida para ${url}`);
+      throw new ForbiddenException('Invalid Twilio signature');
+    }
+  }
 
   /**
    * Build call context from webhook payload
@@ -1134,21 +1158,17 @@ export class TwilioWebhookController {
     @Param('phoneId') phoneId: string,
     @Body() payload: TwilioSmsWebhookDto,
     @Headers('x-twilio-signature') twilioSignature: string,
+    @Req() req: express.Request,
     @Res() res: express.Response,
   ) {
+    this.assertValidTwilioSignature(req, twilioSignature);
+
     this.logger.log(`Incoming SMS for tenant ${tenantId}, phone ${phoneId}`);
     this.logger.debug(`SMS from ${payload.From} to ${payload.To}: ${payload.Body?.substring(0, 50)}...`);
 
     try {
-      // Store the incoming SMS and emit real-time event
-      await this.smsService.handleIncomingSms(tenantId, phoneId, {
-        MessageSid: payload.MessageSid,
-        From: payload.From,
-        To: payload.To,
-        Body: payload.Body,
-        NumMedia: payload.NumMedia,
-        NumSegments: payload.NumSegments,
-      });
+      // Store the incoming SMS and emit real-time event (payload passed whole: MediaUrl<n>/MediaContentType<n> need every index, not just 0)
+      await this.smsService.handleIncomingSms(tenantId, phoneId, payload);
     } catch (error) {
       this.logger.error(`Failed to handle incoming SMS: ${error.message}`);
     }
@@ -1174,7 +1194,10 @@ export class TwilioWebhookController {
     @Param('phoneId') phoneId: string,
     @Body() payload: TwilioStatusCallbackDto,
     @Headers('x-twilio-signature') twilioSignature: string,
+    @Req() req: express.Request,
   ) {
+    this.assertValidTwilioSignature(req, twilioSignature);
+
     this.logger.log(`SMS status update for tenant ${tenantId}, phone ${phoneId}`);
     this.logger.debug(`MessageSid: ${payload.MessageSid}, Status: ${payload.MessageStatus}`);
 

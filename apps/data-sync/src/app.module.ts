@@ -4,6 +4,7 @@ import { ScheduleModule } from '@nestjs/schedule';
 import { PrismaModule } from '@htownautos/prisma';
 import { OpenSearchLibModule } from '@htownautos/opensearch';
 import { RabbitMQModule } from '@htownautos/rabbitmq';
+import { SocialRealtimeModule } from '@htownautos/social';
 import {
   ProxyService,
   CopartImagesService,
@@ -28,6 +29,7 @@ import { EmbedJobService } from './embed-job.service';
 import { EmbedJobWatchdogService } from './embed-job-watchdog.service';
 import { ChatDispatchConsumer } from './chat-dispatch.consumer';
 import { ChatNotifierService } from './chat-notifier.service';
+import { SocialJobsModule } from './social/social-jobs.module';
 
 
 @Module({
@@ -37,6 +39,8 @@ import { ChatNotifierService } from './chat-notifier.service';
     PrismaModule,
     OpenSearchLibModule,
     RabbitMQModule,
+    SocialRealtimeModule,
+    SocialJobsModule,
   ],
   providers: [
     CopartImportService,

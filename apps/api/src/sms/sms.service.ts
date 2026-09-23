@@ -6,7 +6,16 @@ import { CreateSmsDto, UpdateSmsDto, SmsStatus, SmsDirection } from './dto/creat
 import { SendSmsDto } from './dto/send-sms.dto';
 import { QuerySmsDto } from './dto/query-sms.dto';
 import { Prisma } from '@prisma/client';
-import { normalizePhoneNumber } from '@htownautos/common';
+import { normalizePhoneNumber, S3Service } from '@htownautos/common';
+import { SocialIngestService, SocialNotifierService, extensionFromMime, type NormalizedInboxMessage } from '@htownautos/social';
+
+const MMS_UPLOAD_FOLDER = 'sms-mms';
+const DEFAULT_MMS_MIME_TYPE = 'application/octet-stream';
+
+interface CopiedMmsMedia {
+  key: string;
+  mimeType: string;
+}
 
 @Injectable()
 export class SmsService {
@@ -17,6 +26,9 @@ export class SmsService {
     @Inject(forwardRef(() => TwilioService))
     private twilioService: TwilioService,
     private smsEventsService: SmsEventsService,
+    private readonly s3: S3Service,
+    private readonly ingest: SocialIngestService,
+    private readonly notifier: SocialNotifierService,
   ) {}
 
   private readonly includeRelations = {
@@ -89,6 +101,74 @@ export class SmsService {
           }
         : null,
     };
+  }
+
+  /**
+   * Mirrors an `SmsMessage` row into the unified inbox (`InboxConversation`/`InboxMessage`)
+   * via `SocialIngestService.recordInboxMessage` — best-effort, never throws (an inbox
+   * mirroring failure must not break sending/receiving the actual SMS). Notifies
+   * `SOCIAL_MESSAGE_RECEIVED` only on the 0→1 unread transition (contract §3.7).
+   */
+  private async mirrorToInbox(input: NormalizedInboxMessage): Promise<void> {
+    try {
+      const { conversation, becameUnread } = await this.ingest.recordInboxMessage(input);
+      if (becameUnread) {
+        await this.notifier.notify(input.tenantId, 'SOCIAL_MESSAGE_RECEIVED', {
+          title: 'Nuevo mensaje',
+          message: input.contactName || input.contactPhone || 'Mensaje entrante',
+          actionUrl: `/dashboard/inbox?conversation=${conversation.id}`,
+          entityId: conversation.id,
+        });
+      }
+    } catch (err) {
+      this.logger.warn(`mirrorToInbox: ${(err as Error).message}`);
+    }
+  }
+
+  private attachmentKindFor(mimeType: string): 'image' | 'video' | 'audio' | 'file' {
+    if (mimeType.startsWith('image/')) return 'image';
+    if (mimeType.startsWith('video/')) return 'video';
+    if (mimeType.startsWith('audio/')) return 'audio';
+    return 'file';
+  }
+
+  /**
+   * Downloads every `MediaUrl<n>` Twilio sent (Basic Auth with the account
+   * SID/auth token — Twilio media URLs 404 without it) and copies it into
+   * the private bucket, `sms-mms/<tenantId>/...`. Best-effort per item: one
+   * failed attachment must not drop the rest of the message.
+   */
+  private async copyMmsMedia(
+    tenantId: string,
+    payload: Record<string, string | undefined>,
+    numMedia: number,
+  ): Promise<CopiedMmsMedia[]> {
+    if (numMedia <= 0) return [];
+
+    const accountSid = process.env.TWILIO_ACCOUNT_SID;
+    const authToken = process.env.TWILIO_AUTH_TOKEN;
+    if (!accountSid || !authToken) {
+      this.logger.warn('No se puede copiar MMS: falta TWILIO_ACCOUNT_SID/TWILIO_AUTH_TOKEN');
+      return [];
+    }
+    const basicAuth = Buffer.from(`${accountSid}:${authToken}`).toString('base64');
+
+    const results: CopiedMmsMedia[] = [];
+    for (let i = 0; i < numMedia; i++) {
+      const url = payload[`MediaUrl${i}`];
+      const mimeType = payload[`MediaContentType${i}`] || DEFAULT_MMS_MIME_TYPE;
+      if (!url) continue;
+      try {
+        const res = await fetch(url, { headers: { Authorization: `Basic ${basicAuth}` } });
+        if (!res.ok) throw new Error(`status ${res.status}`);
+        const buffer = Buffer.from(await res.arrayBuffer());
+        const { key } = await this.s3.uploadBuffer(buffer, `${MMS_UPLOAD_FOLDER}/${tenantId}`, extensionFromMime(mimeType), mimeType);
+        results.push({ key, mimeType });
+      } catch (err) {
+        this.logger.warn(`No se pudo copiar media MMS ${i} (${url}): ${(err as Error).message}`);
+      }
+    }
+    return results;
   }
 
   /**
@@ -193,6 +273,26 @@ export class SmsService {
       // Emit updated event
       this.smsEventsService.emitSmsUpdated(this.toSmsEvent(updatedSms));
 
+      await this.mirrorToInbox({
+        tenantId,
+        channel: 'sms',
+        provider: 'twilio',
+        senderKind: 'twilio_number',
+        senderKey: fromPhoneNumber.id,
+        twilioPhoneNumberId: fromPhoneNumber.id,
+        contactExternalId: toNumber,
+        contactPhone: toNumber,
+        contactName: `${buyer.firstName} ${buyer.lastName}`.trim() || null,
+        buyerId: buyer.id,
+        direction: 'outbound',
+        body: dto.body,
+        status: updatedSms.status,
+        externalId: updatedSms.messageSid,
+        smsMessageId: updatedSms.id,
+        sentById: senderId,
+        platformCreatedAt: updatedSms.createdAt,
+      });
+
       return updatedSms;
     } catch (error) {
       // Update with error status
@@ -210,12 +310,162 @@ export class SmsService {
       // Emit failed event
       this.smsEventsService.emitSmsUpdated(this.toSmsEvent(failedSms));
 
+      await this.mirrorToInbox({
+        tenantId,
+        channel: 'sms',
+        provider: 'twilio',
+        senderKind: 'twilio_number',
+        senderKey: fromPhoneNumber.id,
+        twilioPhoneNumberId: fromPhoneNumber.id,
+        contactExternalId: toNumber,
+        contactPhone: toNumber,
+        contactName: `${buyer.firstName} ${buyer.lastName}`.trim() || null,
+        buyerId: buyer.id,
+        direction: 'outbound',
+        body: dto.body,
+        status: SmsStatus.FAILED,
+        error: error.message,
+        smsMessageId: failedSms.id,
+        sentById: senderId,
+        platformCreatedAt: failedSms.createdAt,
+      });
+
       throw new BadRequestException(`Failed to send SMS: ${error.message}`);
     }
   }
 
   /**
-   * Handle incoming SMS from Twilio webhook
+   * Sends an outbound SMS or WhatsApp-via-Twilio message on behalf of the
+   * unified inbox (`InboxService`) — the ONLY other writer path to
+   * `SmsMessage` besides `sendSms`/`handleIncomingSms` above, so the rule
+   * "SmsService is the only writer of SmsMessage" still holds. Mirrors into
+   * the inbox itself (with `smsMessageId` for idempotency), same as
+   * `sendSms`. `mediaUrls`: signed GET URLs the inbox service already
+   * resolved from `SocialMedia` rows — Twilio fetches each once.
+   */
+  async sendForInbox(params: {
+    tenantId: string;
+    senderId: string | null;
+    channel: 'sms' | 'whatsapp';
+    toNumber: string;
+    fromPhoneNumberId: string;
+    body?: string;
+    buyerId?: string | null;
+    mediaUrls?: string[];
+    /** WhatsApp Content API template — `contentSid` is the `HX…` sid, `variables` map positionally to `{"1": ..., "2": ...}`. Mutually exclusive with `body` (the caller already enforced the 24h window before reaching here). */
+    template?: { contentSid: string; variables: string[] };
+  }) {
+    const fromPhoneNumber = await this.prisma.twilioPhoneNumber.findFirst({
+      where: { id: params.fromPhoneNumberId, tenantId: params.tenantId, canSms: true },
+      select: { id: true, phoneNumber: true },
+    });
+    if (!fromPhoneNumber) {
+      throw new NotFoundException('Número de Twilio no encontrado para este tenant');
+    }
+
+    const baseUrl = process.env.PUBLIC_API_URL || process.env.API_BASE_URL || 'https://api.htownautos.com';
+    const statusCallback = `${baseUrl}/api/v1/twilio/sms/incoming/${params.tenantId}/${fromPhoneNumber.id}/status`;
+
+    const smsMessage = await this.prisma.smsMessage.create({
+      data: {
+        tenantId: params.tenantId,
+        senderId: params.senderId ?? undefined,
+        buyerId: params.buyerId ?? null,
+        direction: SmsDirection.OUTBOUND,
+        status: SmsStatus.QUEUED,
+        phoneNumber: params.toNumber,
+        fromNumber: fromPhoneNumber.phoneNumber,
+        toNumber: params.toNumber,
+        body: params.body ?? (params.template ? `[Plantilla ${params.template.contentSid}]` : ''),
+        sentAt: new Date(),
+      },
+      include: this.includeRelations,
+    });
+    this.smsEventsService.emitSmsCreated(this.toSmsEvent(smsMessage));
+
+    const to = params.channel === 'whatsapp' ? `whatsapp:${params.toNumber}` : params.toNumber;
+    const from = params.channel === 'whatsapp' ? `whatsapp:${fromPhoneNumber.phoneNumber}` : fromPhoneNumber.phoneNumber;
+
+    const contentVariables = params.template
+      ? JSON.stringify(Object.fromEntries(params.template.variables.map((v, i) => [String(i + 1), v])))
+      : undefined;
+
+    try {
+      const result = await this.twilioService.sendSms({
+        to,
+        from,
+        statusCallback,
+        mediaUrl: params.mediaUrls,
+        ...(params.template
+          ? { contentSid: params.template.contentSid, contentVariables }
+          : { body: params.body ?? '' }),
+      });
+
+      const updated = await this.prisma.smsMessage.update({
+        where: { id: smsMessage.id },
+        data: { messageSid: result.sid, status: result.status === 'queued' ? SmsStatus.QUEUED : SmsStatus.SENT },
+        include: this.includeRelations,
+      });
+      this.smsEventsService.emitSmsUpdated(this.toSmsEvent(updated));
+
+      await this.mirrorToInbox({
+        tenantId: params.tenantId,
+        channel: params.channel,
+        provider: 'twilio',
+        senderKind: 'twilio_number',
+        senderKey: fromPhoneNumber.id,
+        twilioPhoneNumberId: fromPhoneNumber.id,
+        contactExternalId: params.toNumber,
+        contactPhone: params.toNumber,
+        buyerId: params.buyerId ?? null,
+        direction: 'outbound',
+        body: params.body || null,
+        status: updated.status,
+        externalId: updated.messageSid,
+        smsMessageId: updated.id,
+        sentById: params.senderId ?? undefined,
+        platformCreatedAt: updated.createdAt,
+      });
+
+      return updated;
+    } catch (error) {
+      const failed = await this.prisma.smsMessage.update({
+        where: { id: smsMessage.id },
+        data: { status: SmsStatus.FAILED, errorMessage: (error as Error).message },
+        include: this.includeRelations,
+      });
+      this.smsEventsService.emitSmsUpdated(this.toSmsEvent(failed));
+
+      await this.mirrorToInbox({
+        tenantId: params.tenantId,
+        channel: params.channel,
+        provider: 'twilio',
+        senderKind: 'twilio_number',
+        senderKey: fromPhoneNumber.id,
+        twilioPhoneNumberId: fromPhoneNumber.id,
+        contactExternalId: params.toNumber,
+        contactPhone: params.toNumber,
+        buyerId: params.buyerId ?? null,
+        direction: 'outbound',
+        body: params.body || null,
+        status: SmsStatus.FAILED,
+        error: (error as Error).message,
+        smsMessageId: failed.id,
+        sentById: params.senderId ?? undefined,
+        platformCreatedAt: failed.createdAt,
+      });
+
+      throw new BadRequestException(`No se pudo enviar el mensaje: ${(error as Error).message}`);
+    }
+  }
+
+  /**
+   * Handle incoming SMS/MMS/WhatsApp-via-Twilio from Twilio's webhook.
+   * Every inbound message is stored, known buyer or not (§3.7 of
+   * docs/social-suite/CONTRACT.md) — an unlinked number just means
+   * `buyerId: null` until someone links it from the inbox. `From`/`To`
+   * prefixed `whatsapp:` route this to the `whatsapp` inbox channel instead
+   * of `sms`, still through this same Twilio number.
    */
   async handleIncomingSms(
     tenantId: string,
@@ -227,29 +477,31 @@ export class SmsService {
       Body: string;
       NumMedia?: string;
       NumSegments?: string;
+      [key: string]: string | undefined;
     },
   ) {
     this.logger.log(`Handling incoming SMS for tenant ${tenantId}: ${payload.MessageSid}`);
 
-    // Normalize the from number
-    const fromNumber = normalizePhoneNumber(payload.From) || payload.From;
-    const toNumber = normalizePhoneNumber(payload.To) || payload.To;
+    const isWhatsApp = payload.From?.startsWith('whatsapp:') ?? false;
+    const rawFrom = isWhatsApp ? payload.From.replace(/^whatsapp:/, '') : payload.From;
+    const rawTo = isWhatsApp ? payload.To.replace(/^whatsapp:/, '') : payload.To;
+    const fromNumber = normalizePhoneNumber(rawFrom) || rawFrom;
+    const toNumber = normalizePhoneNumber(rawTo) || rawTo;
 
-    // Try to find a buyer with this phone number
+    // Try to find a buyer with this phone number — unknown numbers stay unlinked, not dropped.
     const buyer = await this.findBuyerByPhone(tenantId, fromNumber);
-
     if (!buyer) {
-      this.logger.warn(`No buyer found for phone ${fromNumber} in tenant ${tenantId}`);
-      // Skip storing if no buyer found - we can't associate it
-      // In future, this could create a lead or store in a separate table
-      return null;
+      this.logger.warn(`No buyer found for phone ${fromNumber} in tenant ${tenantId} — storing unlinked`);
     }
+
+    const numMedia = parseInt(payload.NumMedia || '0', 10);
+    const media = await this.copyMmsMedia(tenantId, payload, numMedia);
 
     // Create the SMS message
     const smsMessage = await this.prisma.smsMessage.create({
       data: {
         tenantId,
-        buyerId: buyer.id,
+        buyerId: buyer?.id ?? null,
         direction: SmsDirection.INBOUND,
         status: SmsStatus.RECEIVED,
         phoneNumber: fromNumber,
@@ -257,8 +509,9 @@ export class SmsService {
         toNumber,
         body: payload.Body,
         messageSid: payload.MessageSid,
-        numMedia: parseInt(payload.NumMedia || '0', 10),
+        numMedia,
         segmentCount: parseInt(payload.NumSegments || '1', 10),
+        mediaUrls: media.length > 0 ? media.map((m) => m.key) : undefined,
         isRead: false,
       },
       include: this.includeRelations,
@@ -268,6 +521,26 @@ export class SmsService {
 
     // Emit real-time event
     this.smsEventsService.emitSmsCreated(this.toSmsEvent(smsMessage));
+
+    await this.mirrorToInbox({
+      tenantId,
+      channel: isWhatsApp ? 'whatsapp' : 'sms',
+      provider: 'twilio',
+      senderKind: 'twilio_number',
+      senderKey: phoneNumberId,
+      twilioPhoneNumberId: phoneNumberId,
+      contactExternalId: fromNumber,
+      contactPhone: fromNumber,
+      contactName: buyer ? `${buyer.firstName} ${buyer.lastName}`.trim() || null : null,
+      buyerId: buyer?.id ?? null,
+      direction: 'inbound',
+      body: payload.Body || null,
+      attachments: media.map((m) => ({ kind: this.attachmentKindFor(m.mimeType), key: m.key, mimeType: m.mimeType, name: null })),
+      status: 'received',
+      externalId: payload.MessageSid,
+      smsMessageId: smsMessage.id,
+      platformCreatedAt: smsMessage.createdAt,
+    });
 
     return smsMessage;
   }
@@ -328,6 +601,38 @@ export class SmsService {
 
     // Emit event
     this.smsEventsService.emitSmsUpdated(this.toSmsEvent(updated));
+
+    // Mirror the status change into the inbox message this SMS is linked to (idempotent on
+    // smsMessageId — updates, doesn't duplicate). Reuses the existing InboxMessage's own
+    // channel/conversation instead of reconstructing it, so an SMS vs. WhatsApp-via-Twilio
+    // outbound message (created by `sendSms` or `InboxService`) can never land in the wrong
+    // conversation because of a mismatched `channel`/`senderKey` guess here.
+    if (updated.direction === SmsDirection.OUTBOUND) {
+      const existingInboxMessage = await this.prisma.inboxMessage.findUnique({
+        where: { smsMessageId: updated.id },
+        select: { channel: true, conversation: { select: { provider: true, senderKey: true, contactExternalId: true } } },
+      });
+      if (existingInboxMessage) {
+        await this.mirrorToInbox({
+          tenantId,
+          channel: existingInboxMessage.channel,
+          provider: existingInboxMessage.conversation.provider,
+          senderKind: 'twilio_number',
+          senderKey: existingInboxMessage.conversation.senderKey,
+          contactExternalId: existingInboxMessage.conversation.contactExternalId,
+          buyerId: updated.buyerId,
+          direction: 'outbound',
+          body: updated.body,
+          status: updated.status,
+          error: updated.errorMessage,
+          externalId: updated.messageSid,
+          smsMessageId: updated.id,
+          sentById: updated.senderId,
+          platformCreatedAt: updated.createdAt,
+          deliveredAt: updated.deliveredAt,
+        });
+      }
+    }
 
     return updated;
   }

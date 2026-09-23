@@ -10,17 +10,31 @@ import {
   ParseUUIDPipe,
   HttpCode,
   HttpStatus,
+  UseGuards,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
+import {
+  ADMIN_ROLES,
+  CurrentTenant,
+  CurrentUser,
+  RequireApiScopes,
+  RequireRoles,
+  RolesGuard,
+  type AuthenticatedUser,
+} from '@htownautos/auth';
+import type { AccountType, SocialPlatform } from '@htownautos/social';
 import { SocialAccountsService } from './social-accounts.service';
 import {
   ConnectSocialAccountDto,
-  ManualConnectSocialAccountDto,
+  ConnectBlueskyDto,
+  MastodonStartDto,
+  WhatsAppEmbeddedSignupDto,
+  WhatsAppManualConnectDto,
+  ReminderChannelDto,
+  UpdateSocialAccountDto,
   CreateSocialGroupDto,
   UpdateSocialGroupDto,
-  SocialPlatform,
 } from './dto';
-import { CurrentTenant } from '@htownautos/auth';
 
 @ApiTags('Social Accounts')
 @ApiBearerAuth()
@@ -28,108 +42,143 @@ import { CurrentTenant } from '@htownautos/auth';
 export class SocialAccountsController {
   constructor(private readonly service: SocialAccountsService) {}
 
-  // ─── OAuth Flow ───
+  // ─── OAuth flow ───
 
   @Get('oauth-url')
-  @ApiOperation({ summary: 'Get OAuth authorization URL for a platform' })
+  @RequireApiScopes('social-accounts:read')
+  @ApiOperation({ summary: 'Signed OAuth authorization URL for a platform' })
   getOAuthUrl(
     @CurrentTenant() tenantId: string,
+    @CurrentUser() user: AuthenticatedUser,
     @Query('platform') platform: SocialPlatform,
     @Query('redirectUri') redirectUri: string,
+    @Query('accountType') accountType?: AccountType,
   ) {
-    return { url: this.service.getOAuthUrl(platform, tenantId, redirectUri) };
+    return this.service.getOAuthUrl(tenantId, user.id, platform, redirectUri, accountType);
   }
 
-  @Post('connect')
-  @ApiOperation({ summary: 'Exchange OAuth code and connect social account(s)' })
-  @ApiResponse({ status: 200, description: 'Connected account(s)' })
-  connect(
-    @CurrentTenant() tenantId: string,
-    @Body() dto: ConnectSocialAccountDto,
-  ) {
-    const redirectUri = dto.redirectUri || `${process.env.FRONTEND_URL}/dashboard/social-media/callback`;
-    return this.service.exchangeOAuthCode(dto.platform, dto.code, redirectUri, tenantId);
-  }
-
-  @Post('connect/bluesky')
-  @ApiOperation({ summary: 'Connect Bluesky account with app password' })
-  connectBluesky(
-    @CurrentTenant() tenantId: string,
-    @Body() body: { identifier: string; appPassword: string },
-  ) {
-    return this.service.connectBluesky(tenantId, body.identifier, body.appPassword);
-  }
-
-  @Post('connect/manual')
-  @ApiOperation({ summary: 'Manually connect a social account (for testing or custom integrations)' })
-  manualConnect(
-    @CurrentTenant() tenantId: string,
-    @Body() dto: ManualConnectSocialAccountDto,
-  ) {
-    return this.service.manualConnect(tenantId, dto);
-  }
-
-  // ─── Account CRUD ───
+  // ─── Account list/detail (before groups/:id, boards etc. below) ───
 
   @Get()
-  @ApiOperation({ summary: 'Get all connected social accounts' })
+  @RequireApiScopes('social-accounts:read')
+  @ApiOperation({ summary: 'List every connected social account' })
   findAll(@CurrentTenant() tenantId: string) {
     return this.service.findAll(tenantId);
   }
 
-  @Get(':id')
-  @ApiOperation({ summary: 'Get a social account by ID' })
-  findOne(
-    @CurrentTenant() tenantId: string,
-    @Param('id', ParseUUIDPipe) id: string,
-  ) {
-    return this.service.findOne(tenantId, id);
-  }
-
-  @Delete(':id')
-  @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Disconnect (delete) a social account' })
-  disconnect(
-    @CurrentTenant() tenantId: string,
-    @Param('id', ParseUUIDPipe) id: string,
-  ) {
-    return this.service.disconnect(tenantId, id);
-  }
-
-  // ─── Groups ───
-
   @Get('groups/all')
-  @ApiOperation({ summary: 'Get all social account groups' })
+  @RequireApiScopes('social-accounts:read')
+  @ApiOperation({ summary: 'List account groups' })
   findAllGroups(@CurrentTenant() tenantId: string) {
     return this.service.findAllGroups(tenantId);
   }
 
+  // ─── Connect ───
+
+  @Post('connect')
+  @RequireApiScopes('social-accounts:write')
+  @ApiOperation({ summary: 'Exchange an OAuth code (from the signed state) and connect the account(s)' })
+  @ApiResponse({ status: 200, description: 'Connected account(s)' })
+  connect(@CurrentTenant() tenantId: string, @CurrentUser() user: AuthenticatedUser, @Body() dto: ConnectSocialAccountDto) {
+    return this.service.connect(tenantId, user.id, dto);
+  }
+
+  @Post('connect/bluesky')
+  @RequireApiScopes('social-accounts:write')
+  @ApiOperation({ summary: 'Connect a Bluesky account with an app password' })
+  connectBluesky(@CurrentTenant() tenantId: string, @Body() dto: ConnectBlueskyDto) {
+    return this.service.connectBluesky(tenantId, dto);
+  }
+
+  @Post('connect/mastodon/start')
+  @RequireApiScopes('social-accounts:write')
+  @ApiOperation({ summary: 'Register the app on a Mastodon instance and get its OAuth URL' })
+  mastodonStart(@CurrentTenant() tenantId: string, @CurrentUser() user: AuthenticatedUser, @Body() dto: MastodonStartDto) {
+    return this.service.mastodonStart(tenantId, user.id, dto);
+  }
+
+  @Post('connect/whatsapp')
+  @RequireApiScopes('social-accounts:write')
+  @ApiOperation({ summary: 'WhatsApp Embedded Signup' })
+  connectWhatsApp(@CurrentTenant() tenantId: string, @Body() dto: WhatsAppEmbeddedSignupDto) {
+    return this.service.connectWhatsAppEmbedded(tenantId, dto);
+  }
+
+  @Post('connect/whatsapp/manual')
+  @UseGuards(RolesGuard)
+  @RequireRoles(...ADMIN_ROLES)
+  @RequireApiScopes('social-accounts:write')
+  @ApiOperation({ summary: 'Admin-only fallback: connect WhatsApp with a manually issued token' })
+  connectWhatsAppManual(@CurrentTenant() tenantId: string, @Body() dto: WhatsAppManualConnectDto) {
+    return this.service.connectWhatsAppManual(tenantId, dto);
+  }
+
+  @Post('connect/reminder')
+  @RequireApiScopes('social-accounts:write')
+  @ApiOperation({ summary: 'Add a reminder-only channel (no publishing API for this account type)' })
+  connectReminder(@CurrentTenant() tenantId: string, @Body() dto: ReminderChannelDto) {
+    return this.service.connectReminder(tenantId, dto);
+  }
+
+  // ─── Groups CRUD (unchanged surface) ───
+
   @Post('groups')
+  @RequireApiScopes('social-accounts:write')
   @ApiOperation({ summary: 'Create a social account group' })
-  createGroup(
-    @CurrentTenant() tenantId: string,
-    @Body() dto: CreateSocialGroupDto,
-  ) {
+  createGroup(@CurrentTenant() tenantId: string, @Body() dto: CreateSocialGroupDto) {
     return this.service.createGroup(tenantId, dto);
   }
 
   @Patch('groups/:id')
+  @RequireApiScopes('social-accounts:write')
   @ApiOperation({ summary: 'Update a social account group' })
-  updateGroup(
-    @CurrentTenant() tenantId: string,
-    @Param('id', ParseUUIDPipe) id: string,
-    @Body() dto: UpdateSocialGroupDto,
-  ) {
+  updateGroup(@CurrentTenant() tenantId: string, @Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateSocialGroupDto) {
     return this.service.updateGroup(tenantId, id, dto);
   }
 
   @Delete('groups/:id')
   @HttpCode(HttpStatus.OK)
+  @RequireApiScopes('social-accounts:write')
   @ApiOperation({ summary: 'Delete a social account group' })
-  deleteGroup(
-    @CurrentTenant() tenantId: string,
-    @Param('id', ParseUUIDPipe) id: string,
-  ) {
+  deleteGroup(@CurrentTenant() tenantId: string, @Param('id', ParseUUIDPipe) id: string) {
     return this.service.deleteGroup(tenantId, id);
+  }
+
+  // ─── Account detail/mutate (:id — after every static/groups route above) ───
+
+  @Get(':id')
+  @RequireApiScopes('social-accounts:read')
+  @ApiOperation({ summary: 'Get a social account by id' })
+  findOne(@CurrentTenant() tenantId: string, @Param('id', ParseUUIDPipe) id: string) {
+    return this.service.findOne(tenantId, id);
+  }
+
+  @Get(':id/boards')
+  @RequireApiScopes('social-accounts:read')
+  @ApiOperation({ summary: 'Pinterest boards for this account' })
+  listBoards(@CurrentTenant() tenantId: string, @Param('id', ParseUUIDPipe) id: string) {
+    return this.service.listBoards(tenantId, id);
+  }
+
+  @Patch(':id')
+  @RequireApiScopes('social-accounts:write')
+  @ApiOperation({ summary: 'Update name / timezone / queuePaused' })
+  update(@CurrentTenant() tenantId: string, @Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateSocialAccountDto) {
+    return this.service.update(tenantId, id, dto);
+  }
+
+  @Post(':id/refresh')
+  @RequireApiScopes('social-accounts:write')
+  @ApiOperation({ summary: 'Force a token refresh' })
+  refresh(@CurrentTenant() tenantId: string, @Param('id', ParseUUIDPipe) id: string) {
+    return this.service.refresh(tenantId, id);
+  }
+
+  @Delete(':id')
+  @HttpCode(HttpStatus.OK)
+  @RequireApiScopes('social-accounts:write')
+  @ApiOperation({ summary: 'Soft-disconnect a social account' })
+  disconnect(@CurrentTenant() tenantId: string, @Param('id', ParseUUIDPipe) id: string) {
+    return this.service.disconnect(tenantId, id);
   }
 }

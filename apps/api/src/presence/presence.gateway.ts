@@ -15,6 +15,7 @@ import { PhoneCallEventsService } from './phone-call-events.service';
 import { SmsEventsService } from './sms-events.service';
 import { StripeEventsService } from './stripe-events.service';
 import { EmailEventsService } from './email-events.service';
+import { SocialRealtimeService } from '@htownautos/social';
 import { verifyToken } from '@clerk/backend';
 
 interface AuthenticatedSocket extends Socket {
@@ -45,6 +46,7 @@ export class PresenceGateway
     private readonly smsEventsService: SmsEventsService,
     private readonly stripeEventsService: StripeEventsService,
     private readonly emailEventsService: EmailEventsService,
+    private readonly socialRealtimeService: SocialRealtimeService,
   ) {}
 
   afterInit() {
@@ -54,6 +56,7 @@ export class PresenceGateway
     this.smsEventsService.setServer(this.server);
     this.stripeEventsService.setServer(this.server);
     this.emailEventsService.setServer(this.server);
+    this.socialRealtimeService.setServer(this.server);
   }
 
   async handleConnection(client: AuthenticatedSocket) {

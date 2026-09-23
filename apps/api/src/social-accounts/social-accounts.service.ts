@@ -1,560 +1,476 @@
-import {
-  Injectable,
-  NotFoundException,
-  BadRequestException,
-  Logger,
-} from '@nestjs/common';
+import { randomUUID } from 'crypto';
+import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '@htownautos/prisma';
+import { RedisService } from '@htownautos/redis';
+import type { SocialAccount as PrismaSocialAccount, SocialPostingSchedule } from '@prisma/client';
 import {
-  ManualConnectSocialAccountDto,
+  platformConfig,
+  capabilitiesFor,
+  encryptJson,
+  signOAuthState,
+  verifyOAuthState,
+  peekStateNonce,
+  toAccountView,
+  SocialApiError,
+  SocialTokenService,
+  type SocialAccountView,
+  type SocialAccountSecrets,
+  type ConnectedAccount,
+  type SocialPlatform,
+  type AccountType,
+  buildFacebookOAuthUrl,
+  connectFacebookPages,
+  connectInstagramViaFacebook,
+  subscribeFacebookPageWebhook,
+  FACEBOOK_SCOPES,
+  INSTAGRAM_FB_LOGIN_SCOPES,
+  buildInstagramLoginOAuthUrl,
+  connectInstagramLogin as connectInstagramLoginApi,
+  buildTikTokOAuthUrl,
+  connectTikTok as connectTikTokApi,
+  buildGoogleOAuthUrl,
+  connectYouTube as connectYouTubeApi,
+  connectGbp as connectGbpApi,
+  YOUTUBE_SCOPES,
+  GBP_SCOPES,
+  buildLinkedInOAuthUrl,
+  connectLinkedIn as connectLinkedInApi,
+  buildPinterestOAuthUrl,
+  connectPinterest as connectPinterestApi,
+  listPinterestBoards,
+  buildThreadsOAuthUrl,
+  connectThreads as connectThreadsApi,
+  connectBluesky as connectBlueskyApi,
+  generatePkcePair,
+  buildXOAuthUrl,
+  connectX as connectXApi,
+  registerMastodonApp,
+  buildMastodonOAuthUrl,
+  connectMastodon as connectMastodonApi,
+  connectWhatsAppEmbedded as connectWhatsAppEmbeddedApi,
+  connectWhatsAppManual as connectWhatsAppManualApi,
+  fetchFacebookPageProfile,
+  fetchInstagramViaFacebookProfile,
+  fetchInstagramLoginProfile,
+  fetchThreadsProfile,
+  fetchLinkedInProfile,
+  fetchPinterestProfile,
+  fetchTikTokProfile,
+  fetchXProfile,
+  fetchMastodonProfile,
+  fetchWhatsAppProfile,
+  type RefreshedProfile,
+} from '@htownautos/social';
+import {
+  ConnectSocialAccountDto,
+  ConnectBlueskyDto,
+  MastodonStartDto,
+  WhatsAppEmbeddedSignupDto,
+  WhatsAppManualConnectDto,
+  ReminderChannelDto,
+  UpdateSocialAccountDto,
   CreateSocialGroupDto,
   UpdateSocialGroupDto,
-  SocialPlatform,
 } from './dto';
+
+const DEFAULT_TIMEZONE = 'America/Chicago';
+const REDIS_FLOW_TTL_SEC = 10 * 60; // 10 minutes — matches the OAuth state TTL
+
+type ScheduleSlice = Pick<SocialPostingSchedule, 'timezone' | 'paused'>;
 
 @Injectable()
 export class SocialAccountsService {
   private readonly logger = new Logger(SocialAccountsService.name);
 
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly redis: RedisService,
+    private readonly tokenService: SocialTokenService,
+  ) {}
 
-  // ─── OAuth URL generation ───
+  // ─── OAuth URL ───────────────────────────────────────────────────────────
 
-  getOAuthUrl(platform: SocialPlatform, tenantId: string, redirectUri: string): string {
-    const state = Buffer.from(JSON.stringify({ tenantId, platform })).toString('base64url');
-
-    switch (platform) {
-      case SocialPlatform.FACEBOOK:
-      case SocialPlatform.INSTAGRAM:
-        // Instagram uses Facebook's OAuth — permissions differ
-        const fbScopes = platform === SocialPlatform.INSTAGRAM
-          ? 'instagram_basic,instagram_content_publish,instagram_manage_messages,pages_show_list,pages_read_engagement'
-          : 'pages_show_list,pages_read_engagement,pages_manage_posts,pages_messaging,pages_manage_metadata,public_profile';
-        return `https://www.facebook.com/v21.0/dialog/oauth?client_id=${process.env.FACEBOOK_APP_ID}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=${fbScopes}&state=${state}&response_type=code`;
-
-      case SocialPlatform.TIKTOK:
-        return `https://www.tiktok.com/v2/auth/authorize/?client_key=${process.env.TIKTOK_CLIENT_KEY}&scope=user.info.basic,video.upload,video.publish,video.list&response_type=code&redirect_uri=${encodeURIComponent(redirectUri)}&state=${state}`;
-
-      case SocialPlatform.YOUTUBE:
-        return `https://accounts.google.com/o/oauth2/v2/auth?client_id=${process.env.GOOGLE_CLIENT_ID}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=https://www.googleapis.com/auth/youtube.readonly https://www.googleapis.com/auth/youtube.upload&response_type=code&access_type=offline&prompt=consent&state=${state}`;
-
-      case SocialPlatform.LINKEDIN:
-        return `https://www.linkedin.com/oauth/v2/authorization?client_id=${process.env.LINKEDIN_CLIENT_ID}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=openid profile w_member_social r_organization_social w_organization_social rw_organization_admin&response_type=code&state=${state}`;
-
-      case SocialPlatform.PINTEREST:
-        return `https://www.pinterest.com/oauth/?client_id=${process.env.PINTEREST_APP_ID}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=boards:read,pins:read,pins:write&response_type=code&state=${state}`;
-
-      case SocialPlatform.GBP:
-        return `https://accounts.google.com/o/oauth2/v2/auth?client_id=${process.env.GOOGLE_CLIENT_ID}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=https://www.googleapis.com/auth/business.manage&response_type=code&access_type=offline&prompt=consent&state=${state}`;
-
-      case SocialPlatform.THREADS:
-        return `https://threads.net/oauth/authorize?client_id=${process.env.THREADS_APP_ID}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=threads_basic,threads_content_publish,threads_manage_replies,threads_read_replies&response_type=code&state=${state}`;
-
-      case SocialPlatform.BLUESKY:
-        // Bluesky uses AT Protocol — no OAuth, uses app password
-        throw new BadRequestException('Bluesky uses app password authentication, not OAuth');
-
-      default:
-        throw new BadRequestException(`OAuth not supported for platform: ${platform}`);
-    }
-  }
-
-  // ─── OAuth token exchange ───
-
-  async exchangeOAuthCode(
-    platform: SocialPlatform,
-    code: string,
-    redirectUri: string,
+  async getOAuthUrl(
     tenantId: string,
-  ) {
-    this.logger.log(`→ OAuth exchange: ${platform}`);
+    userId: string,
+    platform: SocialPlatform,
+    redirectUri: string,
+    accountType?: AccountType,
+  ): Promise<{ url: string }> {
+    const state = signOAuthState({ platform, tenantId, userId, accountType });
 
     switch (platform) {
-      case SocialPlatform.FACEBOOK:
-      case SocialPlatform.INSTAGRAM:
-        return this.exchangeFacebookCode(platform, code, redirectUri, tenantId);
-
-      case SocialPlatform.TIKTOK:
-        return this.exchangeTikTokCode(code, redirectUri, tenantId);
-
-      case SocialPlatform.YOUTUBE:
-      case SocialPlatform.GBP:
-        return this.exchangeGoogleCode(platform, code, redirectUri, tenantId);
-
-      case SocialPlatform.LINKEDIN:
-        return this.exchangeLinkedInCode(code, redirectUri, tenantId);
-
-      case SocialPlatform.PINTEREST:
-        return this.exchangePinterestCode(code, redirectUri, tenantId);
-
-      case SocialPlatform.THREADS:
-        return this.exchangeThreadsCode(code, redirectUri, tenantId);
-
-      default:
-        throw new BadRequestException(`OAuth exchange not implemented for: ${platform}`);
-    }
-  }
-
-  private async exchangeFacebookCode(platform: SocialPlatform, code: string, redirectUri: string, tenantId: string) {
-    // Exchange code for access token
-    const tokenRes = await fetch(
-      `https://graph.facebook.com/v21.0/oauth/access_token?client_id=${process.env.FACEBOOK_APP_ID}&client_secret=${process.env.FACEBOOK_APP_SECRET}&code=${code}&redirect_uri=${encodeURIComponent(redirectUri)}`,
-    );
-    const tokenData = await tokenRes.json();
-    if (tokenData.error) throw new BadRequestException(tokenData.error.message);
-
-    // Exchange short-lived for long-lived token
-    const longRes = await fetch(
-      `https://graph.facebook.com/v21.0/oauth/access_token?grant_type=fb_exchange_token&client_id=${process.env.FACEBOOK_APP_ID}&client_secret=${process.env.FACEBOOK_APP_SECRET}&fb_exchange_token=${tokenData.access_token}`,
-    );
-    const longData = await longRes.json();
-    const longLivedToken = longData.access_token || tokenData.access_token;
-
-    if (platform === SocialPlatform.INSTAGRAM) {
-      // Get Instagram accounts linked to Facebook pages
-      const pagesRes = await fetch(
-        `https://graph.facebook.com/v21.0/me/accounts?fields=id,name,instagram_business_account{id,name,username,profile_picture_url}&access_token=${longLivedToken}`,
-      );
-      const pagesData = await pagesRes.json();
-      const accounts: any[] = [];
-
-      for (const page of pagesData.data || []) {
-        const ig = page.instagram_business_account;
-        if (!ig) continue;
-        const account = await this.upsertAccount(tenantId, {
-          platform: SocialPlatform.INSTAGRAM,
-          platformAccountId: ig.id,
-          name: ig.name || ig.username,
-          username: ig.username,
-          avatarUrl: ig.profile_picture_url,
-          accessToken: longLivedToken,
-          pageId: page.id,
-          scopes: ['instagram_basic', 'instagram_content_publish', 'instagram_manage_messages'],
-        });
-        accounts.push(account);
+      case 'facebook': {
+        const { clientId } = this.cfg('facebook');
+        return { url: buildFacebookOAuthUrl(clientId, redirectUri, state, FACEBOOK_SCOPES) };
       }
-      return accounts;
+      case 'instagram': {
+        const { clientId } = this.cfg('instagram');
+        return this.hasOwnInstagramApp()
+          ? { url: buildInstagramLoginOAuthUrl(clientId, redirectUri, state) }
+          : { url: buildFacebookOAuthUrl(clientId, redirectUri, state, INSTAGRAM_FB_LOGIN_SCOPES) };
+      }
+      case 'threads': {
+        const { clientId } = this.cfg('threads');
+        return { url: buildThreadsOAuthUrl(clientId, redirectUri, state) };
+      }
+      case 'tiktok': {
+        const { clientId } = this.cfg('tiktok');
+        return { url: buildTikTokOAuthUrl(clientId, redirectUri, state) };
+      }
+      case 'youtube': {
+        const { clientId } = this.cfg('youtube');
+        return { url: buildGoogleOAuthUrl(clientId, redirectUri, state, YOUTUBE_SCOPES) };
+      }
+      case 'gbp': {
+        const { clientId } = this.cfg('gbp');
+        return { url: buildGoogleOAuthUrl(clientId, redirectUri, state, GBP_SCOPES) };
+      }
+      case 'linkedin': {
+        const { clientId } = this.cfg('linkedin');
+        return { url: buildLinkedInOAuthUrl(clientId, redirectUri, state) };
+      }
+      case 'pinterest': {
+        const { clientId } = this.cfg('pinterest');
+        return { url: buildPinterestOAuthUrl(clientId, redirectUri, state) };
+      }
+      case 'x': {
+        const { clientId } = this.cfg('x');
+        const { codeVerifier, codeChallenge } = generatePkcePair();
+        await this.stashFlowData(`social:x:verifier:${peekStateNonce(state)}`, codeVerifier);
+        return { url: buildXOAuthUrl(clientId, redirectUri, state, codeChallenge) };
+      }
+      case 'bluesky':
+        throw new BadRequestException('Bluesky se conecta con POST /social-accounts/connect/bluesky (app password)');
+      case 'mastodon':
+        throw new BadRequestException('Mastodon se conecta con POST /social-accounts/connect/mastodon/start');
+      case 'whatsapp':
+        throw new BadRequestException('WhatsApp se conecta con POST /social-accounts/connect/whatsapp');
+      default:
+        throw new BadRequestException(`OAuth no soportado para: ${platform}`);
+    }
+  }
+
+  async mastodonStart(tenantId: string, userId: string, dto: MastodonStartDto): Promise<{ url: string }> {
+    const { clientId, clientSecret } = await registerMastodonApp(dto.instance, dto.redirectUri);
+    const state = signOAuthState({ platform: 'mastodon', tenantId, userId, instance: dto.instance });
+    await this.stashFlowData(
+      `social:mastodon:app:${peekStateNonce(state)}`,
+      JSON.stringify({ clientId, clientSecret, instance: dto.instance }),
+    );
+    return { url: buildMastodonOAuthUrl(dto.instance, clientId, dto.redirectUri, state) };
+  }
+
+  // ─── OAuth code exchange ────────────────────────────────────────────────
+
+  async connect(tenantId: string, userId: string, dto: ConnectSocialAccountDto): Promise<SocialAccountView[]> {
+    const statePayload = this.verifyState(dto.state, tenantId, userId);
+    const platform = statePayload.platform;
+
+    let connected: ConnectedAccount[];
+    switch (platform) {
+      case 'facebook': {
+        const { clientId, clientSecret } = this.cfg('facebook');
+        connected = await connectFacebookPages(clientId, clientSecret, dto.code, dto.redirectUri);
+        break;
+      }
+      case 'instagram': {
+        const { clientId, clientSecret } = this.cfg('instagram');
+        connected = this.hasOwnInstagramApp()
+          ? await connectInstagramLoginApi(clientId, clientSecret, dto.code, dto.redirectUri)
+          : await connectInstagramViaFacebook(clientId, clientSecret, dto.code, dto.redirectUri);
+        break;
+      }
+      case 'threads': {
+        const { clientId, clientSecret } = this.cfg('threads');
+        connected = await connectThreadsApi(clientId, clientSecret, dto.code, dto.redirectUri);
+        break;
+      }
+      case 'tiktok': {
+        const { clientId, clientSecret } = this.cfg('tiktok');
+        connected = await connectTikTokApi(clientId, clientSecret, dto.code, dto.redirectUri);
+        break;
+      }
+      case 'youtube': {
+        const { clientId, clientSecret } = this.cfg('youtube');
+        connected = await connectYouTubeApi(clientId, clientSecret, dto.code, dto.redirectUri);
+        break;
+      }
+      case 'gbp': {
+        const { clientId, clientSecret } = this.cfg('gbp');
+        connected = await connectGbpApi(clientId, clientSecret, dto.code, dto.redirectUri);
+        break;
+      }
+      case 'linkedin': {
+        const { clientId, clientSecret } = this.cfg('linkedin');
+        connected = await connectLinkedInApi(clientId, clientSecret, dto.code, dto.redirectUri);
+        break;
+      }
+      case 'pinterest': {
+        const { clientId, clientSecret } = this.cfg('pinterest');
+        connected = await connectPinterestApi(clientId, clientSecret, dto.code, dto.redirectUri);
+        break;
+      }
+      case 'x': {
+        const { clientId, clientSecret } = this.cfg('x');
+        const codeVerifier = await this.popFlowData(`social:x:verifier:${statePayload.nonce}`);
+        if (!codeVerifier) throw new BadRequestException('El flujo de X expiró — vuelve a conectar');
+        connected = await connectXApi(clientId, clientSecret, dto.code, dto.redirectUri, codeVerifier);
+        break;
+      }
+      case 'mastodon': {
+        const raw = await this.popFlowData(`social:mastodon:app:${statePayload.nonce}`);
+        if (!raw) throw new BadRequestException('El flujo de Mastodon expiró — vuelve a conectar');
+        const { clientId, clientSecret, instance } = JSON.parse(raw) as { clientId: string; clientSecret: string; instance: string };
+        connected = await connectMastodonApi(instance, clientId, clientSecret, dto.code, dto.redirectUri);
+        break;
+      }
+      default:
+        throw new BadRequestException(`${platform} no soporta este flujo — usa el endpoint dedicado`);
     }
 
-    // Facebook Pages
-    const pagesRes = await fetch(
-      `https://graph.facebook.com/v21.0/me/accounts?fields=id,name,picture{url},access_token&access_token=${longLivedToken}`,
-    );
-    const pagesData = await pagesRes.json();
-    const accounts: any[] = [];
+    return this.persistAll(tenantId, connected);
+  }
 
-    for (const page of pagesData.data || []) {
-      const account = await this.upsertAccount(tenantId, {
-        platform: SocialPlatform.FACEBOOK,
-        platformAccountId: page.id,
-        name: page.name,
-        avatarUrl: page.picture?.data?.url,
-        accessToken: page.access_token, // page-level token (long-lived)
-        pageId: page.id,
-        scopes: ['pages_show_list', 'pages_manage_posts', 'pages_messaging'],
-      });
-      accounts.push(account);
+  async connectBluesky(tenantId: string, dto: ConnectBlueskyDto): Promise<SocialAccountView[]> {
+    const connected = await connectBlueskyApi(dto.identifier, dto.appPassword);
+    return this.persistAll(tenantId, connected);
+  }
+
+  async connectWhatsAppEmbedded(tenantId: string, dto: WhatsAppEmbeddedSignupDto): Promise<SocialAccountView[]> {
+    if (!dto.wabaId || !dto.phoneNumberId) {
+      throw new BadRequestException('wabaId y phoneNumberId son requeridos (del evento de Embedded Signup)');
     }
-    return accounts;
+    const { clientId, clientSecret } = this.cfg('whatsapp');
+    const connected = await connectWhatsAppEmbeddedApi(clientId, clientSecret, dto.code, dto.wabaId, dto.phoneNumberId);
+    return this.persistAll(tenantId, connected);
   }
 
-  private async exchangeTikTokCode(code: string, redirectUri: string, tenantId: string) {
-    const res = await fetch('https://open.tiktokapis.com/v2/oauth/token/', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        client_key: process.env.TIKTOK_CLIENT_KEY!,
-        client_secret: process.env.TIKTOK_CLIENT_SECRET!,
-        code,
-        grant_type: 'authorization_code',
-        redirect_uri: redirectUri,
-      }),
-    });
-    const data = await res.json();
-    if (data.error) throw new BadRequestException(data.error_description || data.error);
-
-    const userRes = await fetch(
-      'https://open.tiktokapis.com/v2/user/info/?fields=open_id,display_name,avatar_url,username',
-      { headers: { Authorization: `Bearer ${data.access_token}` } },
-    );
-    const userData = await userRes.json();
-    const user = userData.data?.user;
-
-    return [await this.upsertAccount(tenantId, {
-      platform: SocialPlatform.TIKTOK,
-      platformAccountId: data.open_id,
-      name: user?.display_name || 'TikTok Account',
-      username: user?.username,
-      avatarUrl: user?.avatar_url,
-      accessToken: data.access_token,
-      refreshToken: data.refresh_token,
-      tokenExpiresAt: new Date(Date.now() + data.expires_in * 1000),
-      scopes: data.scope?.split(',') || [],
-    })];
+  /** Admin-only — enforced by `RequireRoles` on the controller route. */
+  async connectWhatsAppManual(tenantId: string, dto: WhatsAppManualConnectDto): Promise<SocialAccountView[]> {
+    const connected = await connectWhatsAppManualApi(dto.wabaId, dto.phoneNumberId, dto.accessToken);
+    return this.persistAll(tenantId, connected);
   }
 
-  private async exchangeGoogleCode(platform: SocialPlatform, code: string, redirectUri: string, tenantId: string) {
-    const res = await fetch('https://oauth2.googleapis.com/token', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        client_id: process.env.GOOGLE_CLIENT_ID!,
-        client_secret: process.env.GOOGLE_CLIENT_SECRET!,
-        code,
-        grant_type: 'authorization_code',
-        redirect_uri: redirectUri,
-      }),
-    });
-    const data = await res.json();
-    if (data.error) throw new BadRequestException(data.error_description || data.error);
-
-    if (platform === SocialPlatform.YOUTUBE) {
-      const chRes = await fetch(
-        'https://www.googleapis.com/youtube/v3/channels?part=snippet&mine=true',
-        { headers: { Authorization: `Bearer ${data.access_token}` } },
-      );
-      const chData = await chRes.json();
-      const channel = chData.items?.[0];
-      return [await this.upsertAccount(tenantId, {
-        platform: SocialPlatform.YOUTUBE,
-        platformAccountId: channel?.id || 'unknown',
-        name: channel?.snippet?.title || 'YouTube Channel',
-        avatarUrl: channel?.snippet?.thumbnails?.default?.url,
-        accessToken: data.access_token,
-        refreshToken: data.refresh_token,
-        tokenExpiresAt: new Date(Date.now() + data.expires_in * 1000),
-        scopes: ['youtube.readonly', 'youtube.upload'],
-      })];
-    }
-
-    // GBP
-    const locRes = await fetch(
-      'https://mybusinessaccountmanagement.googleapis.com/v1/accounts',
-      { headers: { Authorization: `Bearer ${data.access_token}` } },
-    );
-    const locData = await locRes.json();
-    const accounts: any[] = [];
-    for (const acc of locData.accounts || []) {
-      accounts.push(await this.upsertAccount(tenantId, {
-        platform: SocialPlatform.GBP,
-        platformAccountId: acc.name,
-        name: acc.accountName || 'Google Business Profile',
-        accessToken: data.access_token,
-        refreshToken: data.refresh_token,
-        tokenExpiresAt: new Date(Date.now() + data.expires_in * 1000),
-        scopes: ['business.manage'],
-      }));
-    }
-    return accounts.length > 0 ? accounts : [await this.upsertAccount(tenantId, {
-      platform: SocialPlatform.GBP,
-      platformAccountId: 'gbp-' + tenantId.slice(0, 8),
-      name: 'Google Business Profile',
-      accessToken: data.access_token,
-      refreshToken: data.refresh_token,
-      tokenExpiresAt: new Date(Date.now() + data.expires_in * 1000),
-      scopes: ['business.manage'],
-    })];
-  }
-
-  private async exchangeLinkedInCode(code: string, redirectUri: string, tenantId: string) {
-    const res = await fetch('https://www.linkedin.com/oauth/v2/accessToken', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        client_id: process.env.LINKEDIN_CLIENT_ID!,
-        client_secret: process.env.LINKEDIN_CLIENT_SECRET!,
-        code,
-        grant_type: 'authorization_code',
-        redirect_uri: redirectUri,
-      }),
-    });
-    const data = await res.json();
-    if (data.error) throw new BadRequestException(data.error_description || data.error);
-
-    const profileRes = await fetch('https://api.linkedin.com/v2/userinfo', {
-      headers: { Authorization: `Bearer ${data.access_token}` },
-    });
-    const profile = await profileRes.json();
-
-    return [await this.upsertAccount(tenantId, {
-      platform: SocialPlatform.LINKEDIN,
-      platformAccountId: profile.sub,
-      name: profile.name || 'LinkedIn Profile',
-      avatarUrl: profile.picture,
-      accessToken: data.access_token,
-      refreshToken: data.refresh_token,
-      tokenExpiresAt: new Date(Date.now() + data.expires_in * 1000),
-      scopes: ['w_member_social', 'r_organization_social'],
-    })];
-  }
-
-  private async exchangePinterestCode(code: string, redirectUri: string, tenantId: string) {
-    const res = await fetch('https://api.pinterest.com/v5/oauth/token', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-        Authorization: `Basic ${Buffer.from(`${process.env.PINTEREST_APP_ID}:${process.env.PINTEREST_APP_SECRET}`).toString('base64')}`,
-      },
-      body: new URLSearchParams({
-        code,
-        grant_type: 'authorization_code',
-        redirect_uri: redirectUri,
-      }),
-    });
-    const data = await res.json();
-    if (data.error) throw new BadRequestException(data.error_description || data.error);
-
-    const userRes = await fetch('https://api.pinterest.com/v5/user_account', {
-      headers: { Authorization: `Bearer ${data.access_token}` },
-    });
-    const user = await userRes.json();
-
-    return [await this.upsertAccount(tenantId, {
-      platform: SocialPlatform.PINTEREST,
-      platformAccountId: user.username || 'unknown',
-      name: user.business_name || user.username || 'Pinterest Account',
-      username: user.username,
-      avatarUrl: user.profile_image,
-      accessToken: data.access_token,
-      refreshToken: data.refresh_token,
-      tokenExpiresAt: new Date(Date.now() + data.expires_in * 1000),
-      scopes: ['boards:read', 'pins:read', 'pins:write'],
-    })];
-  }
-
-  private async exchangeThreadsCode(code: string, redirectUri: string, tenantId: string) {
-    // Threads short-lived token
-    const res = await fetch('https://graph.threads.net/oauth/access_token', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        client_id: process.env.THREADS_APP_ID!,
-        client_secret: process.env.THREADS_APP_SECRET!,
-        code,
-        grant_type: 'authorization_code',
-        redirect_uri: redirectUri,
-      }),
-    });
-    const data = await res.json();
-    if (data.error) throw new BadRequestException(data.error?.message || 'Threads OAuth failed');
-
-    // Exchange for long-lived token
-    const longRes = await fetch(
-      `https://graph.threads.net/access_token?grant_type=th_exchange_token&client_secret=${process.env.THREADS_APP_SECRET}&access_token=${data.access_token}`,
-    );
-    const longData = await longRes.json();
-    const token = longData.access_token || data.access_token;
-
-    const profileRes = await fetch(
-      `https://graph.threads.net/v1.0/me?fields=id,username,name,threads_profile_picture_url&access_token=${token}`,
-    );
-    const profile = await profileRes.json();
-
-    return [await this.upsertAccount(tenantId, {
-      platform: SocialPlatform.THREADS,
-      platformAccountId: profile.id || data.user_id,
-      name: profile.name || profile.username || 'Threads Account',
-      username: profile.username,
-      avatarUrl: profile.threads_profile_picture_url,
-      accessToken: token,
-      tokenExpiresAt: longData.expires_in ? new Date(Date.now() + longData.expires_in * 1000) : undefined,
-      scopes: ['threads_basic', 'threads_content_publish'],
-    })];
-  }
-
-  // ─── Bluesky (app password auth) ───
-
-  async connectBluesky(tenantId: string, identifier: string, appPassword: string) {
-    const res = await fetch('https://bsky.social/xrpc/com.atproto.server.createSession', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ identifier, password: appPassword }),
-    });
-    const data = await res.json();
-    if (data.error) throw new BadRequestException(data.message || 'Bluesky authentication failed');
-
-    return [await this.upsertAccount(tenantId, {
-      platform: SocialPlatform.BLUESKY,
-      platformAccountId: data.did,
-      name: data.handle,
-      username: data.handle,
-      avatarUrl: data.didDoc?.service?.[0]?.serviceEndpoint ? undefined : undefined,
-      accessToken: data.accessJwt,
-      refreshToken: data.refreshJwt,
-      scopes: ['atproto'],
-      metaValue: { did: data.did, handle: data.handle },
-    })];
-  }
-
-  // ─── CRUD ───
-
-  private async upsertAccount(tenantId: string, data: {
-    platform: SocialPlatform;
-    platformAccountId: string;
-    name: string;
-    username?: string;
-    avatarUrl?: string;
-    accessToken?: string;
-    refreshToken?: string;
-    tokenExpiresAt?: Date;
-    pageId?: string;
-    scopes?: string[];
-    metaValue?: any;
-  }) {
-    return this.prisma.socialAccount.upsert({
-      where: {
-        tenantId_platform_platformAccountId: {
-          tenantId,
-          platform: data.platform,
-          platformAccountId: data.platformAccountId,
-        },
-      },
-      update: {
-        name: data.name,
-        username: data.username,
-        avatarUrl: data.avatarUrl,
-        accessToken: data.accessToken,
-        refreshToken: data.refreshToken,
-        tokenExpiresAt: data.tokenExpiresAt,
-        pageId: data.pageId,
-        scopes: data.scopes || [],
-        metaValue: data.metaValue,
-        isActive: true,
-        lastSyncAt: new Date(),
-        lastErrorAt: null,
-        lastErrorMsg: null,
-      },
-      create: {
+  async connectReminder(tenantId: string, dto: ReminderChannelDto): Promise<SocialAccountView> {
+    const row = await this.prisma.socialAccount.create({
+      data: {
         tenantId,
-        platform: data.platform,
-        platformAccountId: data.platformAccountId,
-        name: data.name,
-        username: data.username,
-        avatarUrl: data.avatarUrl,
-        accessToken: data.accessToken,
-        refreshToken: data.refreshToken,
-        tokenExpiresAt: data.tokenExpiresAt,
-        pageId: data.pageId,
-        scopes: data.scopes || [],
-        metaValue: data.metaValue,
+        platform: dto.platform,
+        platformAccountId: `reminder:${randomUUID()}`,
+        name: dto.name,
+        username: dto.username ?? null,
+        profileUrl: dto.profileUrl ?? null,
+        accountType: dto.accountType,
+        publishMethod: 'reminder',
+        status: 'active',
+        isActive: true,
+        scopes: [],
       },
     });
+    return toAccountView(row, null);
   }
 
-  async findAll(tenantId: string) {
-    return this.prisma.socialAccount.findMany({
+  // ─── CRUD ───────────────────────────────────────────────────────────────
+
+  async findAll(tenantId: string): Promise<SocialAccountView[]> {
+    const accounts = await this.prisma.socialAccount.findMany({
       where: { tenantId },
       orderBy: [{ platform: 'asc' }, { name: 'asc' }],
-      select: {
-        id: true,
-        platform: true,
-        platformAccountId: true,
-        name: true,
-        username: true,
-        avatarUrl: true,
-        isActive: true,
-        lastSyncAt: true,
-        lastErrorMsg: true,
-        tokenExpiresAt: true,
-        scopes: true,
-        createdAt: true,
-      },
     });
-  }
+    if (!accounts.length) return [];
 
-  async findOne(tenantId: string, id: string) {
-    const account = await this.prisma.socialAccount.findFirst({
-      where: { id, tenantId },
-      select: {
-        id: true,
-        platform: true,
-        platformAccountId: true,
-        name: true,
-        username: true,
-        avatarUrl: true,
-        isActive: true,
-        lastSyncAt: true,
-        lastErrorMsg: true,
-        tokenExpiresAt: true,
-        scopes: true,
-        pageId: true,
-        createdAt: true,
-        updatedAt: true,
-      },
+    const schedules = await this.prisma.socialPostingSchedule.findMany({
+      where: { tenantId, accountId: { in: accounts.map((a) => a.id) } },
+      select: { accountId: true, timezone: true, paused: true },
     });
-    if (!account) throw new NotFoundException('Social account not found');
-    return account;
+    const byAccount = new Map(schedules.map((s) => [s.accountId, s]));
+    return accounts.map((a) => toAccountView(a, byAccount.get(a.id)));
   }
 
-  async disconnect(tenantId: string, id: string) {
-    await this.findOne(tenantId, id);
-    // Remove from all groups first
-    await this.prisma.socialGroupAccount.deleteMany({ where: { socialAccountId: id } });
-    await this.prisma.socialAccount.delete({ where: { id } });
-    return { message: 'Account disconnected' };
+  async findOne(tenantId: string, id: string): Promise<SocialAccountView> {
+    const account = await this.ensureAccount(id, tenantId);
+    const schedule = await this.getSchedule(id);
+    return toAccountView(account, schedule);
   }
 
-  async manualConnect(tenantId: string, dto: ManualConnectSocialAccountDto) {
-    return this.upsertAccount(tenantId, {
-      platform: dto.platform as SocialPlatform,
-      platformAccountId: dto.platformAccountId,
-      name: dto.name,
-      username: dto.username,
-      avatarUrl: dto.avatarUrl,
-      accessToken: dto.accessToken,
-      refreshToken: dto.refreshToken,
-      pageId: dto.pageId,
-      scopes: dto.scopes,
-    });
+  async update(tenantId: string, id: string, dto: UpdateSocialAccountDto): Promise<SocialAccountView> {
+    await this.ensureAccount(id, tenantId);
+
+    if (dto.name !== undefined) {
+      await this.prisma.socialAccount.update({ where: { id }, data: { name: dto.name } });
+    }
+
+    if (dto.timezone !== undefined || dto.queuePaused !== undefined) {
+      await this.prisma.socialPostingSchedule.upsert({
+        where: { accountId: id },
+        update: {
+          ...(dto.timezone !== undefined ? { timezone: dto.timezone } : {}),
+          ...(dto.queuePaused !== undefined ? { paused: dto.queuePaused } : {}),
+        },
+        create: {
+          tenantId,
+          accountId: id,
+          timezone: dto.timezone ?? DEFAULT_TIMEZONE,
+          paused: dto.queuePaused ?? false,
+        },
+      });
+    }
+
+    const account = await this.ensureAccount(id, tenantId);
+    const schedule = await this.getSchedule(id);
+    return toAccountView(account, schedule);
   }
 
-  // ─── Groups ───
+  /** Best-effort token refresh + per-platform profile re-fetch (name/username/avatarUrl/profileUrl), re-using each connector's own "who am I" call (see {@link refreshProfile}). */
+  async refresh(tenantId: string, id: string): Promise<SocialAccountView> {
+    const account = await this.ensureAccount(id, tenantId);
+    if (account.publishMethod === 'api') {
+      try {
+        await this.tokenService.getAccessToken(account);
+      } catch (err) {
+        this.logger.warn(`refresh: account=${id} — ${(err as Error).message}`);
+      }
+    }
+
+    const afterTokenRefresh = await this.ensureAccount(id, tenantId);
+    await this.refreshProfile(afterTokenRefresh);
+
+    const updated = await this.ensureAccount(id, tenantId);
+    const schedule = await this.getSchedule(id);
+    return toAccountView(updated, schedule);
+  }
+
+  /**
+   * Re-fetches name/username/avatarUrl/profileUrl straight from the platform,
+   * with the exact fields/endpoint each connector already used at connect
+   * time. Best-effort: a failed profile fetch never fails `refresh()` — the
+   * token refresh above is the part that matters for the account staying
+   * usable. Bluesky, YouTube and GBP have no single-account "who am I" GET
+   * in the current connectors (Bluesky is session-based with no profile
+   * endpoint wired here; YouTube/GBP connect by listing every channel/location,
+   * not by id) — those three keep whatever name/avatar was stored at connect.
+   */
+  private async refreshProfile(account: PrismaSocialAccount): Promise<void> {
+    try {
+      const secrets = await this.tokenService.getSecrets(account);
+      if (!secrets?.accessToken) return;
+
+      let profile: RefreshedProfile | null = null;
+      switch (account.platform as SocialPlatform) {
+        case 'facebook':
+          profile = await fetchFacebookPageProfile(account.platformAccountId, secrets.accessToken);
+          break;
+        case 'instagram':
+          // Instagram-via-Facebook-Login accounts carry `fbPageId` in extraSecrets (see connectInstagramViaFacebook); native Instagram Login accounts don't.
+          profile = secrets.fbPageId
+            ? await fetchInstagramViaFacebookProfile(account.platformAccountId, secrets.accessToken)
+            : await fetchInstagramLoginProfile(account.platformAccountId, secrets.accessToken);
+          break;
+        case 'threads':
+          profile = await fetchThreadsProfile(account.platformAccountId, secrets.accessToken);
+          break;
+        case 'linkedin':
+          // Organization pages have no single-org GET in this connector (only the member's organizationAcls listing) — only the member profile refreshes.
+          if (account.accountType === 'profile') profile = await fetchLinkedInProfile(secrets.accessToken);
+          break;
+        case 'pinterest':
+          profile = await fetchPinterestProfile(secrets.accessToken);
+          break;
+        case 'tiktok':
+          profile = await fetchTikTokProfile(secrets.accessToken);
+          break;
+        case 'x':
+          profile = await fetchXProfile(secrets.accessToken);
+          break;
+        case 'mastodon': {
+          const instance = secrets.instance as string | undefined;
+          if (instance) profile = await fetchMastodonProfile(instance, secrets.accessToken);
+          break;
+        }
+        case 'whatsapp':
+          profile = await fetchWhatsAppProfile(account.platformAccountId, secrets.accessToken);
+          break;
+        default:
+          break;
+      }
+
+      if (profile) {
+        await this.prisma.socialAccount.update({
+          where: { id: account.id },
+          data: { name: profile.name, username: profile.username, avatarUrl: profile.avatarUrl, profileUrl: profile.profileUrl },
+        });
+      }
+    } catch (err) {
+      this.logger.warn(`refreshProfile: account=${account.id} platform=${account.platform} — ${(err as Error).message}`);
+    }
+  }
+
+  /** Soft disconnect: wipes credentials, deactivates, cancels the account's not-yet-published targets. */
+  async disconnect(tenantId: string, id: string): Promise<{ message: string }> {
+    await this.ensureAccount(id, tenantId);
+
+    await this.prisma.$transaction([
+      this.prisma.socialAccount.update({
+        where: { id },
+        data: {
+          status: 'disconnected',
+          isActive: false,
+          encryptedSecrets: null,
+          accessToken: null,
+          refreshToken: null,
+          tokenExpiresAt: null,
+        },
+      }),
+      this.prisma.socialPostTarget.updateMany({
+        where: { accountId: id, tenantId, status: { in: ['scheduled', 'pending_approval'] } },
+        data: { status: 'cancelled' },
+      }),
+    ]);
+
+    return { message: 'Cuenta desconectada' };
+  }
+
+  async listBoards(tenantId: string, id: string): Promise<{ id: string; name: string }[]> {
+    const account = await this.ensureAccount(id, tenantId);
+    if (account.platform !== 'pinterest') {
+      throw new BadRequestException('Solo las cuentas de Pinterest tienen boards');
+    }
+    const accessToken = await this.tokenService.getAccessToken(account);
+    return listPinterestBoards(accessToken);
+  }
+
+  // ─── Groups (unchanged surface) ─────────────────────────────────────────
+
+  private static readonly GROUP_ACCOUNT_SELECT = {
+    account: { select: { id: true, platform: true, name: true, avatarUrl: true, username: true } },
+  } satisfies Record<string, unknown>;
 
   async findAllGroups(tenantId: string) {
     return this.prisma.socialGroup.findMany({
       where: { tenantId },
-      include: {
-        accounts: {
-          include: {
-            account: {
-              select: { id: true, platform: true, name: true, avatarUrl: true, username: true },
-            },
-          },
-        },
-      },
+      include: { accounts: { include: SocialAccountsService.GROUP_ACCOUNT_SELECT } },
       orderBy: { name: 'asc' },
     });
   }
 
   async createGroup(tenantId: string, dto: CreateSocialGroupDto) {
-    const group = await this.prisma.socialGroup.create({
-      data: {
-        tenantId,
-        name: dto.name,
-      },
-    });
+    const group = await this.prisma.socialGroup.create({ data: { tenantId, name: dto.name } });
 
     if (dto.accountIds?.length) {
+      const owned = await this.prisma.socialAccount.findMany({
+        where: { id: { in: dto.accountIds }, tenantId },
+        select: { id: true },
+      });
       await this.prisma.socialGroupAccount.createMany({
-        data: dto.accountIds.map((accountId) => ({
-          socialGroupId: group.id,
-          socialAccountId: accountId,
-        })),
+        data: owned.map((a) => ({ socialGroupId: group.id, socialAccountId: a.id })),
         skipDuplicates: true,
       });
     }
 
     return this.prisma.socialGroup.findUnique({
       where: { id: group.id },
-      include: {
-        accounts: {
-          include: {
-            account: {
-              select: { id: true, platform: true, name: true, avatarUrl: true, username: true },
-            },
-          },
-        },
-      },
+      include: { accounts: { include: SocialAccountsService.GROUP_ACCOUNT_SELECT } },
     });
   }
 
@@ -567,14 +483,14 @@ export class SocialAccountsService {
     }
 
     if (dto.accountIds !== undefined) {
-      // Replace all group members
       await this.prisma.socialGroupAccount.deleteMany({ where: { socialGroupId: id } });
       if (dto.accountIds.length > 0) {
+        const owned = await this.prisma.socialAccount.findMany({
+          where: { id: { in: dto.accountIds }, tenantId },
+          select: { id: true },
+        });
         await this.prisma.socialGroupAccount.createMany({
-          data: dto.accountIds.map((accountId) => ({
-            socialGroupId: id,
-            socialAccountId: accountId,
-          })),
+          data: owned.map((a) => ({ socialGroupId: id, socialAccountId: a.id })),
           skipDuplicates: true,
         });
       }
@@ -582,15 +498,7 @@ export class SocialAccountsService {
 
     return this.prisma.socialGroup.findUnique({
       where: { id },
-      include: {
-        accounts: {
-          include: {
-            account: {
-              select: { id: true, platform: true, name: true, avatarUrl: true, username: true },
-            },
-          },
-        },
-      },
+      include: { accounts: { include: SocialAccountsService.GROUP_ACCOUNT_SELECT } },
     });
   }
 
@@ -599,5 +507,113 @@ export class SocialAccountsService {
     if (!group) throw new NotFoundException('Group not found');
     await this.prisma.socialGroup.delete({ where: { id } });
     return { message: 'Group deleted' };
+  }
+
+  // ─── Internals ──────────────────────────────────────────────────────────
+
+  /** Every mutating method above resolves the row through this first, so a cross-tenant id is a 404, not a 403. */
+  private async ensureAccount(id: string, tenantId: string): Promise<PrismaSocialAccount> {
+    const account = await this.prisma.socialAccount.findFirst({ where: { id, tenantId } });
+    if (!account) throw new NotFoundException('Social account not found');
+    return account;
+  }
+
+  private async getSchedule(accountId: string): Promise<ScheduleSlice | null> {
+    return this.prisma.socialPostingSchedule.findUnique({
+      where: { accountId },
+      select: { timezone: true, paused: true },
+    });
+  }
+
+  private cfg(platform: SocialPlatform): { clientId: string; clientSecret: string } {
+    try {
+      return platformConfig(platform);
+    } catch (err) {
+      if (err instanceof SocialApiError) throw new BadRequestException(err.message);
+      throw err;
+    }
+  }
+
+  private verifyState(state: string, tenantId: string, userId: string) {
+    try {
+      return verifyOAuthState(state, { tenantId, userId });
+    } catch (err) {
+      throw new BadRequestException((err as Error).message);
+    }
+  }
+
+  /** `INSTAGRAM_APP_ID` set (distinct from the Facebook-app fallback) → Instagram Login; otherwise Instagram-via-Facebook-Login. */
+  private hasOwnInstagramApp(): boolean {
+    return !!process.env.INSTAGRAM_APP_ID && !!process.env.INSTAGRAM_APP_SECRET;
+  }
+
+  private async stashFlowData(key: string, value: string): Promise<void> {
+    await this.redis.getClient().set(key, value, 'EX', REDIS_FLOW_TTL_SEC);
+  }
+
+  private async popFlowData(key: string): Promise<string | null> {
+    const value = await this.redis.getClient().get(key);
+    if (value) await this.redis.getClient().del(key);
+    return value;
+  }
+
+  private async persistAll(tenantId: string, connected: ConnectedAccount[]): Promise<SocialAccountView[]> {
+    const results: SocialAccountView[] = [];
+    for (const acc of connected) {
+      const row = await this.upsertAccount(tenantId, acc);
+
+      if (acc.subscribeWebhook) {
+        try {
+          await subscribeFacebookPageWebhook(acc.platformAccountId, acc.tokens.accessToken);
+          await this.prisma.socialAccount.update({ where: { id: row.id }, data: { webhookSubscribedAt: new Date() } });
+        } catch (err) {
+          this.logger.warn(`Facebook webhook subscribe failed for account=${row.id}: ${(err as Error).message}`);
+        }
+      }
+
+      const schedule = await this.getSchedule(row.id);
+      results.push(toAccountView(row, schedule));
+    }
+    return results;
+  }
+
+  private async upsertAccount(tenantId: string, acc: ConnectedAccount): Promise<PrismaSocialAccount> {
+    const secrets: SocialAccountSecrets = {
+      accessToken: acc.tokens.accessToken,
+      refreshToken: acc.tokens.refreshToken ?? null,
+      ...(acc.extraSecrets || {}),
+    };
+
+    const shared = {
+      name: acc.name,
+      username: acc.username ?? null,
+      avatarUrl: acc.avatarUrl ?? null,
+      profileUrl: acc.profileUrl ?? null,
+      accountType: acc.accountType,
+      publishMethod: 'api' as const,
+      status: 'active' as const,
+      scopes: acc.scopes,
+      encryptedSecrets: encryptJson(secrets),
+      tokenExpiresAt: acc.tokens.expiresAt ?? null,
+      isActive: true,
+      lastSyncAt: new Date(),
+      lastErrorAt: null,
+      lastErrorMsg: null,
+      // Superseded by encryptedSecrets going forward — cleared so a reconnect never leaves stale plaintext behind.
+      accessToken: null,
+      refreshToken: null,
+    };
+
+    return this.prisma.socialAccount.upsert({
+      where: {
+        tenantId_platform_platformAccountId: {
+          tenantId,
+          platform: acc.platform,
+          platformAccountId: acc.platformAccountId,
+        },
+      },
+      update: shared,
+      create: { tenantId, platform: acc.platform, platformAccountId: acc.platformAccountId, ...shared },
+    });
   }
 }

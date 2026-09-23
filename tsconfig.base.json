@@ -31,6 +31,7 @@
       "@htownautos/carfax-analyzer": ["apps/ai-services/src/carfax-analyzer/index.ts"],
       "@htownautos/opensearch": ["libs/opensearch/src/index.ts"],
       "@htownautos/auction-matching": ["libs/auction-matching/src/index.ts"],
+      "@htownautos/social": ["libs/social/src/index.ts"],
       "@htownautos/damage-detector": ["apps/ai-services/src/damage-detector/index.ts"]
     }
   },

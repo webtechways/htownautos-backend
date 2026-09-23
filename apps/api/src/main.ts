@@ -38,12 +38,15 @@ async function bootstrap() {
     },
   });
 
-  // Body parser: Stripe webhooks need raw body for signature verification,
-  // all other routes get parsed JSON as before
+  // Body parser: Stripe/Meta webhooks need the raw body for signature
+  // verification (X-Hub-Signature-256 for Meta — HMAC over the exact bytes
+  // received, which a re-serialized JSON.stringify(req.body) would not
+  // reproduce), all other routes get parsed JSON as before.
   app.use((req: any, res: any, next: any) => {
     if (
       req.originalUrl === '/api/v1/stripe/webhooks' ||
-      req.originalUrl === '/api/v1/shippo/webhooks'
+      req.originalUrl === '/api/v1/shippo/webhooks' ||
+      req.originalUrl === '/api/v1/social/webhooks/meta'
     ) {
       bodyParser.raw({ type: 'application/json', limit: '5mb' })(req, res, next);
     } else {

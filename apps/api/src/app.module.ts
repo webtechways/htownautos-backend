@@ -92,6 +92,10 @@ import { VehicleDocumentsModule } from './vehicle-documents/vehicle-documents.mo
 import { ContactMessagesModule } from './contact-messages/contact-messages.module';
 import { AiTranslateModule } from './ai-translate/ai-translate.module';
 import { SyncWatchdogModule } from './sync-watchdog/sync-watchdog.module';
+import { SocialRealtimeModule } from '@htownautos/social';
+import { SocialModule } from './social/social.module';
+import { InboxModule } from './inbox/inbox.module';
+import { PublicStartModule } from './public-start/public-start.module';
 
 /**
  * API Gateway Module
@@ -200,6 +204,10 @@ import { SyncWatchdogModule } from './sync-watchdog/sync-watchdog.module';
     ContactMessagesModule,
     AiTranslateModule,
     SyncWatchdogModule,
+    SocialRealtimeModule,
+    SocialModule,
+    InboxModule,
+    PublicStartModule,
   ],
   controllers: [AppController],
   providers: [

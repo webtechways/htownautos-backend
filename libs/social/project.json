@@ -1,0 +1,8 @@
+{
+  "name": "social-lib",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "libs/social/src",
+  "projectType": "library",
+  "tags": ["scope:shared", "type:lib"],
+  "targets": {}
+}
