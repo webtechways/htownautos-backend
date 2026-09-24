@@ -75,6 +75,12 @@ export class SocialMediaService {
       throw new BadRequestException('El tamaño reportado no coincide con el archivo subido');
     }
 
+    // createdById apunta a TenantUser, no a User: guardar el id de usuario tal
+    // cual violaba la FK y cada subida acababa en 500 despues de subir el archivo.
+    const tenantUser = userId
+      ? await this.prisma.tenantUser.findUnique({ where: { tenantId_userId: { tenantId, userId } } })
+      : null;
+
     const row = await this.prisma.socialMedia.create({
       data: {
         tenantId,
@@ -88,7 +94,7 @@ export class SocialMediaService {
         durationSec: dto.durationSec ?? null,
         altText: dto.altText ?? null,
         thumbnailKey: dto.thumbnailKey ?? null,
-        createdById: userId,
+        createdById: tenantUser?.id ?? null,
       },
     });
     return this.toItem(row);
