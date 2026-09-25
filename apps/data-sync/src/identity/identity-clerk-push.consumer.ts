@@ -135,7 +135,7 @@ export class IdentityClerkPushConsumer implements OnModuleInit {
       return this.updateLinkedUser(existingId, desired);
     }
 
-    const created = await this.clerk.users.createUser({
+    const params = {
       emailAddress: isSyntheticClerkEmail(desired.email) ? undefined : [desired.email],
       phoneNumber: desired.phone ? [desired.phone] : undefined,
       firstName: desired.firstName ?? undefined,
@@ -143,8 +143,16 @@ export class IdentityClerkPushConsumer implements OnModuleInit {
       externalId: desired.externalId,
       publicMetadata: desired.publicMetadata,
       skipPasswordRequirement: true,
-    });
-    return created.id;
+    };
+    try {
+      return (await this.clerk.users.createUser(params)).id;
+    } catch (err) {
+      // A CRM phone that is well-formed but not a real number (Clerk validates
+      // with libphonenumber) must not block the account: create it by email.
+      if (!params.phoneNumber || !isInvalidPhoneError(err)) throw err;
+      this.logger.warn(`Clerk rejected the phone of CRM user ${desired.externalId}; created without phone`);
+      return (await this.clerk.users.createUser({ ...params, phoneNumber: undefined })).id;
+    }
   }
 
   private async updateLinkedUser(clerkUserId: string, desired: DesiredClerkState): Promise<string> {
@@ -194,12 +202,21 @@ export class IdentityClerkPushConsumer implements OnModuleInit {
       }
       return;
     }
-    const created = await this.clerk.phoneNumbers.createPhoneNumber({
-      userId: clerkUserId,
-      phoneNumber: phone,
-      verified: true,
-      primary: false,
-    });
+    let created;
+    try {
+      created = await this.clerk.phoneNumbers.createPhoneNumber({
+        userId: clerkUserId,
+        phoneNumber: phone,
+        verified: true,
+        primary: false,
+      });
+    } catch (err) {
+      // Same as in linkOrCreateUser: an invalid CRM phone leaves the account
+      // linked by email instead of failing the whole sync.
+      if (!isInvalidPhoneError(err)) throw err;
+      this.logger.warn(`Clerk rejected the phone for Clerk user ${clerkUserId}; phone not synced`);
+      return;
+    }
     await this.clerk.users.updateUser(clerkUserId, { primaryPhoneNumberID: created.id });
   }
 
@@ -283,4 +300,12 @@ export class IdentityClerkPushConsumer implements OnModuleInit {
         this.logger.error(`markFailed: could not persist status for ${userId} — ${(updateErr as Error).message}`);
       });
   }
+}
+
+/** Clerk's 422 for a phone that isn't a real number under E.164 / libphonenumber. */
+function isInvalidPhoneError(err: unknown): boolean {
+  const errors = (err as { errors?: Array<{ code?: string; meta?: { paramName?: string }; longMessage?: string }> })?.errors;
+  return Array.isArray(errors) && errors.some(
+    (e) => e.code === 'form_param_format_invalid' && (e.meta?.paramName === 'phone_number' || /phone/i.test(e.longMessage ?? '')),
+  );
 }
