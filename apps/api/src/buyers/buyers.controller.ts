@@ -305,4 +305,32 @@ export class BuyersController {
   ): Promise<{ message: string }> {
     return this.service.remove(id, tenantId);
   }
+
+  // ── Portal access (CLERK-SYNC-DESIGN.md, package B2) ────────────────────────
+
+  @Get(':id/portal-access')
+  @ApiOperation({ summary: "Buyer's Clerk portal-access sync status" })
+  @ApiParam({ name: 'id', description: 'Buyer UUID' })
+  @ApiResponse({ status: HttpStatus.OK, description: 'Portal access status' })
+  @ApiResponse({ status: HttpStatus.NOT_FOUND, description: 'Buyer not found' })
+  getPortalAccess(
+    @CurrentTenant() tenantId: string,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    return this.service.getPortalAccess(id, tenantId);
+  }
+
+  @Post(':id/portal-access/retry')
+  @HttpCode(HttpStatus.OK)
+  @AuditLog({ action: 'update', resource: 'buyer', level: 'medium', pii: true })
+  @ApiOperation({ summary: 'Re-enqueue the Clerk identity push for this buyer' })
+  @ApiParam({ name: 'id', description: 'Buyer UUID' })
+  @ApiResponse({ status: HttpStatus.OK, description: 'Re-enqueued' })
+  @ApiResponse({ status: HttpStatus.NOT_FOUND, description: 'Buyer not found' })
+  retryPortalAccess(
+    @CurrentTenant() tenantId: string,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    return this.service.retryPortalAccess(id, tenantId);
+  }
 }

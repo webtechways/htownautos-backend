@@ -17,6 +17,16 @@ export type { PortalBuyer } from './guards/customer.guard';
 
 // Identity helpers
 export { recomputeUserType } from './recompute-user-type';
+export {
+  ensureUserForBuyer,
+  syncUserOnBuyerRemoved,
+} from './identity-sync-helpers';
+export type {
+  EnsureUserForBuyerInput,
+  EnsureUserForBuyerResult,
+} from './identity-sync-helpers';
+export { createClerkAdminClient } from './clerk-admin.client';
+export type { ClerkAdminClient } from './clerk-admin.client';
 
 // Decorators
 export { Public, IS_PUBLIC_KEY } from './decorators/public.decorator';

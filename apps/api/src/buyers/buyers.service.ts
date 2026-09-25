@@ -1,7 +1,9 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
+import type { ClerkSyncStatus } from '@prisma/client';
 import { PrismaService } from '@htownautos/prisma';
-import { ClerkService, PORTAL_TENANT_ID } from '@htownautos/auth';
+import { ClerkService, ensureUserForBuyer, syncUserOnBuyerRemoved } from '@htownautos/auth';
+import { RabbitMQService, CLERK_PUSH_QUEUE } from '@htownautos/rabbitmq';
 import { CreateBuyerDto } from './dto/create-buyer.dto';
 import { UpdateBuyerDto } from './dto/update-buyer.dto';
 import { QueryBuyerDto } from './dto/query-buyer.dto';
@@ -46,6 +48,7 @@ export class BuyersService {
     private readonly prisma: PrismaService,
     private readonly clerkService: ClerkService,
     private readonly s3: S3Service,
+    private readonly rabbitMQ: RabbitMQService,
   ) {
     this.buyer = prisma.getModel('buyer');
   }
@@ -289,13 +292,14 @@ export class BuyersService {
       include: BUYER_INCLUDE,
     });
 
-    // For the canonical portal tenant, auto-create a Clerk account so the
-    // customer can sign in to htownautos.com immediately.  This is best-effort:
-    // a Clerk failure must NOT block the staff workflow.
-    // P0 hotfix (2026-09-24): auto-linking on create disabled. createUser()
-    // could silently reset the password of a pre-existing Clerk account for
-    // this email, enabling account takeover. Re-enable once a proper
-    // verified-email sync design ships (see clerk-jwt.guard.ts linking rules).
+    // Identity sync (CLERK-SYNC-DESIGN.md, package B2): link/create the
+    // single-identity User row and, for portal-enabled tenants, enqueue a
+    // push to Clerk. Best-effort — never blocks the staff workflow.
+    // P0 hotfix (2026-09-24) superseded: direct Clerk API calls from here
+    // (createUser/handleExistingUser resetting passwords) are gone — Clerk
+    // writes now happen only in the data-sync consumer, which never touches
+    // an existing account's password.
+    await this.enqueueIdentitySync(record.id, tenantId, record.email, record.phoneMain, record.firstName, record.lastName);
 
     return new BuyerEntity(record);
   }
@@ -468,24 +472,26 @@ export class BuyersService {
       include: BUYER_INCLUDE,
     });
 
-    // Best-effort: if this buyer is in the portal tenant and still has no
-    // clerkUserId but now has an email, attempt to create/link a Clerk account.
-    // P0 hotfix (2026-09-24): auto-linking on update disabled, same reason
-    // as the create path above — see clerk-jwt.guard.ts linking rules.
+    // Identity sync — same as create(), see comment there.
+    await this.enqueueIdentitySync(record.id, tenantId, record.email, record.phoneMain, record.firstName, record.lastName);
 
     return new BuyerEntity(record);
   }
 
   async remove(id: string, tenantId: string): Promise<{ message: string }> {
     await this.ensureBuyerExists(id, tenantId);
+    const existing = await this.buyer.findUnique({ where: { id }, select: { userId: true } });
     await this.buyer.delete({ where: { id } });
+    if (existing?.userId) {
+      await this.enqueueIdentitySyncOnRemoval(existing.userId, tenantId);
+    }
     return { message: `Buyer ${id} deleted` };
   }
 
   async removeBulk(ids: string[], tenantId: string): Promise<{ message: string; count: number }> {
     const buyers = await this.buyer.findMany({
       where: { id: { in: ids }, tenantId: tenantId || undefined },
-      select: { id: true },
+      select: { id: true, userId: true },
     });
 
     const foundIds = buyers.map((b) => b.id);
@@ -500,10 +506,50 @@ export class BuyersService {
       where: { id: { in: foundIds }, tenantId: tenantId || undefined },
     });
 
+    const linkedUserIds = buyers.map((b) => b.userId).filter((v): v is string => !!v);
+    await Promise.all(
+      linkedUserIds.map((userId) => this.enqueueIdentitySyncOnRemoval(userId, tenantId)),
+    );
+
     return {
       message: `${result.count} customer(s) have been successfully deleted`,
       count: result.count,
     };
+  }
+
+  /**
+   * Identity sync (CLERK-SYNC-DESIGN.md, package B2): ensure/link the
+   * single-identity User row for this buyer and, if it belongs to a
+   * portal-enabled tenant, enqueue `identity.clerk.push` after the DB write
+   * is committed. Best-effort — swallows its own errors internally.
+   */
+  private async enqueueIdentitySync(
+    buyerId: string,
+    tenantId: string,
+    email: string | null | undefined,
+    phoneMain: string | null | undefined,
+    firstName: string,
+    lastName: string,
+  ): Promise<void> {
+    const { userId, shouldPublish } = await ensureUserForBuyer(this.prisma, {
+      buyerId,
+      tenantId,
+      email,
+      phoneMain,
+      firstName,
+      lastName,
+    });
+    if (shouldPublish && userId) {
+      await this.rabbitMQ.publish(CLERK_PUSH_QUEUE, { userId });
+    }
+  }
+
+  /** Identity sync counterpart for buyer removal — see syncUserOnBuyerRemoved. */
+  private async enqueueIdentitySyncOnRemoval(userId: string, tenantId: string): Promise<void> {
+    const { shouldPublish } = await syncUserOnBuyerRemoved(this.prisma, { userId, tenantId });
+    if (shouldPublish) {
+      await this.rabbitMQ.publish(CLERK_PUSH_QUEUE, { userId });
+    }
   }
 
   // ── Private helpers ──────────────────────────────────────────
@@ -605,5 +651,53 @@ export class BuyersService {
       emailExists: !!emailCheck,
       phoneExists: !!phoneCheck,
     };
+  }
+
+  // ── Portal access status (CLERK-SYNC-DESIGN.md, package B2) ────────────────
+
+  /** Read-only status for the buyer's "Portal access" badge — never touches Clerk. */
+  async getPortalAccess(
+    id: string,
+    tenantId: string,
+  ): Promise<{
+    status: ClerkSyncStatus | 'NOT_LINKED';
+    error: string | null;
+    clerkUserId: string | null;
+    syncedAt: Date | null;
+  }> {
+    await this.ensureBuyerExists(id, tenantId);
+    const buyer = await this.buyer.findUnique({ where: { id }, select: { userId: true } });
+    if (!buyer?.userId) {
+      return { status: 'NOT_LINKED', error: null, clerkUserId: null, syncedAt: null };
+    }
+    const user = await this.prisma.user.findUnique({
+      where: { id: buyer.userId },
+      select: { clerkSyncStatus: true, clerkSyncError: true, clerkUserId: true, clerkSyncedAt: true },
+    });
+    if (!user) return { status: 'NOT_LINKED', error: null, clerkUserId: null, syncedAt: null };
+    return {
+      status: user.clerkSyncStatus,
+      error: user.clerkSyncError,
+      clerkUserId: user.clerkUserId,
+      syncedAt: user.clerkSyncedAt,
+    };
+  }
+
+  /** Re-enqueue the identity push — same path as create/update, so it stays gated by customerPortalEnabled. */
+  async retryPortalAccess(id: string, tenantId: string): Promise<{ status: string }> {
+    await this.ensureBuyerExists(id, tenantId);
+    const buyer = await this.buyer.findUnique({
+      where: { id },
+      select: { email: true, phoneMain: true, firstName: true, lastName: true },
+    });
+    await this.enqueueIdentitySync(
+      id,
+      tenantId,
+      buyer?.email,
+      buyer?.phoneMain,
+      buyer?.firstName ?? '',
+      buyer?.lastName ?? '',
+    );
+    return { status: 'PENDING' };
   }
 }

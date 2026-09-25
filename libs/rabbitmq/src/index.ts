@@ -10,4 +10,9 @@ export {
   type ChatDispatchMessage,
 } from './chat-dispatch';
 
+export {
+  CLERK_PUSH_QUEUE,
+  type IdentityClerkPushMessage,
+} from './identity-clerk-push';
+
 export * from './auction-frames';

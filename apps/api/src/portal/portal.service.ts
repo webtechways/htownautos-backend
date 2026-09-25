@@ -9,7 +9,8 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '@htownautos/prisma';
 import { S3Service } from '@htownautos/common';
 import type { PortalBuyer } from '@htownautos/auth';
-import { PORTAL_TENANT_ID } from '@htownautos/auth';
+import { PORTAL_TENANT_ID, ensureUserForBuyer } from '@htownautos/auth';
+import { RabbitMQService, CLERK_PUSH_QUEUE } from '@htownautos/rabbitmq';
 import { CopartService } from '../copart/copart.service';
 import { QueryCopartDto } from '../copart/dto/query-copart.dto';
 import { AuctionSearchService } from '../opensearch/auction-search.service';
@@ -206,6 +207,7 @@ export class PortalService {
     private readonly s3: S3Service,
     private readonly auctionAnalysis: AuctionAnalysisService,
     private readonly notifications: NotificationsService,
+    private readonly rabbitMQ: RabbitMQService,
   ) {
     this.stripe = new Stripe(process.env.STRIPE_SECRET_KEY!);
   }
@@ -236,6 +238,23 @@ export class PortalService {
       data,
       select: BUYER_SAFE_SELECT,
     });
+
+    // Identity sync (CLERK-SYNC-DESIGN.md, package B2) — a customer editing
+    // their own name/phone is a legitimate "last writer" event; phone is the
+    // login identifier (email code + SMS code), so it must reach Clerk.
+    // Best-effort, never blocks the portal request.
+    const { userId, shouldPublish } = await ensureUserForBuyer(this.prisma, {
+      buyerId: buyer.id,
+      tenantId: buyer.tenantId,
+      email: updated.email,
+      phoneMain: updated.phoneMain,
+      firstName: updated.firstName,
+      lastName: updated.lastName,
+    });
+    if (shouldPublish && userId) {
+      await this.rabbitMQ.publish(CLERK_PUSH_QUEUE, { userId });
+    }
+
     return updated;
   }
 

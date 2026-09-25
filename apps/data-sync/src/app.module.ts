@@ -30,6 +30,9 @@ import { EmbedJobWatchdogService } from './embed-job-watchdog.service';
 import { ChatDispatchConsumer } from './chat-dispatch.consumer';
 import { ChatNotifierService } from './chat-notifier.service';
 import { SocialJobsModule } from './social/social-jobs.module';
+import { IdentityClerkPushConsumer } from './identity/identity-clerk-push.consumer';
+import { IdentitySyncSweepService } from './identity/identity-sync-sweep.service';
+import { IdentityQuotaNotifierService } from './identity/identity-quota-notifier.service';
 
 
 @Module({
@@ -49,6 +52,9 @@ import { SocialJobsModule } from './social/social-jobs.module';
     AuctionFramesRetentionService,
     ChatDispatchConsumer,
     ChatNotifierService,
+    IdentityClerkPushConsumer,
+    IdentitySyncSweepService,
+    IdentityQuotaNotifierService,
     DbBackupService,
     EnvBackupService,
     WantedMatchNotifierService,
