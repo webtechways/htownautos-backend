@@ -5,7 +5,9 @@ import {
   Logger,
   HttpCode,
   HttpStatus,
+  BadRequestException,
 } from '@nestjs/common';
+import { verifyWebhook } from '@clerk/backend/webhooks';
 import { Public } from '@htownautos/auth';
 import { PrismaService } from '@htownautos/prisma';
 import { resolveTenantUserIdentity } from '@htownautos/common';
@@ -16,8 +18,9 @@ import { resolveTenantUserIdentity } from '@htownautos/common';
  * Clerk sends these events when org memberships change (via Dashboard or API).
  * We sync them to our TenantUser table to keep local data consistent.
  *
- * Note: In development, webhook signature verification is skipped.
- * In production, add svix signature verification.
+ * Every request is verified via svix (Standard Webhooks) signature before
+ * processing. main.ts registers this route for raw-body parsing so the
+ * exact bytes are available for signature verification.
  */
 @Controller('clerk-webhooks')
 export class ClerkWebhooksController {
@@ -29,7 +32,32 @@ export class ClerkWebhooksController {
   @Post()
   @HttpCode(HttpStatus.OK)
   async handleWebhook(@Req() req: any) {
-    const event = req.body;
+    const signingSecret = process.env.CLERK_WEBHOOK_SIGNING_SECRET;
+    if (!signingSecret) {
+      this.logger.error('CLERK_WEBHOOK_SIGNING_SECRET is not configured');
+      throw new BadRequestException('Webhook not configured');
+    }
+
+    const headers = new Headers();
+    for (const [key, value] of Object.entries(req.headers ?? {})) {
+      if (Array.isArray(value)) headers.set(key, value.join(', '));
+      else if (typeof value === 'string') headers.set(key, value);
+    }
+
+    const request = new Request('https://clerk-webhooks.internal/api/v1/clerk-webhooks', {
+      method: 'POST',
+      headers,
+      body: req.body as unknown as BodyInit,
+    });
+
+    let event: any;
+    try {
+      event = await verifyWebhook(request, { signingSecret });
+    } catch (error) {
+      this.logger.warn(`Clerk webhook signature verification failed: ${(error as Error).message}`);
+      throw new BadRequestException('Invalid webhook signature');
+    }
+
     const eventType = event?.type;
 
     this.logger.log(`Received Clerk webhook: ${eventType}`);

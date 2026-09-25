@@ -46,7 +46,8 @@ async function bootstrap() {
     if (
       req.originalUrl === '/api/v1/stripe/webhooks' ||
       req.originalUrl === '/api/v1/shippo/webhooks' ||
-      req.originalUrl === '/api/v1/social/webhooks/meta'
+      req.originalUrl === '/api/v1/social/webhooks/meta' ||
+      req.originalUrl === '/api/v1/clerk-webhooks'
     ) {
       bodyParser.raw({ type: 'application/json', limit: '5mb' })(req, res, next);
     } else {

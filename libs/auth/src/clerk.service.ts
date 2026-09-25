@@ -1,4 +1,4 @@
-import { Injectable, Logger, BadRequestException } from '@nestjs/common';
+import { Injectable, Logger, BadRequestException, ConflictException } from '@nestjs/common';
 import { createClerkClient } from '@clerk/backend';
 
 interface CreateUserParams {
@@ -13,6 +13,14 @@ interface CreateUserResult {
   email: string;
 }
 
+export interface ClerkVerifiedIdentity {
+  clerkUserId: string;
+  email: string | null;
+  firstName: string | null;
+  lastName: string | null;
+  imageUrl: string | null;
+}
+
 @Injectable()
 export class ClerkService {
   private readonly logger = new Logger(ClerkService.name);
@@ -22,6 +30,49 @@ export class ClerkService {
     this.clerk = createClerkClient({
       secretKey: process.env.CLERK_SECRET_KEY!,
     });
+  }
+
+  /**
+   * Fetch a Clerk user's verified identity by their Clerk user ID.
+   * Used by the auth guards as the ONLY trusted source for email-based
+   * account linking — never the client-sent X-Clerk-User header.
+   * Returns null only when Clerk confirms the user doesn't exist (404).
+   * Other errors (network, 5xx) are rethrown so callers fail closed instead
+   * of treating a transient outage as "this Clerk account is gone".
+   */
+  async getVerifiedIdentity(clerkUserId: string): Promise<ClerkVerifiedIdentity | null> {
+    try {
+      const user = await this.clerk.users.getUser(clerkUserId);
+      const primary = user.emailAddresses.find(
+        (e) => e.id === user.primaryEmailAddressId && e.verification?.status === 'verified',
+      );
+      return {
+        clerkUserId: user.id,
+        email: primary?.emailAddress ?? null,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        imageUrl: user.imageUrl ?? null,
+      };
+    } catch (error: any) {
+      if (error?.status === 404) return null;
+      this.logger.error(`Failed to fetch Clerk user ${clerkUserId}: ${error.message}`);
+      throw error;
+    }
+  }
+
+  /**
+   * True only when Clerk confirms clerkUserId does NOT exist (404).
+   * Any other error is rethrown (fail closed).
+   */
+  async userIsGone(clerkUserId: string): Promise<boolean> {
+    try {
+      await this.clerk.users.getUser(clerkUserId);
+      return false;
+    } catch (error: any) {
+      if (error?.status === 404) return true;
+      this.logger.error(`Failed to check Clerk user ${clerkUserId}: ${error.message}`);
+      throw error;
+    }
   }
 
   /**
@@ -51,8 +102,11 @@ export class ClerkService {
 
       // Handle Clerk-specific errors
       if (error.errors?.some((e: any) => e.code === 'form_identifier_exists')) {
-        // User already exists - find them and update password
-        return this.handleExistingUser(email, password);
+        // P0 hotfix (2026-09-24): never reset an existing Clerk user's
+        // password here — this was an account-takeover vector (any caller
+        // who knew a victim's email could overwrite their Clerk password).
+        this.logger.warn(`Clerk account already exists for ${email}, refusing to reset password`);
+        throw new ConflictException('El email ya tiene cuenta');
       }
 
       if (error.errors?.some((e: any) => e.code === 'form_password_pwned' || e.code === 'form_password_length_too_short')) {
@@ -207,45 +261,6 @@ export class ClerkService {
       }
       this.logger.error(`Failed to revoke invitation: ${error.message}`);
       throw error;
-    }
-  }
-
-  /**
-   * Handle existing user - find by email and update password
-   */
-  private async handleExistingUser(email: string, password: string): Promise<CreateUserResult> {
-    try {
-      const users = await this.clerk.users.getUserList({
-        emailAddress: [email],
-      });
-
-      if (!users.data.length) {
-        throw new Error('User not found despite existing email');
-      }
-
-      const user = users.data[0];
-
-      // Update their password
-      await this.clerk.users.updateUser(user.id, { password });
-
-      this.logger.log(`Updated password for existing Clerk user: ${user.id}`);
-
-      return {
-        clerkUserId: user.id,
-        email,
-      };
-    } catch (error: any) {
-      this.logger.error('Failed to handle existing user:', error.message);
-
-      if (error.errors?.some((e: any) => e.code === 'form_password_pwned' || e.code === 'form_password_length_too_short')) {
-        throw new BadRequestException(
-          'Password does not meet requirements. Must be at least 8 characters and not commonly used.',
-        );
-      }
-
-      throw new BadRequestException(
-        `Failed to process account: ${error.message || 'Unknown error'}`,
-      );
     }
   }
 }

@@ -292,15 +292,10 @@ export class BuyersService {
     // For the canonical portal tenant, auto-create a Clerk account so the
     // customer can sign in to htownautos.com immediately.  This is best-effort:
     // a Clerk failure must NOT block the staff workflow.
-    if (tenantId === PORTAL_TENANT_ID && record.email) {
-      await this.linkClerkAccount(record.id, record.email, record.firstName, record.lastName);
-      // Re-fetch to pick up the clerkUserId if it was just written.
-      const updated = await this.buyer.findUnique({
-        where: { id: record.id },
-        include: BUYER_INCLUDE,
-      });
-      if (updated) return new BuyerEntity(updated);
-    }
+    // P0 hotfix (2026-09-24): auto-linking on create disabled. createUser()
+    // could silently reset the password of a pre-existing Clerk account for
+    // this email, enabling account takeover. Re-enable once a proper
+    // verified-email sync design ships (see clerk-jwt.guard.ts linking rules).
 
     return new BuyerEntity(record);
   }
@@ -475,14 +470,8 @@ export class BuyersService {
 
     // Best-effort: if this buyer is in the portal tenant and still has no
     // clerkUserId but now has an email, attempt to create/link a Clerk account.
-    if (tenantId === PORTAL_TENANT_ID && record.email && !record.clerkUserId) {
-      await this.linkClerkAccount(record.id, record.email, record.firstName, record.lastName);
-      const updated = await this.buyer.findUnique({
-        where: { id: record.id },
-        include: BUYER_INCLUDE,
-      });
-      if (updated) return new BuyerEntity(updated);
-    }
+    // P0 hotfix (2026-09-24): auto-linking on update disabled, same reason
+    // as the create path above — see clerk-jwt.guard.ts linking rules.
 
     return new BuyerEntity(record);
   }

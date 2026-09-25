@@ -6,8 +6,14 @@ import {
   ForbiddenException,
   Logger,
 } from '@nestjs/common';
-import { verifyToken } from '@clerk/backend';
+import { verifyToken, createClerkClient } from '@clerk/backend';
 import { PrismaService } from '@htownautos/prisma';
+
+// Instantiated directly (not via DI) so this guard stays self-contained and
+// doesn't require wiring ClerkService into every module that provides
+// CustomerGuard (e.g. PortalModule) — avoids the "Nest can't resolve
+// dependencies" crash-loop from adding an unresolvable constructor param.
+const clerkClient = createClerkClient({ secretKey: process.env.CLERK_SECRET_KEY! });
 
 /**
  * Canonical tenant for htownautos.com public portal.
@@ -278,8 +284,37 @@ export class CustomerGuard implements CanActivate {
   }
 
   /**
+   * Fetch the verified primary email for a Clerk user directly from Clerk —
+   * the X-Clerk-User header is unsigned and client-controlled, so it is
+   * NEVER used for lookup or linking, only as a display-field fallback for
+   * brand-new signups (handled by the caller).
+   */
+  private async getVerifiedEmail(clerkUserId: string): Promise<string | null> {
+    const user = await clerkClient.users.getUser(clerkUserId);
+    const primary = user.emailAddresses.find(
+      (e) => e.id === user.primaryEmailAddressId && e.verification?.status === 'verified',
+    );
+    return primary?.emailAddress ?? null;
+  }
+
+  /**
+   * True only when Clerk confirms clerkUserId does NOT exist (404). Other
+   * errors are rethrown so a transient Clerk outage never gets mistaken for
+   * "this account is gone" and triggers an unwanted relink.
+   */
+  private async clerkUserIsGone(clerkUserId: string): Promise<boolean> {
+    try {
+      await clerkClient.users.getUser(clerkUserId);
+      return false;
+    } catch (error: any) {
+      if (error?.status === 404) return true;
+      throw error;
+    }
+  }
+
+  /**
    * Find the Buyer by clerkUserId.  When none exists, auto-provision one in
-   * the canonical portal tenant using the token's metadata.  This is
+   * the canonical portal tenant using Clerk's verified identity.  This is
    * idempotent: if two concurrent requests race, the second upsert is a no-op
    * (unique constraint on clerkUserId prevents duplicates).
    */
@@ -287,25 +322,24 @@ export class CustomerGuard implements CanActivate {
     clerkUserId: string,
     meta: { email?: string; first_name?: string; last_name?: string } | null,
   ): Promise<PortalBuyer> {
-    // Fast path: buyer already exists.
+    // Fast path: buyer already exists — no Clerk API call needed.
     const existing = await this.prisma.buyer.findUnique({
       where: { clerkUserId },
       select: BUYER_SELECT,
     });
     if (existing) {
-      // Check for duplicate buyer rows with the same email and merge them.
-      const survivor = await this.mergeEmailDuplicates(existing as PortalBuyer);
-      return survivor;
+      return existing as PortalBuyer;
     }
 
-    // Slow path: first login — provision a minimal Buyer record.
-    const email = meta?.email ?? '';
+    // Slow path: first login — the JWT `sub` is unknown locally. Resolve the
+    // verified email straight from Clerk (never from the unsigned header).
+    const email = await this.getVerifiedEmail(clerkUserId);
     const firstName = meta?.first_name ?? '';
     const lastName = meta?.last_name ?? '';
 
     if (!email) {
       throw new UnauthorizedException(
-        'Email is required to create a portal account. Ensure the X-Clerk-User header is present.',
+        'No verified email associated with this Clerk account.',
       );
     }
 
@@ -313,15 +347,24 @@ export class CustomerGuard implements CanActivate {
     // by staff) but isn't linked to a Clerk login yet. Adopt it instead of
     // creating a duplicate, so the website and the dashboard share ONE customer
     // record (favorites, inspections, deposits all land on the same buyer).
+    // Only link when the row has no live clerkUserId of its own — otherwise
+    // refuse (never silently steal an already-linked account).
     const byEmail = await this.prisma.buyer.findFirst({
       where: {
         tenantId: PORTAL_TENANT_ID,
-        clerkUserId: null,
         email: { equals: email, mode: 'insensitive' },
       },
-      select: { id: true },
+      select: { id: true, clerkUserId: true },
     });
     if (byEmail) {
+      const canLink = !byEmail.clerkUserId || (await this.clerkUserIsGone(byEmail.clerkUserId));
+      if (!canLink) {
+        this.logger.warn(
+          `Refusing to link portal login ${clerkUserId} (${email}) — buyer ${byEmail.id} already linked to a different live Clerk account`,
+        );
+        throw new UnauthorizedException('Unable to authenticate this account');
+      }
+
       this.logger.log(
         `Linking portal login to existing buyer ${byEmail.id} (${email})`,
       );
