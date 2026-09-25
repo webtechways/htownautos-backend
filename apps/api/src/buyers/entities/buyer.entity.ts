@@ -439,6 +439,9 @@ export class BuyerEntity implements Omit<Buyer, 'monthlyHousingCost' | 'monthlyI
   @ApiPropertyOptional({ description: 'Clerk user ID (portal auth)' })
   clerkUserId: string | null;
 
+  @ApiPropertyOptional({ description: 'Linked User.id once this buyer has a Clerk login' })
+  userId: string | null;
+
   // Computed full name
   @ApiProperty({ example: 'John R. Doe Jr' })
   fullName: string;

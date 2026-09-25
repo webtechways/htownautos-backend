@@ -8,6 +8,8 @@ import {
 import { Reflector } from '@nestjs/core';
 import { PrismaService } from '@htownautos/prisma';
 import { resolveTenantUserIdentity } from '@htownautos/common';
+import { ALLOW_CUSTOMER_KEY } from '../decorators/allow-customer.decorator';
+import { recomputeUserType } from '../recompute-user-type';
 
 // Decorator key for marking routes that don't require tenant
 export const TENANT_OPTIONAL_KEY = 'tenantOptional';
@@ -25,6 +27,36 @@ export class TenantGuard implements CanActivate {
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
+    const request = context.switchToHttp().getRequest();
+    const user = request.user;
+
+    // If no user (not authenticated — e.g. @Public() route), let ClerkJwtGuard
+    // handle it. Must come before the STAFF_ONLY check since there is no
+    // userType to check yet.
+    if (!user) {
+      return true;
+    }
+
+    // Default-deny: CUSTOMER users may only reach routes explicitly marked
+    // @AllowCustomer() (the portal + invitation-acceptance routes). This runs
+    // BEFORE the tenantOptional early return below — tenantOptional alone
+    // (e.g. `tenants/my-tenants`, `tenants/check-slug/:slug`) must NOT be
+    // enough to let a customer identity through.
+    if (user.userType === 'CUSTOMER') {
+      const allowCustomer = this.reflector.getAllAndOverride<boolean>(ALLOW_CUSTOMER_KEY, [
+        context.getHandler(),
+        context.getClass(),
+      ]);
+      if (!allowCustomer) {
+        throw new ForbiddenException({
+          message: 'This account is a customer login and cannot access staff routes.',
+          error: 'Forbidden',
+          statusCode: 403,
+          code: 'STAFF_ONLY',
+        });
+      }
+    }
+
     // Check if tenant is optional for this route
     const isTenantOptional = this.reflector.getAllAndOverride<boolean>(
       TENANT_OPTIONAL_KEY,
@@ -32,14 +64,6 @@ export class TenantGuard implements CanActivate {
     );
 
     if (isTenantOptional) {
-      return true;
-    }
-
-    const request = context.switchToHttp().getRequest();
-    const user = request.user;
-
-    // If no user (not authenticated), let ClerkJwtGuard handle it
-    if (!user) {
       return true;
     }
 
@@ -186,6 +210,7 @@ export class TenantGuard implements CanActivate {
           },
         });
         this.logger.log(`Auto-reactivated TenantUser ${userId} in tenant ${tenantId}`);
+        await recomputeUserType(this.prisma, userId);
         return updated;
       }
 
@@ -211,6 +236,7 @@ export class TenantGuard implements CanActivate {
       this.logger.log(
         `Auto-provisioned TenantUser ${userId} in tenant ${tenantId} as ${roleSlug} (${identity.tenantEmail || identity.username})`,
       );
+      await recomputeUserType(this.prisma, userId);
       return created;
     } catch (err: any) {
       this.logger.error(`Auto-provision failed for user ${userId} tenant ${tenantId}: ${err.message}`);

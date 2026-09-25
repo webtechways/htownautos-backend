@@ -105,6 +105,10 @@ export class PrismaService implements OnModuleInit, OnModuleDestroy {
     return this.prisma.buyer;
   }
 
+  get clerkWebhookEvent() {
+    return this.prisma.clerkWebhookEvent;
+  }
+
   get extraExpense() {
     return this.prisma.extraExpense;
   }

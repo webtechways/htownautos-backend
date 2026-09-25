@@ -181,6 +181,12 @@ export class TenantEntity implements Tenant {
   })
   postmarkWebhookId: number | null;
 
+  @ApiProperty({
+    description: 'Whether this tenant has a Clerk-backed customer portal (htownautos.com today)',
+    example: false,
+  })
+  customerPortalEnabled: boolean;
+
   @ApiPropertyOptional({
     description: 'Per-tenant auction fee configuration (null = system default applies)',
   })

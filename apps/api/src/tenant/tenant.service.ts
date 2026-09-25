@@ -19,7 +19,7 @@ import {
   RegisterWithInvitationDto,
 } from './dto/add-user-to-tenant.dto';
 import { Prisma } from '@prisma/client';
-import { ClerkService } from '@htownautos/auth';
+import { ClerkService, recomputeUserType } from '@htownautos/auth';
 import { EmailService } from '../email/email.service';
 import { TwilioService } from '../twilio/twilio.service';
 import { TenantEmailDomainService } from './tenant-email-domain.service';
@@ -1702,6 +1702,11 @@ export class TenantService {
         data: { status: 'accepted', acceptedAt: new Date() },
       });
 
+      // The invited user now has an active TenantUser — they are STAFF from
+      // here on, even if they were a portal CUSTOMER before (see
+      // CLERK-SYNC-DESIGN.md: same Clerk account, linked Buyer stays).
+      await recomputeUserType(tx, realUserId);
+
       return updated;
     });
 
@@ -1890,6 +1895,9 @@ export class TenantService {
         },
         data: { status: 'accepted', acceptedAt: new Date() },
       });
+
+      // See acceptInvitation() — same reasoning.
+      await recomputeUserType(tx, loggedInUser.id);
 
       return updated;
     });

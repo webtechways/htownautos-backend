@@ -16,7 +16,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import type { Response } from 'express';
-import { CustomerGuard, CurrentBuyer, TenantOptional } from '@htownautos/auth';
+import { CustomerGuard, CurrentBuyer, TenantOptional, AllowCustomer } from '@htownautos/auth';
 import type { PortalBuyer } from '@htownautos/auth';
 import { PortalService } from './portal.service';
 import { StripeService } from '../stripe/stripe.service';
@@ -32,8 +32,11 @@ import { FindACarCheckoutDto } from './dto/find-a-car-checkout.dto';
 import { CancelInspectionDto } from './dto/cancel-inspection.dto';
 
 // CustomerGuard resolves the tenant from the Buyer, so the global TenantGuard
-// must not require an org-based tenant on these routes.
+// must not require an org-based tenant on these routes. @AllowCustomer() is
+// required too — TenantGuard now default-denies CUSTOMER-type users with
+// STAFF_ONLY before it even reaches the tenantOptional check.
 @TenantOptional()
+@AllowCustomer()
 @UseGuards(CustomerGuard)
 @Controller('portal')
 export class PortalController {

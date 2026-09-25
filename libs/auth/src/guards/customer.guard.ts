@@ -25,6 +25,7 @@ export interface PortalBuyer {
   id: string;
   tenantId: string;
   clerkUserId: string;
+  userId: string | null;
   firstName: string;
   lastName: string;
   email: string;
@@ -45,6 +46,7 @@ const BUYER_SELECT = {
   id: true,
   tenantId: true,
   clerkUserId: true,
+  userId: true,
   firstName: true,
   lastName: true,
   email: true,
@@ -110,7 +112,16 @@ export class CustomerGuard implements CanActivate {
     const clerkUserId: string = payload.sub;
     const userMeta = this.extractUserMeta(request);
 
-    const buyer = await this.getOrProvisionBuyer(clerkUserId, userMeta);
+    // ClerkJwtGuard (global, runs before every local guard including this
+    // one) already resolved/created the single-identity User row for this
+    // token's `sub` and attached it to the request. Reuse it instead of a
+    // second Clerk-independent lookup. Defensive null-check only — should
+    // never be missing given the guard order, but this guard is written to
+    // stay correct even if invoked standalone.
+    const userId: string | null =
+      request.user?.clerkUserId === clerkUserId ? request.user.id : null;
+
+    const buyer = await this.getOrProvisionBuyer(clerkUserId, userMeta, userId);
 
     request.buyer = buyer;
     request.tenantId = buyer.tenantId;
@@ -317,17 +328,51 @@ export class CustomerGuard implements CanActivate {
    * the canonical portal tenant using Clerk's verified identity.  This is
    * idempotent: if two concurrent requests race, the second upsert is a no-op
    * (unique constraint on clerkUserId prevents duplicates).
+   *
+   * Resolution order (see CLERK-SYNC-DESIGN.md):
+   *  1. User -> Buyer via `userId`, scoped to a tenant with
+   *     `customerPortalEnabled` (the durable identity link).
+   *  2. Legacy `buyers.clerkUserId` (kept as a fallback for one release while
+   *     B5 backfills `userId` on existing rows).
+   *  3. Link-by-email / auto-provision (unchanged), now also stamping
+   *     `userId` on the Buyer so future logins hit path 1.
    */
   private async getOrProvisionBuyer(
     clerkUserId: string,
     meta: { email?: string; first_name?: string; last_name?: string } | null,
+    userId: string | null,
   ): Promise<PortalBuyer> {
-    // Fast path: buyer already exists — no Clerk API call needed.
+    // Preferred fast path: Buyer already linked via User.id.
+    if (userId) {
+      const linked = await this.prisma.buyer.findFirst({
+        where: { userId, tenant: { customerPortalEnabled: true } },
+        select: BUYER_SELECT,
+      });
+      if (linked) {
+        return linked as PortalBuyer;
+      }
+    }
+
+    // Legacy fast path: buyer already exists but not yet linked by userId —
+    // no Clerk API call needed.
     const existing = await this.prisma.buyer.findUnique({
       where: { clerkUserId },
       select: BUYER_SELECT,
     });
     if (existing) {
+      // Backfill the link opportunistically so the next login hits path 1.
+      if (userId && !existing.userId) {
+        try {
+          await this.prisma.buyer.update({ where: { id: existing.id }, data: { userId } });
+        } catch (err) {
+          // Non-fatal — @@unique([tenantId, userId]) could theoretically
+          // collide if this User is already linked to a different Buyer in
+          // the same tenant. Never break login over a backfill link.
+          this.logger.warn(
+            `getOrProvisionBuyer: could not backfill userId on buyer ${existing.id} — ${(err as Error).message}`,
+          );
+        }
+      }
       return existing as PortalBuyer;
     }
 
@@ -370,7 +415,7 @@ export class CustomerGuard implements CanActivate {
       );
       const linked = await this.prisma.buyer.update({
         where: { id: byEmail.id },
-        data: { clerkUserId },
+        data: { clerkUserId, ...(userId ? { userId } : {}) },
         select: BUYER_SELECT,
       });
       return linked as PortalBuyer;
@@ -384,6 +429,7 @@ export class CustomerGuard implements CanActivate {
       const created = await this.prisma.buyer.create({
         data: {
           clerkUserId,
+          ...(userId ? { userId } : {}),
           tenantId: PORTAL_TENANT_ID,
           firstName: firstName || 'Portal',
           lastName: lastName || 'User',

@@ -9,6 +9,7 @@ import { Reflector } from '@nestjs/core';
 import { verifyToken, createClerkClient } from '@clerk/backend';
 import { IS_PUBLIC_KEY } from '../decorators/public.decorator';
 import { PrismaService } from '@htownautos/prisma';
+import type { UserType } from '@prisma/client';
 
 // Instantiated directly (not injected via DI): dozens of controllers apply
 // `@UseGuards(ClerkJwtGuard)` at the class level even though it also runs
@@ -44,6 +45,10 @@ export interface AuthenticatedUser {
   avatar: string | null;
   isActive: boolean;
   emailVerified: boolean;
+  // STAFF iff >=1 active TenantUser membership — see recomputeUserType().
+  // TenantGuard uses this to gate CUSTOMER access; never authorize a
+  // specific tenant off this alone.
+  userType: UserType;
   tenants: Array<{
     id: string;
     tenantId: string;
@@ -287,6 +292,7 @@ export class ClerkJwtGuard implements CanActivate {
       avatar: user.avatar,
       isActive: user.isActive,
       emailVerified: user.emailVerified,
+      userType: user.userType,
       tenants: user.tenants.map((t) => ({
         id: t.id,
         tenantId: t.tenantId,

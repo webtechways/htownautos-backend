@@ -40,6 +40,7 @@ import {
 } from './dto/phone-number.dto';
 import { Public } from '@htownautos/auth';
 import { TenantOptional } from '@htownautos/auth';
+import { AllowCustomer } from '@htownautos/auth';
 import {
   TenantEntity,
   TenantWithStatsEntity,
@@ -839,6 +840,7 @@ export class TenantController {
 
   @Get('me/invitations')
   @TenantOptional()
+  @AllowCustomer()
   @ApiOperation({
     summary: 'Get my pending invitations',
     description:
@@ -852,6 +854,7 @@ export class TenantController {
 
   @Post('me/invitations/:tenantUserId/accept')
   @TenantOptional()
+  @AllowCustomer()
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: 'Accept a pending invitation (in-app)',
@@ -872,6 +875,7 @@ export class TenantController {
 
   @Post('me/invitations/:tenantUserId/decline')
   @TenantOptional()
+  @AllowCustomer()
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: 'Decline a pending invitation (in-app)',

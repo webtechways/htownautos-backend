@@ -491,6 +491,11 @@ model Tenant {
   country                   String    @default("USA")
   settings                  Json?
   feeConfig                 Json?     @map("fee_config") // Per-tenant auction fee configuration
+  // Only true for the HtownAutos portal tenant today — gates whether Buyer
+  // rows in this tenant may be linked to a Clerk customer login (see
+  // CustomerGuard). Other tenants keep this false until they get their own
+  // portal.
+  customerPortalEnabled     Boolean   @default(false) @map("customer_portal_enabled")
   twilioMessagingServiceSid String? // Twilio Messaging Service ID for SMS
   logo                      String?
   isActive                  Boolean   @default(true)
@@ -638,6 +643,24 @@ model User {
   lastName               String?
   phoneNumber            String?
   isOnline               Boolean                 @default(false)
+  // Identity type — STAFF iff the user has >=1 active TenantUser membership;
+  // recomputed by recomputeUserType() on invitation accept / auto-provision.
+  // Never trust this alone for authorization on a specific tenant — it only
+  // gates whether a route accepts customer identities at all (TenantGuard).
+  userType               UserType                @default(STAFF)
+  // Clerk push sync (CRM -> Clerk), see CLERK-SYNC-DESIGN.md. Populated by the
+  // data-sync `identity.clerk.push` consumer (B2/B3, not this migration).
+  clerkSyncStatus        ClerkSyncStatus         @default(PENDING)
+  clerkSyncAttempts      Int                     @default(0)
+  clerkSyncedAt          DateTime?
+  clerkSyncError         String?
+  // Hash of the last payload pushed to / received from Clerk — used to skip
+  // no-op syncs and as a loop guard against Clerk-originated writes.
+  clerkSyncHash          String?
+  // Timestamp of the last Clerk webhook event applied to this row (in-order
+  // processing guard for user.updated).
+  clerkEventAt           DateTime?
+  buyers                 Buyer[]
   tenants                TenantUser[]
   vehiclesCreated        Vehicle[]               @relation("VehicleCreatedBy")
   sentInvitations        TenantInvitation[]
@@ -649,7 +672,39 @@ model User {
   @@index([clerkUserId])
   @@index([email])
   @@index([isActive])
+  @@index([userType])
+  @@index([clerkSyncStatus])
   @@map("users")
+}
+
+enum UserType {
+  STAFF
+  CUSTOMER
+}
+
+enum ClerkSyncStatus {
+  PENDING
+  SYNCED
+  FAILED
+  SKIPPED
+}
+
+// One row per Clerk webhook delivery, keyed by the svix message id — the
+// idempotency guard for Clerk -> CRM sync (B3). Insert is ON CONFLICT DO
+// NOTHING at the controller before enqueueing processing, so a svix retry of
+// the same event is a no-op.
+model ClerkWebhookEvent {
+  id          String    @id // svix-id (e.g. "msg_...") — never generated locally
+  type        String // e.g. "user.created", "organizationMembership.updated"
+  payload     Json
+  processedAt DateTime?
+  attempts    Int       @default(0)
+  error       String?
+  createdAt   DateTime  @default(now())
+
+  @@index([type])
+  @@index([processedAt])
+  @@map("clerk_webhook_events")
 }
 
 model Role {
@@ -924,6 +979,12 @@ model Buyer {
   bdcAgentId               String?
   stripeCustomerId         String?                   @unique
   clerkUserId              String?                   @unique @map("clerk_user_id")
+  // Links this Buyer to the single-identity User row once the buyer has a
+  // Clerk login (see CLERK-SYNC-DESIGN.md). Kept nullable — most staff-created
+  // buyers never log in. SetNull so deleting the User never cascades into a
+  // deleted Buyer/CRM history.
+  userId                   String?
+  user                     User?                     @relation(fields: [userId], references: [id], onDelete: SetNull)
   activities               Activity[]
   vehicleDocuments         VehicleDocument[]
   employmentStatus         EmploymentStatus?         @relation(fields: [employmentStatusId], references: [id])
@@ -957,6 +1018,7 @@ model Buyer {
   inboxConversations       InboxConversation[]
 
   @@unique([tenantId, phoneMain])
+  @@unique([tenantId, userId])
   @@index([tenantId])
   @@index([email])
   @@index([lastName, firstName])
@@ -965,6 +1027,7 @@ model Buyer {
   @@index([salesPersonId])
   @@index([bdcAgentId])
   @@index([clerkUserId])
+  @@index([userId])
   @@map("buyers")
 }
 
