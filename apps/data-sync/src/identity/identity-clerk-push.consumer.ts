@@ -2,7 +2,7 @@ import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { RabbitMQService, CLERK_PUSH_QUEUE, type IdentityClerkPushMessage } from '@htownautos/rabbitmq';
 import { PrismaService } from '@htownautos/prisma';
 import { createClerkAdminClient, type ClerkAdminClient } from '@htownautos/auth';
-import { normalizePhoneNumber } from '@htownautos/common';
+import { normalizePhoneNumber, isSyntheticClerkEmail } from '@htownautos/common';
 import type { ClerkSyncStatus } from '@prisma/client';
 import { classifyClerkError } from './clerk-error.util';
 import { IdentityQuotaNotifierService } from './identity-quota-notifier.service';
@@ -111,8 +111,13 @@ export class IdentityClerkPushConsumer implements OnModuleInit {
   // ── Clerk-side operations ────────────────────────────────────────────────
 
   private async findByIdentifier(desired: DesiredClerkState): Promise<string | null> {
-    const byEmail = await this.clerk.users.getUserList({ emailAddress: [desired.email], limit: 1 });
-    if (byEmail.data.length > 0) return byEmail.data[0].id;
+    // Synthetic no-email placeholders (SMS-only sign-up, see
+    // incomplete-profile.utils.ts) were never issued by Clerk — a lookup
+    // would always miss, and it's never safe to use as a real identifier.
+    if (!isSyntheticClerkEmail(desired.email)) {
+      const byEmail = await this.clerk.users.getUserList({ emailAddress: [desired.email], limit: 1 });
+      if (byEmail.data.length > 0) return byEmail.data[0].id;
+    }
 
     if (desired.phone) {
       const byPhone = await this.clerk.users.getUserList({ phoneNumber: [desired.phone], limit: 1 });
@@ -131,7 +136,7 @@ export class IdentityClerkPushConsumer implements OnModuleInit {
     }
 
     const created = await this.clerk.users.createUser({
-      emailAddress: [desired.email],
+      emailAddress: isSyntheticClerkEmail(desired.email) ? undefined : [desired.email],
       phoneNumber: desired.phone ? [desired.phone] : undefined,
       firstName: desired.firstName ?? undefined,
       lastName: desired.lastName ?? undefined,
@@ -148,7 +153,11 @@ export class IdentityClerkPushConsumer implements OnModuleInit {
       lastName: desired.lastName ?? undefined,
       externalId: desired.externalId,
     });
-    await this.ensurePrimaryEmail(clerkUserId, desired.email);
+    // Never write the synthetic no-email placeholder into Clerk as a real
+    // address — it would silently replace a real login email with garbage.
+    if (!isSyntheticClerkEmail(desired.email)) {
+      await this.ensurePrimaryEmail(clerkUserId, desired.email);
+    }
     if (desired.phone) {
       await this.ensurePrimaryPhone(clerkUserId, desired.phone);
     }

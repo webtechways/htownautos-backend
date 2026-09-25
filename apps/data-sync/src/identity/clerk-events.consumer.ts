@@ -416,6 +416,10 @@ export class ClerkEventsConsumer implements OnModuleInit {
         currentZipCode: '',
         source: 'web-signup',
         notes: 'Lead creado automáticamente por sign-up web (Clerk) — perfil incompleto, requiere seguimiento.',
+        // Explicit machine-readable marker (no schema change) alongside the
+        // placeholder fields above — staff-facing lists can filter on this
+        // instead of re-deriving "incomplete" from field values.
+        metaValue: { incompleteProfile: true },
       },
     });
 

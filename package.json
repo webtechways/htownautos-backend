@@ -24,6 +24,8 @@
     "format": "prettier --write \"apps/**/*.ts\" \"libs/**/*.ts\"",
     "lint": "eslint \"{apps,libs}/**/*.ts\" --fix",
     "test": "jest",
+    "identity:backfill": "ts-node scripts/backfill-customer-identity.ts",
+    "identity:reprocess": "ts-node scripts/reprocess-clerk-events.ts",
     "seed": "tsx libs/prisma/prisma/seeds/index.ts",
     "seed:prod": "node dist/apps/api/prisma/seeds/index.js",
     "db:migrate": "prisma migrate dev --schema=libs/prisma/prisma/schema.prisma",

@@ -15,3 +15,5 @@
 - [Global guard DI crash-loop](global-guard-di-crashloop.md) — never add a new constructor dep to ClerkJwtGuard/CustomerGuard (30+ modules use @UseGuards locally without AuthModule); instantiate createClerkClient at module scope instead; boot-test recipe
 - [Identity sync B1+B4](identity-sync-b1-b4.md) — User.userType/AllowCustomer/recomputeUserType/CustomerGuard resolution order; CLERK-SYNC-DESIGN.md is the source of truth
 - [Identity sync B2](identity-sync-b2.md) — CRM→Clerk push: ensureUserForBuyer/syncUserOnBuyerRemoved, identity.clerk.push queue, data-sync consumer, sweep, Clerk SDK call shapes
+- [Identity sync B3](identity-sync-b3.md) — Clerk→CRM webhooks: clerk_webhook_events idempotent store, ClerkEventsConsumer, User.email NOT NULL gap for SMS-only signup, STAFF-ban safety fix in B2's push consumer
+- [Identity sync B5](identity-sync-b5.md) — backfill/reprocess scripts, PrismaService-outside-DI pattern, synthetic-email-never-pushed-to-Clerk guard, placeholder masking in BuyerEntity/portal mapper

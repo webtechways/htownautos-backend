@@ -1,5 +1,10 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Buyer } from '@prisma/client';
+import {
+  isPendingPlaceholderPhone,
+  isPlaceholderDateOfBirth,
+  isPlaceholderAddressField,
+} from '@htownautos/common';
 
 export class BuyerEntity implements Omit<Buyer, 'monthlyHousingCost' | 'monthlyIncome' | 'additionalIncome' | 'previousMonthlyIncome' | 'currentMonthlyDebts' | 'alimonyChildSupport' | 'businessAnnualRevenue'> {
   @ApiProperty({ example: '123e4567-e89b-12d3-a456-426614174000' })
@@ -463,6 +468,23 @@ export class BuyerEntity implements Omit<Buyer, 'monthlyHousingCost' | 'monthlyI
     for (const field of decimalFields) {
       if (partial[field] !== undefined && partial[field] !== null) {
         (this as any)[field] = Number(partial[field]);
+      }
+    }
+
+    // Mask web-signup stub placeholders (CLERK-SYNC-DESIGN.md package B3) —
+    // a lead created from a phone-only Clerk sign-up has no real DOB/address
+    // yet; never show the placeholder values to staff as if they were real
+    // data. Buyer.metaValue.incompleteProfile (set on creation) is the
+    // canonical "needs follow-up" flag; this is purely display masking.
+    if (isPendingPlaceholderPhone(partial.phoneMain)) {
+      (this as any).phoneMain = null;
+    }
+    if (isPlaceholderDateOfBirth(partial.dateOfBirth)) {
+      (this as any).dateOfBirth = null;
+    }
+    for (const field of ['currentAddress', 'currentCity', 'currentState', 'currentZipCode'] as const) {
+      if (isPlaceholderAddressField(partial[field])) {
+        (this as any)[field] = null;
       }
     }
 

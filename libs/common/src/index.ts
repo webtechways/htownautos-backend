@@ -30,6 +30,15 @@ export {
   resolveTenantUserIdentity,
 } from './utils/tenant-email.utils';
 export {
+  PENDING_PHONE_PREFIX,
+  PLACEHOLDER_DATE_OF_BIRTH_ISO,
+  isPendingPlaceholderPhone,
+  isPlaceholderDateOfBirth,
+  isPlaceholderAddressField,
+  SYNTHETIC_CLERK_EMAIL_DOMAIN,
+  isSyntheticClerkEmail,
+} from './utils/incomplete-profile.utils';
+export {
   TITLE_CATEGORIES,
   ASSIGNABLE_TITLE_CATEGORIES,
   TITLE_CATEGORY_LABELS,

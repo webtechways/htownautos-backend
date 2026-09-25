@@ -10,6 +10,7 @@ import { PrismaService } from '@htownautos/prisma';
 import { S3Service } from '@htownautos/common';
 import type { PortalBuyer } from '@htownautos/auth';
 import { PORTAL_TENANT_ID, ensureUserForBuyer } from '@htownautos/auth';
+import { isPendingPlaceholderPhone, isPlaceholderAddressField } from '@htownautos/common';
 import { RabbitMQService, CLERK_PUSH_QUEUE } from '@htownautos/rabbitmq';
 import { CopartService } from '../copart/copart.service';
 import { QueryCopartDto } from '../copart/dto/query-copart.dto';
@@ -108,6 +109,32 @@ const BUYER_SAFE_SELECT = {
   createdAt: true,
   updatedAt: true,
 } as const satisfies Prisma.BuyerSelect;
+
+type SafeBuyerRow = Prisma.BuyerGetPayload<{ select: typeof BUYER_SAFE_SELECT }>;
+type MaskedBuyerRow = Omit<SafeBuyerRow, 'phoneMain' | 'currentAddress' | 'currentCity' | 'currentState' | 'currentZipCode'> & {
+  phoneMain: string | null;
+  currentAddress: string | null;
+  currentCity: string | null;
+  currentState: string | null;
+  currentZipCode: string | null;
+};
+
+/**
+ * Mask web-signup stub placeholders (CLERK-SYNC-DESIGN.md package B3) before
+ * a buyer's own profile is returned — a phone-only Clerk sign-up has no real
+ * address yet, and the customer should see `null` fields to fill in, not a
+ * fake placeholder value.
+ */
+function maskIncompleteProfilePlaceholders(row: SafeBuyerRow): MaskedBuyerRow {
+  return {
+    ...row,
+    phoneMain: isPendingPlaceholderPhone(row.phoneMain) ? null : row.phoneMain,
+    currentAddress: isPlaceholderAddressField(row.currentAddress) ? null : row.currentAddress,
+    currentCity: isPlaceholderAddressField(row.currentCity) ? null : row.currentCity,
+    currentState: isPlaceholderAddressField(row.currentState) ? null : row.currentState,
+    currentZipCode: isPlaceholderAddressField(row.currentZipCode) ? null : row.currentZipCode,
+  };
+}
 
 /** Per-yard group used for breakdown computation. */
 interface YardGroup {
@@ -221,7 +248,7 @@ export class PortalService {
       select: BUYER_SAFE_SELECT,
     });
     if (!row) throw new NotFoundException('Buyer profile not found');
-    return row;
+    return maskIncompleteProfilePlaceholders(row);
   }
 
   async updateProfile(buyer: PortalBuyer, dto: UpdatePortalProfileDto) {
@@ -255,7 +282,7 @@ export class PortalService {
       await this.rabbitMQ.publish(CLERK_PUSH_QUEUE, { userId });
     }
 
-    return updated;
+    return maskIncompleteProfilePlaceholders(updated);
   }
 
   // ── Listings (proxy to CopartService) ────────────────────────────────────
