@@ -11,6 +11,8 @@ import { verifyWebhook } from '@clerk/backend/webhooks';
 import { Public } from '@htownautos/auth';
 import { PrismaService } from '@htownautos/prisma';
 import { resolveTenantUserIdentity } from '@htownautos/common';
+import { RabbitMQService, CLERK_EVENTS_QUEUE } from '@htownautos/rabbitmq';
+import { Prisma } from '@prisma/client';
 
 /**
  * Handles Clerk webhook events for syncing organization memberships.
@@ -26,7 +28,10 @@ import { resolveTenantUserIdentity } from '@htownautos/common';
 export class ClerkWebhooksController {
   private readonly logger = new Logger(ClerkWebhooksController.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly rabbitMQ: RabbitMQService,
+  ) {}
 
   @Public()
   @Post()
@@ -59,8 +64,31 @@ export class ClerkWebhooksController {
     }
 
     const eventType = event?.type;
+    const svixId = this.extractSvixId(req);
 
     this.logger.log(`Received Clerk webhook: ${eventType}`);
+
+    // Idempotent store (package B3, CLERK-SYNC-DESIGN.md): the svix-id is the
+    // primary key, so a redelivered webhook is a no-op here. Only a NEW row
+    // gets published — this is what `identity.clerk.events` consumers key
+    // off of, independent from the inline org/membership handling below.
+    if (svixId) {
+      try {
+        const inserted = await this.prisma.clerkWebhookEvent.createMany({
+          data: [{ id: svixId, type: eventType, payload: event as unknown as Prisma.InputJsonValue }],
+          skipDuplicates: true,
+        });
+        if (inserted.count > 0) {
+          await this.rabbitMQ.publish(CLERK_EVENTS_QUEUE, { eventId: svixId });
+        } else {
+          this.logger.debug(`Clerk webhook ${svixId} already stored — skipping duplicate delivery`);
+        }
+      } catch (err) {
+        this.logger.error(`Failed to store Clerk webhook event ${svixId}: ${(err as Error).message}`);
+      }
+    } else {
+      this.logger.warn(`Clerk webhook missing svix-id header for event ${eventType} — cannot dedupe/queue`);
+    }
 
     try {
       switch (eventType) {
@@ -89,6 +117,20 @@ export class ClerkWebhooksController {
     return { received: true };
   }
 
+  private extractSvixId(req: any): string | undefined {
+    const raw = req?.headers?.['svix-id'];
+    if (Array.isArray(raw)) return raw[0];
+    return typeof raw === 'string' ? raw : undefined;
+  }
+
+  // NOTE (package B3): the organization/organizationMembership handling below
+  // stays inline and synchronous, unchanged from before this package — it
+  // was already here pre-B3, does real multi-step work (tenant creation,
+  // role resolution, Clerk org metadata patch) that isn't a trivial move
+  // behind the queue, and moving it risked regressing tenant onboarding.
+  // `ClerkEventsConsumer` (data-sync) ADDS new behavior on top for
+  // `organizationMembership.*` (recompute User.userType + refresh Clerk
+  // metadata) via the `identity.clerk.events` queue published above.
   private async handleMembershipCreated(data: any) {
     const clerkOrgId = data.organization?.id;
     const clerkUserId = data.public_user_data?.user_id;

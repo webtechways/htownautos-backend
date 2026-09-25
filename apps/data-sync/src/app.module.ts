@@ -33,6 +33,9 @@ import { SocialJobsModule } from './social/social-jobs.module';
 import { IdentityClerkPushConsumer } from './identity/identity-clerk-push.consumer';
 import { IdentitySyncSweepService } from './identity/identity-sync-sweep.service';
 import { IdentityQuotaNotifierService } from './identity/identity-quota-notifier.service';
+import { ClerkEventsConsumer } from './identity/clerk-events.consumer';
+import { ClerkEventsSweepService } from './identity/clerk-events-sweep.service';
+import { PortalSignupNotifierService } from './identity/portal-signup-notifier.service';
 
 
 @Module({
@@ -55,6 +58,9 @@ import { IdentityQuotaNotifierService } from './identity/identity-quota-notifier
     IdentityClerkPushConsumer,
     IdentitySyncSweepService,
     IdentityQuotaNotifierService,
+    ClerkEventsConsumer,
+    ClerkEventsSweepService,
+    PortalSignupNotifierService,
     DbBackupService,
     EnvBackupService,
     WantedMatchNotifierService,

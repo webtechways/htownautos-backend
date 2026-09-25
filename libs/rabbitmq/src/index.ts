@@ -15,4 +15,9 @@ export {
   type IdentityClerkPushMessage,
 } from './identity-clerk-push';
 
+export {
+  CLERK_EVENTS_QUEUE,
+  type IdentityClerkEventMessage,
+} from './identity-clerk-events';
+
 export * from './auction-frames';

@@ -1,5 +1,4 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
-import { createHash } from 'crypto';
 import { RabbitMQService, CLERK_PUSH_QUEUE, type IdentityClerkPushMessage } from '@htownautos/rabbitmq';
 import { PrismaService } from '@htownautos/prisma';
 import { createClerkAdminClient, type ClerkAdminClient } from '@htownautos/auth';
@@ -7,22 +6,10 @@ import { normalizePhoneNumber } from '@htownautos/common';
 import type { ClerkSyncStatus } from '@prisma/client';
 import { classifyClerkError } from './clerk-error.util';
 import { IdentityQuotaNotifierService } from './identity-quota-notifier.service';
+import { hashDesiredState, type DesiredClerkState } from './clerk-desired-state';
 
 /** FAILED rows stop being swept after this many attempts (see the sweep cron). */
 export const MAX_CLERK_SYNC_ATTEMPTS = 8;
-
-interface DesiredClerkState {
-  email: string;
-  phone: string | null;
-  firstName: string | null;
-  lastName: string | null;
-  externalId: string;
-  publicMetadata: { userType: string; customerTenantIds: string[]; crmUserId: string };
-}
-
-function hashDesiredState(state: DesiredClerkState): string {
-  return createHash('sha256').update(JSON.stringify(state)).digest('hex');
-}
 
 /**
  * CRM -> Clerk identity push (CLERK-SYNC-DESIGN.md, package B2).
@@ -76,7 +63,17 @@ export class IdentityClerkPushConsumer implements OnModuleInit {
     // No portal presence left for this identity (buyer removed, or was never
     // a portal buyer) — CRM decision 5: delete = ban (reversible), never a
     // hard delete from this path.
+    //
+    // SAFETY GUARD (added in B3): a STAFF user reaches this branch too — they
+    // never had a portal Buyer to begin with, e.g. an org-membership webhook
+    // enqueues a push after every role change. Never let a STAFF identity
+    // hit banIfLinked; only refresh their Clerk metadata instead. See
+    // ClerkEventsConsumer.handleMembershipChanged.
     if (portalBuyers.length === 0) {
+      if (user.userType === 'STAFF') {
+        await this.refreshStaffMetadata(user.id, user.clerkUserId);
+        return;
+      }
       await this.banIfLinked(user.id, user.clerkUserId);
       return;
     }
@@ -195,6 +192,23 @@ export class IdentityClerkPushConsumer implements OnModuleInit {
       primary: false,
     });
     await this.clerk.users.updateUser(clerkUserId, { primaryPhoneNumberID: created.id });
+  }
+
+  /** STAFF-only counterpart of banIfLinked: keep Clerk metadata current, never ban. */
+  private async refreshStaffMetadata(userId: string, clerkUserId: string | null): Promise<void> {
+    try {
+      if (clerkUserId) {
+        await this.clerk.users.updateUserMetadata(clerkUserId, {
+          publicMetadata: { userType: 'STAFF', customerTenantIds: [], crmUserId: userId },
+        });
+      }
+      await this.prisma.user.update({
+        where: { id: userId },
+        data: { clerkSyncStatus: 'SKIPPED', clerkSyncedAt: new Date(), clerkSyncError: null },
+      });
+    } catch (err) {
+      await this.markFailed(userId, 0, err);
+    }
   }
 
   private async banIfLinked(userId: string, clerkUserId: string | null): Promise<void> {

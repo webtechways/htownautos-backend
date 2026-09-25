@@ -55,7 +55,39 @@ describe('ClerkWebhooksController', () => {
 
   it('accepts a request signed with the correct secret', async () => {
     const req: any = buildSignedRequest({ type: 'organization.deleted', data: { id: 'org_1' } });
-    controller = new ClerkWebhooksController({ $queryRawUnsafe: jest.fn().mockResolvedValue([]) } as any);
+    const prisma = {
+      $queryRawUnsafe: jest.fn().mockResolvedValue([]),
+      clerkWebhookEvent: { createMany: jest.fn().mockResolvedValue({ count: 1 }) },
+    };
+    controller = new ClerkWebhooksController(prisma as any, { publish: jest.fn().mockResolvedValue(true) } as any);
     await expect(controller.handleWebhook(req)).resolves.toEqual({ received: true });
+  });
+
+  it('stores a new svix-id and publishes once — a redelivered duplicate is processed once', async () => {
+    const payload = { type: 'organization.deleted', data: { id: 'org_1' } };
+    const req1: any = buildSignedRequest(payload);
+    // Same svix-id on both deliveries (buildSignedRequest always uses 'msg_test').
+    const req2: any = buildSignedRequest(payload);
+
+    const seen = new Set<string>();
+    const prisma = {
+      $queryRawUnsafe: jest.fn().mockResolvedValue([]),
+      clerkWebhookEvent: {
+        createMany: jest.fn().mockImplementation(async ({ data }: any) => {
+          const [row] = data;
+          if (seen.has(row.id)) return { count: 0 };
+          seen.add(row.id);
+          return { count: 1 };
+        }),
+      },
+    };
+    const rabbitMQ = { publish: jest.fn().mockResolvedValue(true) };
+    controller = new ClerkWebhooksController(prisma as any, rabbitMQ as any);
+
+    await controller.handleWebhook(req1);
+    await controller.handleWebhook(req2);
+
+    expect(prisma.clerkWebhookEvent.createMany).toHaveBeenCalledTimes(2);
+    expect(rabbitMQ.publish).toHaveBeenCalledTimes(1);
   });
 });
