@@ -32,6 +32,7 @@ export const API_SCOPE_RESOURCES: ApiScopeResource[] = [
 
   // — Auctions (Copart) —
   { slug: 'auction-listings', label: 'Auction Listings', description: 'Copart auction inventory, search and facets (read-only)' },
+  { slug: 'auction-stats', label: 'Auction Sale Results (Stats)', description: 'Sold-lot results with final prices, facets, price stats and breakdowns (read-only)' },
   { slug: 'auction-bids', label: 'Auction Bids', description: 'Buyer auction bids and max-bid orders' },
   { slug: 'listing-groups', label: 'Listing Groups', description: 'Curated groups of auction listings' },
   { slug: 'listing-reviews', label: 'Listing Reviews', description: 'Reviews and analyses on auction listings' },

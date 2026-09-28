@@ -89,6 +89,11 @@ export class ClerkJwtGuard implements CanActivate {
       if (!isOptionalAuth) {
         return true;
       }
+      // ApiKeyGuard already authenticated this caller — don't let a failed
+      // Clerk attempt on the `Bearer hta_…` value interfere.
+      if (request.apiKey && request.user) {
+        return true;
+      }
       // Best-effort: resolve a caller if a token is present, but this route
       // must stay reachable anonymously no matter what goes wrong here.
       await this.tryAttachOptionalUser(request);

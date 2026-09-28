@@ -1,11 +1,13 @@
 import { BadRequestException, Controller, Get, Param, Query, Req } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import { ApiOperation, ApiQuery, ApiResponse, ApiTags } from '@nestjs/swagger';
-import { Public, OptionalAuth, TenantOptional, RequirePermissions } from '@htownautos/auth';
+import { Public, OptionalAuth, TenantOptional, RequirePermissions, RequireApiScopes } from '@htownautos/auth';
 import { BREAKDOWN_FIELDS, BreakdownField, StatsService } from './stats.service';
 import { QueryStatsDto } from './dto/query-stats.dto';
 
 const STATS_READ_PERMISSION = 'auction-stats:read';
+/** API-key scope (Settings → Integrations): server-to-server callers get unmasked data. */
+const STATS_READ_SCOPE = 'auction-stats:read';
 
 /**
  * Read/search + facets over auction_sale_results for the dashboard "Stats
@@ -39,6 +41,7 @@ export class StatsController {
   @OptionalAuth()
   @TenantOptional()
   @RequirePermissions(STATS_READ_PERMISSION)
+  @RequireApiScopes(STATS_READ_SCOPE)
   @ApiOperation({ summary: 'Search stored sale results (Stats Listing)' })
   @ApiResponse({ status: 200, description: 'Paginated results + optional aggregations' })
   async search(@Query() dto: QueryStatsDto, @Req() req: any) {
@@ -52,6 +55,7 @@ export class StatsController {
   @OptionalAuth()
   @TenantOptional()
   @RequirePermissions(STATS_READ_PERMISSION)
+  @RequireApiScopes(STATS_READ_SCOPE)
   @ApiOperation({ summary: 'One stored sale result by lot number' })
   @ApiResponse({ status: 200, description: 'The sale result, or 404' })
   async findByLot(@Param('lot') lot: string, @Req() req: any) {
@@ -64,6 +68,7 @@ export class StatsController {
   @OptionalAuth()
   @TenantOptional()
   @RequirePermissions(STATS_READ_PERMISSION)
+  @RequireApiScopes(STATS_READ_SCOPE)
   @ApiOperation({ summary: 'Facet counts for the Stats Listing sidebar' })
   @ApiResponse({ status: 200, description: 'Aggregations' })
   getFilters(@Query() dto: QueryStatsDto) {
@@ -81,6 +86,7 @@ export class StatsController {
   @OptionalAuth()
   @TenantOptional()
   @RequirePermissions(STATS_READ_PERMISSION)
+  @RequireApiScopes(STATS_READ_SCOPE)
   @ApiOperation({ summary: 'Price distribution (p25/median/p75) for the current filters' })
   @ApiResponse({ status: 200, description: 'Percentiles + sample size' })
   async priceStats(@Query() dto: QueryStatsDto, @Req() req: any) {
@@ -102,6 +108,7 @@ export class StatsController {
   @OptionalAuth()
   @TenantOptional()
   @RequirePermissions(STATS_READ_PERMISSION)
+  @RequireApiScopes(STATS_READ_SCOPE)
   @ApiOperation({ summary: 'Group sales by one dimension with count + median price' })
   @ApiQuery({ name: 'por', enum: BREAKDOWN_FIELDS })
   @ApiQuery({ name: 'limite', required: false, type: Number })
@@ -132,7 +139,9 @@ export class StatsController {
  * By the time a controller method runs, TenantGuard has already gated any
  * "customer"-role caller lacking STATS_READ_PERMISSION with a 403 — so a
  * present `req.user` here always means "authorized to see prices" (staff
- * unconditionally, customer only with the permission). No user = anonymous.
+ * unconditionally, customer only with the permission). An API key reaching
+ * here already passed @RequireApiScopes(STATS_READ_SCOPE) in ApiKeyGuard.
+ * No user = anonymous.
  */
 function canSeePrices(req: any): boolean {
   return !!req.user;

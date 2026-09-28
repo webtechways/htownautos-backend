@@ -11,6 +11,7 @@ import { PrismaService } from '@htownautos/prisma';
 import * as crypto from 'crypto';
 import { IS_PUBLIC_KEY } from '../decorators/public.decorator';
 import { API_SCOPES_KEY } from '../decorators/api-scopes.decorator';
+import { IS_OPTIONAL_AUTH_KEY } from '../decorators/optional-auth.decorator';
 import { hasScope } from '../constants/api-scopes';
 
 /**
@@ -40,10 +41,20 @@ export class ApiKeyGuard implements CanActivate {
       context.getHandler(),
       context.getClass(),
     ]);
-    if (isPublic) return true;
-
     const request = context.switchToHttp().getRequest();
     const rawKey = this.extractKey(request);
+
+    // @Public() routes ignore API keys — except @Public() + @OptionalAuth(),
+    // where a key that IS sent is validated (and its scopes enforced) so a
+    // server-to-server caller gets the same unmasked data a signed-in user
+    // does. Anonymous callers on those routes are unaffected.
+    if (isPublic) {
+      const isOptionalAuth = this.reflector.getAllAndOverride<boolean>(IS_OPTIONAL_AUTH_KEY, [
+        context.getHandler(),
+        context.getClass(),
+      ]);
+      if (!isOptionalAuth || !rawKey) return true;
+    }
 
     // No API key → not our job. ClerkJwtGuard will authenticate.
     if (!rawKey) return true;
