@@ -8,6 +8,7 @@ import {
 import { Reflector } from '@nestjs/core';
 import { verifyToken, createClerkClient } from '@clerk/backend';
 import { IS_PUBLIC_KEY } from '../decorators/public.decorator';
+import { IS_OPTIONAL_AUTH_KEY } from '../decorators/optional-auth.decorator';
 import { PrismaService } from '@htownautos/prisma';
 import type { UserType } from '@prisma/client';
 
@@ -81,6 +82,16 @@ export class ClerkJwtGuard implements CanActivate {
     ]);
 
     if (isPublic) {
+      const isOptionalAuth = this.reflector.getAllAndOverride<boolean>(IS_OPTIONAL_AUTH_KEY, [
+        context.getHandler(),
+        context.getClass(),
+      ]);
+      if (!isOptionalAuth) {
+        return true;
+      }
+      // Best-effort: resolve a caller if a token is present, but this route
+      // must stay reachable anonymously no matter what goes wrong here.
+      await this.tryAttachOptionalUser(request);
       return true;
     }
 
@@ -121,6 +132,32 @@ export class ClerkJwtGuard implements CanActivate {
     } catch (error) {
       this.logger.error('Token verification failed:', error);
       throw new UnauthorizedException('Invalid or expired token');
+    }
+  }
+
+  /**
+   * @OptionalAuth() support for @Public() routes (e.g. the public stats
+   * endpoints) — never throws. No token / invalid / expired token / any
+   * lookup failure all fall through to "anonymous", leaving request.user
+   * unset exactly like a plain @Public() route today.
+   */
+  private async tryAttachOptionalUser(request: any): Promise<void> {
+    const token = this.extractToken(request);
+    if (!token) return;
+
+    try {
+      const payload = await verifyToken(token, { secretKey: process.env.CLERK_SECRET_KEY! });
+      const clerkUserId = payload.sub;
+      const userMeta = this.extractUserMeta(request);
+      const user = await this.getOrCreateUser(clerkUserId, userMeta, request);
+
+      request.clerkOrgId = (payload as any).org_id || (payload as any).o?.id || null;
+      request.clerkOrgRole =
+        (payload as any).org_role || ((payload as any).o?.rol ? `org:${(payload as any).o.rol}` : null);
+      request.user = user;
+      request.session = { user };
+    } catch (error) {
+      this.logger.warn(`OptionalAuth: ignoring unresolved token (${(error as Error).message})`);
     }
   }
 

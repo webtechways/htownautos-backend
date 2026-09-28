@@ -19,7 +19,13 @@ describe('TenantGuard — STAFF_ONLY gate', () => {
   beforeEach(() => {
     prisma = {
       tenant: { findUnique: jest.fn() },
-      tenantUser: { findUnique: jest.fn(), update: jest.fn(), create: jest.fn(), count: jest.fn() },
+      tenantUser: {
+        findUnique: jest.fn(),
+        findFirst: jest.fn().mockResolvedValue(undefined),
+        update: jest.fn(),
+        create: jest.fn(),
+        count: jest.fn(),
+      },
       role: { findFirst: jest.fn() },
       user: { findUnique: jest.fn(), update: jest.fn() },
       $queryRawUnsafe: jest.fn(),
@@ -68,5 +74,38 @@ describe('TenantGuard — STAFF_ONLY gate', () => {
     const guard = new TenantGuard(reflector as any, prisma);
 
     await expect(guard.canActivate(context)).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
+  // ── "customer" role + auction-stats:read permission (stats app) ────────
+
+  function mockCustomerRoleMembership(permissionSlugs: string[]) {
+    prisma.tenantUser.findFirst.mockResolvedValue({
+      role: { permissions: permissionSlugs.map((slug) => ({ permission: { slug } })) },
+    });
+  }
+
+  it('allows a "customer"-role user through a @Public()/@RequirePermissions(auction-stats:read) route (stats)', async () => {
+    mockCustomerRoleMembership(['auction-stats:read']);
+    const request = { user: { id: 'u-stats-ok', userType: 'CUSTOMER' }, headers: {} };
+    const { context, reflector } = makeContext(request, {
+      tenantOptional: true,
+      allowCustomer: undefined,
+      permissions: ['auction-stats:read'],
+    });
+    const guard = new TenantGuard(reflector as any, prisma);
+
+    await expect(guard.canActivate(context)).resolves.toBe(true);
+  });
+
+  it('denies a "customer"-role user with PERMISSION_DENIED on a route it has no permission for (e.g. buyers list)', async () => {
+    mockCustomerRoleMembership(['auction-stats:read']);
+    const request = { user: { id: 'u-stats-denied', userType: 'CUSTOMER' }, headers: {} };
+    // Buyers list carries no @RequirePermissions metadata at all.
+    const { context, reflector } = makeContext(request, { tenantOptional: false });
+    const guard = new TenantGuard(reflector as any, prisma);
+
+    await expect(guard.canActivate(context)).rejects.toMatchObject({
+      response: expect.objectContaining({ code: 'PERMISSION_DENIED', statusCode: 403 }),
+    });
   });
 });

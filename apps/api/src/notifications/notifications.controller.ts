@@ -8,7 +8,7 @@ import {
   HttpCode,
   HttpStatus,
 } from '@nestjs/common';
-import { CurrentUser, CurrentTenant } from '@htownautos/auth';
+import { CurrentUser, CurrentTenant, AllowCustomer } from '@htownautos/auth';
 import type { AuthenticatedUser } from '@htownautos/auth';
 import { NotificationsService } from './notifications.service';
 import { ListNotificationsDto } from './dto/list-notifications.dto';
@@ -26,6 +26,7 @@ export class NotificationsController {
    * Returns paginated notifications for the authenticated staff member.
    */
   @Get()
+  @AllowCustomer()
   list(
     @CurrentUser() user: AuthenticatedUser,
     @CurrentTenant() tenantId: string,

@@ -9,6 +9,7 @@ import { Reflector } from '@nestjs/core';
 import { PrismaService } from '@htownautos/prisma';
 import { resolveTenantUserIdentity } from '@htownautos/common';
 import { ALLOW_CUSTOMER_KEY } from '../decorators/allow-customer.decorator';
+import { PERMISSIONS_KEY } from '../decorators/permissions.decorator';
 import { recomputeUserType } from '../recompute-user-type';
 
 // Decorator key for marking routes that don't require tenant
@@ -16,6 +17,45 @@ export const TENANT_OPTIONAL_KEY = 'tenantOptional';
 
 // Custom error code for frontend to detect tenant issues
 export const TENANT_ERROR_CODE = 'TENANT_REQUIRED';
+
+// Tiny per-process TTL cache for the "customer" role's membership info. Not
+// per-request DI (adding a CacheModule dependency to a global guard risks
+// the constructor-param crash-loop — see global-guard-di-crashloop memory),
+// just a module-scope Map like ClerkJwtGuard's clerkClient trick. Keyed by
+// userId since a given user's active "customer" TenantUser role rarely
+// changes mid-session; 30s is enough to smooth out request bursts without
+// meaningfully delaying a permission edit in the Roles UI.
+const CUSTOMER_ROLE_INFO_TTL_MS = 30_000;
+interface CustomerRoleInfo {
+  /** Has an active TenantUser row whose role.slug === 'customer'. */
+  isCustomerRoleMember: boolean;
+  permissions: Set<string>;
+}
+const customerRoleInfoCache = new Map<string, { expires: number; info: CustomerRoleInfo }>();
+
+async function getCustomerRoleInfo(prisma: PrismaService, userId: string): Promise<CustomerRoleInfo> {
+  const cached = customerRoleInfoCache.get(userId);
+  if (cached && cached.expires > Date.now()) {
+    return cached.info;
+  }
+
+  const tenantUser = await prisma.tenantUser.findFirst({
+    where: {
+      userId,
+      isActive: true,
+      status: 'active',
+      role: { slug: 'customer' },
+    },
+    include: { role: { include: { permissions: { include: { permission: true } } } } },
+  });
+
+  const info: CustomerRoleInfo = {
+    isCustomerRoleMember: !!tenantUser,
+    permissions: new Set<string>(tenantUser?.role.permissions.map((rp) => rp.permission.slug) ?? []),
+  };
+  customerRoleInfoCache.set(userId, { expires: Date.now() + CUSTOMER_ROLE_INFO_TTL_MS, info });
+  return info;
+}
 
 @Injectable()
 export class TenantGuard implements CanActivate {
@@ -47,13 +87,42 @@ export class TenantGuard implements CanActivate {
         context.getHandler(),
         context.getClass(),
       ]);
+
       if (!allowCustomer) {
-        throw new ForbiddenException({
-          message: 'This account is a customer login and cannot access staff routes.',
-          error: 'Forbidden',
-          statusCode: 403,
-          code: 'STAFF_ONLY',
-        });
+        // Not on the @AllowCustomer() whitelist. Permission enforcement is
+        // scoped to the "customer" role specifically (an active TenantUser
+        // row whose role.slug === 'customer' — e.g. the public stats app):
+        // allow only if the route's @RequirePermissions() metadata matches
+        // one of that role's permissions, else PERMISSION_DENIED. A CUSTOMER
+        // who is NOT a "customer"-role member (no membership at all — the
+        // legacy customer-portal case) keeps the original STAFF_ONLY
+        // behaviour untouched.
+        const roleInfo = await getCustomerRoleInfo(this.prisma, user.id);
+
+        if (roleInfo.isCustomerRoleMember) {
+          const requiredPermissions =
+            this.reflector.getAllAndOverride<string[]>(PERMISSIONS_KEY, [
+              context.getHandler(),
+              context.getClass(),
+            ]) ?? [];
+          const hasPermission = requiredPermissions.some((p) => roleInfo.permissions.has(p));
+
+          if (!hasPermission) {
+            throw new ForbiddenException({
+              message: 'Insufficient permissions.',
+              error: 'Forbidden',
+              statusCode: 403,
+              code: 'PERMISSION_DENIED',
+            });
+          }
+        } else {
+          throw new ForbiddenException({
+            message: 'This account is a customer login and cannot access staff routes.',
+            error: 'Forbidden',
+            statusCode: 403,
+            code: 'STAFF_ONLY',
+          });
+        }
       }
     }
 

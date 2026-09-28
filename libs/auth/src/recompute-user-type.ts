@@ -19,9 +19,12 @@ interface UserTypeRecomputeClient {
 
 /**
  * Recompute User.userType from ground truth: STAFF iff the user has at least
- * one active TenantUser membership, CUSTOMER otherwise. Call this whenever
- * membership changes — invitation acceptance, TenantGuard auto-provisioning.
- * Never trust a User's current userType as an input to this decision.
+ * one active TenantUser membership whose role is NOT the public-stats
+ * "customer" role, CUSTOMER otherwise (no active membership at all, OR every
+ * active membership is the `customer` role). Call this whenever membership
+ * changes — invitation acceptance, TenantGuard auto-provisioning, stats
+ * provisioning. Never trust a User's current userType as an input to this
+ * decision.
  *
  * Best-effort: logs and returns null on failure rather than throwing, since
  * every call site is inside an auth-critical path where we don't want a
@@ -32,10 +35,15 @@ export async function recomputeUserType(
   userId: string,
 ): Promise<UserType | null> {
   try {
-    const activeMemberships = await prisma.tenantUser.count({
-      where: { userId, isActive: true, status: 'active' },
+    const staffMemberships = await prisma.tenantUser.count({
+      where: {
+        userId,
+        isActive: true,
+        status: 'active',
+        role: { slug: { not: 'customer' } },
+      },
     });
-    const userType = (activeMemberships > 0 ? 'STAFF' : 'CUSTOMER') as UserType;
+    const userType = (staffMemberships > 0 ? 'STAFF' : 'CUSTOMER') as UserType;
     await prisma.user.update({ where: { id: userId }, data: { userType } });
     return userType;
   } catch (err) {

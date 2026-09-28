@@ -47,6 +47,7 @@ import { VehicleInspectionsModule } from './vehicle-inspections/vehicle-inspecti
 import { InspectionShareLinksModule } from './inspection-share-links/inspection-share-links.module';
 import { YardsModule } from './yards/yards.module';
 import { AuctionSaleResultsModule } from './auction-sale-results/auction-sale-results.module';
+import { StatsAuthModule } from './stats-auth/stats-auth.module';
 import { EmailModule } from './email/email.module';
 import { TasksModule } from './tasks/tasks.module';
 import { NotesModule } from './notes/notes.module';
@@ -159,6 +160,7 @@ import { PublicStartModule } from './public-start/public-start.module';
     InspectionShareLinksModule,
     YardsModule,
     AuctionSaleResultsModule,
+    StatsAuthModule,
     EmailModule,
     TasksModule,
     NotesModule,

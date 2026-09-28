@@ -29,6 +29,9 @@ const PERMISSIONS = [
     // Tenant
     { slug: 'tenant:read', action: 'read', resource: 'tenant', description: 'View tenant details' },
     { slug: 'tenant:update', action: 'update', resource: 'tenant', description: 'Update tenant settings' },
+
+    // Public stats app (stats.htownautos.com)
+    { slug: 'auction-stats:read', action: 'read', resource: 'auction-stats', description: 'View auction sale price data (stats.htownautos.com)' },
 ];
 
 const ROLES = [
@@ -66,6 +69,13 @@ const ROLES = [
         description: 'Business Development Center - Inventory view only',
         isSystem: false,
         permissions: ['vehicle:read'],
+    },
+    {
+        name: 'Customer',
+        slug: 'customer',
+        description: 'Public stats portal customer (read-only)',
+        isSystem: true,
+        permissions: ['auction-stats:read'],
     },
 ];
 

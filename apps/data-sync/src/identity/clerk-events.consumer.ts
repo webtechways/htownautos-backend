@@ -6,7 +6,7 @@ import {
   type IdentityClerkEventMessage,
 } from '@htownautos/rabbitmq';
 import { PrismaService } from '@htownautos/prisma';
-import { recomputeUserType, PORTAL_TENANT_ID } from '@htownautos/auth';
+import { recomputeUserType, PORTAL_TENANT_ID, ensureCustomerRoleMembership } from '@htownautos/auth';
 import { normalizePhoneNumber } from '@htownautos/common';
 import { hashDesiredState, type DesiredClerkState } from './clerk-desired-state';
 import { PortalSignupNotifierService } from './portal-signup-notifier.service';
@@ -223,6 +223,22 @@ export class ClerkEventsConsumer implements OnModuleInit {
         email: email ?? user.email,
         phone,
       });
+    } else if (data.unsafe_metadata?.signupSource === 'stats') {
+      // Public stats app (stats.htownautos.com) sign-up: same lead-stub
+      // Buyer as the web portal, plus a TenantUser(role "customer") so the
+      // permission check on the stats endpoints has something to look up.
+      // `POST /stats/me/provision` (apps/api) does the same thing for a
+      // caller whose webhook hasn't landed yet — both are idempotent.
+      const result = await ensureCustomerRoleMembership(this.prisma, {
+        userId: user.id,
+        firstName: data.first_name,
+        lastName: data.last_name,
+        email: email ?? user.email,
+        phone,
+      });
+      if (result.shouldPublish) {
+        await this.rabbitMQ.publish(CLERK_PUSH_QUEUE, { userId: user.id }).catch(() => undefined);
+      }
     }
 
     await this.stampSyncedHash(user.id, data.id);

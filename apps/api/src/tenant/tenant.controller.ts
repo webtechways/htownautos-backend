@@ -59,6 +59,7 @@ export class TenantController {
 
   @Get('my-tenants')
   @TenantOptional()
+  @AllowCustomer()
   @ApiOperation({
     summary: 'Get current user tenants',
     description: 'Returns all tenants the authenticated user belongs to',

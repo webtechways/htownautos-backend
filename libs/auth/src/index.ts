@@ -20,16 +20,20 @@ export { recomputeUserType } from './recompute-user-type';
 export {
   ensureUserForBuyer,
   syncUserOnBuyerRemoved,
+  ensureCustomerRoleMembership,
 } from './identity-sync-helpers';
 export type {
   EnsureUserForBuyerInput,
   EnsureUserForBuyerResult,
+  EnsureCustomerRoleMembershipInput,
+  EnsureCustomerRoleMembershipResult,
 } from './identity-sync-helpers';
 export { createClerkAdminClient } from './clerk-admin.client';
 export type { ClerkAdminClient } from './clerk-admin.client';
 
 // Decorators
 export { Public, IS_PUBLIC_KEY } from './decorators/public.decorator';
+export { OptionalAuth, IS_OPTIONAL_AUTH_KEY } from './decorators/optional-auth.decorator';
 export { CurrentUser } from './decorators/current-user.decorator';
 export { CurrentTenant } from './decorators/current-tenant.decorator';
 export { TenantOptional } from './decorators/tenant-optional.decorator';
