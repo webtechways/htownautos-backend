@@ -1,5 +1,6 @@
 # Agent Memory Index
 
+- [Stats app customer RBAC](stats-app-customer-rbac.md) — "customer" Role/auction-stats:read permission, TenantGuard PERMISSION_DENIED vs STAFF_ONLY split, ClerkJwtGuard @OptionalAuth() for masked public data
 - [PrismaService wrapper pattern](prisma-service-pattern.md) — PrismaService exposes explicit getters, new models need manual additions
 - [Auth guard architecture](auth-guard-arch.md) — Global guards, portal customer auth pattern, staff vs customer distinction
 - [Portal tenant constant](portal-tenant.md) — Canonical portal tenant ID and design decisions
