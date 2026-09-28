@@ -18,6 +18,8 @@ async function bootstrap() {
     'https://app.htownautos.com',
     'https://htownautos.com',
     'https://www.htownautos.com',
+    'https://web.htownautos.com',
+    'https://stats.htownautos.com',
   ];
   const app = await NestFactory.create(AppModule, {
     logger: ['error', 'warn', 'log', 'debug'], // Logging completo para auditoría
