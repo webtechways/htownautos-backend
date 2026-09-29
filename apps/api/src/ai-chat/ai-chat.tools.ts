@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { TITLE_CATEGORIES } from '@htownautos/common';
 import { StatsService, BREAKDOWN_FIELDS, type BreakdownField } from '../auction-sale-results/stats.service';
 import { VocabularyService, type VocabField } from '../auction-sale-results/vocabulary.service';
 import { QueryStatsDto } from '../auction-sale-results/dto/query-stats.dto';
@@ -26,7 +27,7 @@ const FILTROS_SCHEMA = {
     damageDescription: { type: 'array', items: { type: 'string' }, description: 'Daño principal (ej. FRONT END, REAR END, ROLLOVER)' },
     titleCategory: {
       type: 'array',
-      items: { type: 'string', enum: ['clean', 'salvage', 'nonrepairable', 'unknown'] },
+      items: { type: 'string', enum: [...TITLE_CATEGORIES] },
       description: 'Categoria de titulo',
     },
     locationState: { type: 'array', items: { type: 'string' }, description: 'Estado de dos letras (ej. TX)' },

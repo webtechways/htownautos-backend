@@ -3,7 +3,7 @@ import { OpenSearchService, AUCTION_INDEX_NAME, AuctionSyncService, parseListing
 import type { UnifiedAuction, AuctionAggregations, AuctionSearchResult } from '@htownautos/opensearch';
 import { PrismaService } from '@htownautos/prisma';
 import { RabbitMQService } from '@htownautos/rabbitmq';
-import { CopartImagesService, GALLERY_CACHE_QUEUE, codesForTitleCategories, deriveTitleCategory, allKnownCodes, geocodeZip, boundingBox, normalizeToken, houstonSaleDate } from '@htownautos/common';
+import { CopartImagesService, GALLERY_CACHE_QUEUE, codesForTitleCategories, deriveTitleCategory, allKnownCodes, TITLE_CATEGORIES, geocodeZip, boundingBox, normalizeToken, houstonSaleDate } from '@htownautos/common';
 import type { TitleCategory, TitleOverrides, GalleryImage, GalleryResponse, GalleryCacheMessage } from '@htownautos/common';
 import { TitleMappingService } from '../title-mapping/title-mapping.service';
 import { PricePredictionService } from '../price-prediction/price-prediction.service';
@@ -847,12 +847,9 @@ export class AuctionSearchService {
 
     // Roll raw title-type buckets up into the primary categories (incl. unknown).
     const titleTypeBuckets = parseBuckets(bucketsOf(aggs.titleTypes));
-    const categoryCounts: Record<TitleCategory, number> = {
-      clean: 0,
-      nonrepairable: 0,
-      salvage: 0,
-      unknown: 0,
-    };
+    const categoryCounts = Object.fromEntries(
+      TITLE_CATEGORIES.map((cat) => [cat, 0]),
+    ) as Record<TitleCategory, number>;
     for (const b of titleTypeBuckets) {
       categoryCounts[deriveTitleCategory(String(b.key), titleOverrides)] += b.count;
     }

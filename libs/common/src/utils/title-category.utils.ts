@@ -6,8 +6,9 @@
  * primary buckets used everywhere cars are listed:
  *
  *   - clean          → Clean Title
- *   - nonrepairable  → Non-repairable / Parts Only / Certificate of Destruction
+ *   - rebuilt        → Rebuilt Title (previously salvage, repaired + retitled)
  *   - salvage        → Salvage Title
+ *   - nonrepairable  → Non-repairable / Parts Only / Certificate of Destruction
  *   - unknown        → a code we don't recognise yet (staff classify it from the
  *                      listing UI; the assignment is persisted in the
  *                      auction_title_type_mappings table and applied to every
@@ -19,27 +20,27 @@
  * showing a salvage as Clean.
  */
 
-export type TitleCategory = 'clean' | 'nonrepairable' | 'salvage' | 'unknown';
+export type TitleCategory = 'clean' | 'rebuilt' | 'salvage' | 'nonrepairable' | 'unknown';
 
 /** Assignable categories a staff member can pick for an unknown code. */
 export const ASSIGNABLE_TITLE_CATEGORIES: Exclude<TitleCategory, 'unknown'>[] = [
   'clean',
-  'nonrepairable',
+  'rebuilt',
   'salvage',
+  'nonrepairable',
 ];
 
 /** All categories the filter UI surfaces (unknown last). */
 export const TITLE_CATEGORIES: TitleCategory[] = [
-  'clean',
-  'nonrepairable',
-  'salvage',
+  ...ASSIGNABLE_TITLE_CATEGORIES,
   'unknown',
 ];
 
 export const TITLE_CATEGORY_LABELS: Record<TitleCategory, string> = {
   clean: 'Clean Title',
-  nonrepairable: 'Non-repairable',
+  rebuilt: 'Rebuilt Title',
   salvage: 'Salvage Title',
+  nonrepairable: 'Non-repairable',
   unknown: 'Unknown',
 };
 
@@ -49,6 +50,7 @@ export const TITLE_CATEGORY_CODES: Record<
   string[]
 > = {
   clean: ['ct', 'cz', 'fs'],
+  rebuilt: ['rb'],
   nonrepairable: ['nr', 'cd', 'po', 'nu', 'sr', 'bp'],
   salvage: [
     'st',
@@ -56,7 +58,6 @@ export const TITLE_CATEGORY_CODES: Record<
     'sv',
     's1',
     'sd',
-    'rb',
     'ps',
     'dv',
     'rs',
@@ -81,8 +82,8 @@ const BASE_CODE_TO_CATEGORY: Record<string, Exclude<TitleCategory, 'unknown'>> =
 
 /**
  * Derive the primary title category from a raw `saleTitleType` value.
- * Resolution order: staff override → base code → clean/nonrepairable text
- * signals → `unknown`. (No salvage-by-default: unmapped codes surface as
+ * Resolution order: staff override → base code → rebuilt/clean/nonrepairable
+ * text signals → `unknown`. (No salvage-by-default: unmapped codes surface as
  * unknown so staff can classify them.)
  */
 export function deriveTitleCategory(
@@ -98,6 +99,9 @@ export function deriveTitleCategory(
   if (byCode) return byCode;
 
   // full-text signals (feed sometimes carries labels instead of codes)
+  if (v.includes('rebuilt') || v.includes('rebuild') || v.includes('reconstruct')) {
+    return 'rebuilt';
+  }
   if (v.includes('clean') || v.includes('clear')) return 'clean';
   if (
     v.includes('non-repair') ||
@@ -144,4 +148,25 @@ export function allKnownCodes(overrides?: TitleOverrides): string[] {
   const out = new Set<string>(Object.keys(BASE_CODE_TO_CATEGORY));
   if (overrides) for (const code of Object.keys(overrides)) out.add(code);
   return [...out];
+}
+
+/**
+ * The fully-resolved code→category map: base codes merged with staff
+ * overrides (overrides win), keyed by lowercased code. This is what a
+ * consumer needs to translate any raw `saleTitleType` value without calling
+ * back into this module — e.g. the public `/auctions/title-mappings/resolved`
+ * endpoint.
+ */
+export function resolveTitleCodeMap(
+  overrides?: TitleOverrides,
+): Record<string, Exclude<TitleCategory, 'unknown'>> {
+  const map: Record<string, Exclude<TitleCategory, 'unknown'>> = {
+    ...BASE_CODE_TO_CATEGORY,
+  };
+  if (overrides) {
+    for (const [code, cat] of Object.entries(overrides)) {
+      map[code.toLowerCase()] = cat;
+    }
+  }
+  return map;
 }

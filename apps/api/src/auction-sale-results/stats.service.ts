@@ -388,12 +388,9 @@ export class StatsService {
     ]);
 
     // Derive title categories from raw saleTitleType buckets (same util as search)
-    const categoryCounts: Record<TitleCategory, number> = {
-      clean: 0,
-      salvage: 0,
-      nonrepairable: 0,
-      unknown: 0,
-    } as Record<TitleCategory, number>;
+    const categoryCounts = Object.fromEntries(
+      TITLE_CATEGORIES.map((cat) => [cat, 0]),
+    ) as Record<TitleCategory, number>;
     for (const b of titleTypes) {
       categoryCounts[deriveTitleCategory(String(b.key), titleOverrides)] += b.count;
     }

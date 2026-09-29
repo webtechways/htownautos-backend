@@ -778,12 +778,9 @@ export class CopartService {
     // Roll the raw title-type buckets up into the primary categories (incl.
     // unknown), honouring the learned staff overrides.
     const titleOverrides = await this.titleMapping.getOverrides();
-    const categoryCounts: Record<TitleCategory, number> = {
-      clean: 0,
-      nonrepairable: 0,
-      salvage: 0,
-      unknown: 0,
-    };
+    const categoryCounts = Object.fromEntries(
+      TITLE_CATEGORIES.map((cat) => [cat, 0]),
+    ) as Record<TitleCategory, number>;
     for (const r of titleRaw as Array<{ saleTitleType: string | null; _count: { _all: number } }>) {
       if (!r.saleTitleType) continue;
       categoryCounts[deriveTitleCategory(r.saleTitleType, titleOverrides)] += r._count._all;

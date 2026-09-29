@@ -46,6 +46,7 @@ export {
   deriveTitleCategory,
   codesForTitleCategories,
   allKnownCodes,
+  resolveTitleCodeMap,
 } from './utils/title-category.utils';
 export type { TitleCategory, TitleOverrides } from './utils/title-category.utils';
 export {
