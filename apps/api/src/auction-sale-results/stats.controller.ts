@@ -175,9 +175,10 @@ function canSeePrices(req: any): boolean {
  * Hides every field that carries the sale price, not just finalBid: ~21% of
  * rows (the non-live ingest) also hold it in highBidAtSync, and askingPrice
  * sits right next to it — returning those leaked the price to anonymous callers.
+ * Buyer identity (member number, state, country) is never shown to anonymous callers either.
  */
 function maskFinalBid(row: any): any {
-  return { ...row, finalBid: null, highBidAtSync: null, askingPrice: null, priceHidden: true };
+  return { ...row, finalBid: null, highBidAtSync: null, askingPrice: null, buyerNo: null, buyerState: null, buyerCountry: null, priceHidden: true };
 }
 
 // Excludes I, O, Q (never used in real VINs) per the standard VIN charset.
@@ -196,5 +197,5 @@ function isValidVin(vin: string): boolean {
  * — otherwise it would leak the exact figure the other two fields hide.
  */
 function maskRunPrices(row: any): any {
-  return { ...row, finalBid: null, highBidAtSync: null, askingPrice: null, price: null, priceHidden: true };
+  return { ...row, finalBid: null, highBidAtSync: null, askingPrice: null, price: null, buyerNo: null, buyerState: null, buyerCountry: null, priceHidden: true };
 }

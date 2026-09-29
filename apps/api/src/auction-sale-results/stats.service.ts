@@ -159,7 +159,8 @@ export class StatsService {
 
     const lots = new Set(runs.map((r) => r.lot)).size;
     const sold = runs.filter((r) => r.outcome === 'sold').length;
-    const notSold = runs.filter((r) => r.outcome === 'not_sold').length;
+    // Unsold = re-run lots plus runs where the reserve wasn't met and nobody approved.
+    const notSold = runs.filter((r) => r.outcome === 'not_sold' || r.outcome === 'reserve_not_met').length;
 
     return {
       vin,
