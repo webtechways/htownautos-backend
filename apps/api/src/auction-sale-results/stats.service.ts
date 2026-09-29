@@ -10,6 +10,7 @@ import {
 import type { TitleCategory } from '@htownautos/common';
 import { TitleMappingService } from '../title-mapping/title-mapping.service';
 import { QueryStatsDto } from './dto/query-stats.dto';
+import { deriveRunOutcomes } from './run-outcome';
 
 type Where = Prisma.AuctionSaleResultWhereInput;
 const num = (d: Prisma.Decimal | null | undefined): number | null =>
@@ -138,6 +139,33 @@ export class StatsService {
     if (!codigo) return null;
     const overrides = await this.titleMapping.getOverrides();
     return deriveTitleCategory(codigo, overrides);
+  }
+
+  /**
+   * Todas las corridas de subasta de un VIN (mismo coche re-listado o
+   * revendido varias veces), con un desenlace derivado por corrida.
+   *
+   * `vin` ya llega validado y normalizado desde el controlador.
+   */
+  async findRunsByVin(vin: string) {
+    const rows = await this.prisma.auctionSaleResult.findMany({
+      where: { vin },
+      orderBy: [{ saleDate: 'asc' }, { createdAt: 'asc' }],
+      take: 60,
+    });
+    const serialized = rows.map((r) => this.serialize(r));
+    const withOutcomes = deriveRunOutcomes(serialized);
+    const runs = [...withOutcomes].reverse(); // saleDate DESC for the response
+
+    const lots = new Set(runs.map((r) => r.lot)).size;
+    const sold = runs.filter((r) => r.outcome === 'sold').length;
+    const notSold = runs.filter((r) => r.outcome === 'not_sold').length;
+
+    return {
+      vin,
+      runs,
+      summary: { runs: runs.length, lots, sold, notSold },
+    };
   }
 
   /** El mismo VIN entre los lotes que aun estan en subasta. */

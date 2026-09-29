@@ -63,6 +63,30 @@ export class StatsController {
     return canSeePrices(req) ? row : maskFinalBid(row);
   }
 
+  /**
+   * Todas las corridas de subasta de un VIN + un desenlace derivado por
+   * corrida (ver run-outcome.ts). Declarada ANTES de cualquier ruta con
+   * parametro que pudiera hacerle sombra.
+   */
+  @Get('vin/:vin')
+  @Public()
+  @OptionalAuth()
+  @TenantOptional()
+  @RequirePermissions(STATS_READ_PERMISSION)
+  @RequireApiScopes(STATS_READ_SCOPE)
+  @ApiOperation({ summary: 'Every auction run of one VIN, with a derived sale outcome per run' })
+  @ApiResponse({ status: 200, description: 'Runs for the VIN + summary' })
+  @ApiResponse({ status: 400, description: 'Malformed VIN' })
+  async findRunsByVin(@Param('vin') vinParam: string, @Req() req: any) {
+    const vin = vinParam.trim().toUpperCase();
+    if (!isValidVin(vin)) {
+      throw new BadRequestException(`"${vinParam}" is not a valid VIN`);
+    }
+    const result = await this.stats.findRunsByVin(vin);
+    if (canSeePrices(req)) return result;
+    return { ...result, runs: result.runs.map(maskRunPrices) };
+  }
+
   @Get('filters')
   @Public()
   @OptionalAuth()
@@ -147,6 +171,30 @@ function canSeePrices(req: any): boolean {
   return !!req.user;
 }
 
+/**
+ * Hides every field that carries the sale price, not just finalBid: ~21% of
+ * rows (the non-live ingest) also hold it in highBidAtSync, and askingPrice
+ * sits right next to it — returning those leaked the price to anonymous callers.
+ */
 function maskFinalBid(row: any): any {
-  return { ...row, finalBid: null, priceHidden: true };
+  return { ...row, finalBid: null, highBidAtSync: null, askingPrice: null, priceHidden: true };
+}
+
+// Excludes I, O, Q (never used in real VINs) per the standard VIN charset.
+const VIN_RE = /^[A-HJ-NPR-Z0-9]{17}$/;
+
+function isValidVin(vin: string): boolean {
+  if (!VIN_RE.test(vin)) return false;
+  if (new Set(vin).size === 1) return false; // all one repeated char
+  if (vin.startsWith('0000000')) return false;
+  return true;
+}
+
+/**
+ * Masks every run of a VIN's run-outcome response. `price` is derived from
+ * `finalBid`/`highBidAtSync` in the service, so it has to be nulled here too
+ * — otherwise it would leak the exact figure the other two fields hide.
+ */
+function maskRunPrices(row: any): any {
+  return { ...row, finalBid: null, highBidAtSync: null, askingPrice: null, price: null, priceHidden: true };
 }
