@@ -107,7 +107,8 @@ export class AuctionSearchController {
   // === SYNC TRIGGERS — published to RabbitMQ, executed by data-sync ===
 
   @Post('import/copart')
-  @Public()
+  // Staff only (was @Public — anyone could trigger imports / drop the index). Global guards require a staff session.
+  @ApiBearerAuth()
   @HttpCode(HttpStatus.ACCEPTED)
   @ApiOperation({
     summary: 'Queue full Copart import (CSV → DB → OpenSearch)',
@@ -119,7 +120,8 @@ export class AuctionSearchController {
   }
 
   @Post('import/recreate')
-  @Public()
+  // Staff only (was @Public — anyone could trigger imports / drop the index). Global guards require a staff session.
+  @ApiBearerAuth()
   @HttpCode(HttpStatus.ACCEPTED)
   @ApiOperation({
     summary: 'Queue index recreate + full Copart import',
@@ -131,7 +133,8 @@ export class AuctionSearchController {
   }
 
   @Post('sync/all')
-  @Public()
+  // Staff only (was @Public — anyone could trigger imports / drop the index). Global guards require a staff session.
+  @ApiBearerAuth()
   @HttpCode(HttpStatus.ACCEPTED)
   @ApiOperation({
     summary: 'Queue reindex of all sources to OpenSearch',
@@ -261,7 +264,8 @@ export class AuctionSearchController {
   }
 
   @Post('index/recreate')
-  @Public()
+  // Staff only (was @Public — anyone could trigger imports / drop the index). Global guards require a staff session.
+  @ApiBearerAuth()
   @HttpCode(HttpStatus.ACCEPTED)
   @ApiOperation({
     summary: 'Queue OpenSearch index recreate',
@@ -273,7 +277,8 @@ export class AuctionSearchController {
   }
 
   @Post('copart/:lotNumber/refresh-bid')
-  @Public()
+  // Staff only (was @Public — anyone could trigger imports / drop the index). Global guards require a staff session.
+  @ApiBearerAuth()
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: 'Refresh current high bid for a Copart lot',
