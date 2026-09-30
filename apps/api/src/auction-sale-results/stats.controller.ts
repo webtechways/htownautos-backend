@@ -50,6 +50,20 @@ export class StatsController {
     return { ...result, data: result.data.map(maskFinalBid) };
   }
 
+  @Get('sitemap')
+  @Public()
+  @OptionalAuth()
+  @TenantOptional()
+  @RequirePermissions(STATS_READ_PERMISSION)
+  @RequireApiScopes(STATS_READ_SCOPE)
+  @ApiOperation({ summary: 'Distinct sold lot numbers + latest sale date, 45k per page, for search-engine sitemaps' })
+  @ApiQuery({ name: 'page', required: false, example: '0' })
+  async sitemap(@Query('page') page?: string) {
+    const p = page === undefined || page === '' ? 0 : Number(page);
+    if (!Number.isInteger(p) || p < 0 || p > 1000) throw new BadRequestException('page must be a whole number');
+    return this.stats.sitemapLots(p);
+  }
+
   @Get('lot/:lot')
   @Public()
   @OptionalAuth()

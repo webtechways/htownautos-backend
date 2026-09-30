@@ -78,6 +78,13 @@ const AGG_FACETS: Record<string, FacetKey> = {
   titleTypes: 'title',
 };
 
+export interface AuctionSitemapPage {
+  total: number;
+  page: number;
+  pageSize: number;
+  items: { lot: string; saleDate: number | null }[];
+}
+
 @Injectable()
 export class AuctionSearchService {
   private readonly logger = new Logger(AuctionSearchService.name);
@@ -954,6 +961,39 @@ export class AuctionSearchService {
    * (index not yet reindexed). We always merge the authoritative discard state
    * from Postgres so the detail view reflects it immediately after a discard/un-discard.
    */
+  private readonly sitemapCache = new Map<string, { at: number; value: AuctionSitemapPage }>();
+
+  /**
+   * One page of upcoming Copart lots for search-engine sitemaps: lots with a
+   * sale date from today (US Central) on, not discarded, ordered by sale date
+   * then lot. From Postgres (indexed saleDate), cached for an hour per page.
+   */
+  async sitemapLots(page: number): Promise<AuctionSitemapPage> {
+    const key = `auction:${page}`;
+    const hit = this.sitemapCache.get(key);
+    if (hit && Date.now() - hit.at < 60 * 60 * 1000) return hit.value;
+    const size = 45_000;
+    const [rows, totals] = await Promise.all([
+      this.prisma.$queryRaw<{ lotNumber: bigint; saleDate: number | null }[]>`
+        SELECT "lotNumber", "saleDate" FROM auction_listings
+        WHERE "saleDate" >= to_char(now() AT TIME ZONE 'America/Chicago', 'YYYYMMDD')::int
+          AND discarded IS NOT TRUE AND "lotNumber" IS NOT NULL
+        ORDER BY "saleDate", "lotNumber" LIMIT ${size} OFFSET ${page * size}`,
+      this.prisma.$queryRaw<{ total: bigint }[]>`
+        SELECT COUNT(*) AS total FROM auction_listings
+        WHERE "saleDate" >= to_char(now() AT TIME ZONE 'America/Chicago', 'YYYYMMDD')::int
+          AND discarded IS NOT TRUE AND "lotNumber" IS NOT NULL`,
+    ]);
+    const value: AuctionSitemapPage = {
+      total: Number(totals[0]?.total ?? 0),
+      page,
+      pageSize: size,
+      items: rows.map((r) => ({ lot: String(r.lotNumber), saleDate: r.saleDate ?? null })),
+    };
+    this.sitemapCache.set(key, { at: Date.now(), value });
+    return value;
+  }
+
   async findBySourceId(source: 'copart' | 'iaai', sourceId: string): Promise<(Omit<UnifiedAuction, 'discarded' | 'discardReason' | 'discardedAt'> & DiscardFields) | null> {
     const id = `${source}_${sourceId}`;
     const doc = await this.findById(id);

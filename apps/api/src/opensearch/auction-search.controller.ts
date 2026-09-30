@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Get,
@@ -18,6 +19,7 @@ import {
   ApiResponse,
   ApiBearerAuth,
   ApiParam,
+  ApiQuery,
 } from '@nestjs/swagger';
 import { AuctionSearchService } from './auction-search.service';
 import { AuctionSyncService, AuctionIndexService } from '@htownautos/opensearch';
@@ -67,6 +69,16 @@ export class AuctionSearchController {
   @ApiResponse({ status: 200, description: 'Search results with pagination and optional aggregations' })
   async search(@Query() dto: SearchAuctionsDto) {
     return this.searchService.search(dto);
+  }
+
+  @Get('sitemap')
+  @Public()
+  @ApiOperation({ summary: 'Upcoming Copart lot numbers + sale date, 45k per page, for search-engine sitemaps' })
+  @ApiQuery({ name: 'page', required: false, example: '0' })
+  async sitemap(@Query('page') page?: string) {
+    const p = page === undefined || page === '' ? 0 : Number(page);
+    if (!Number.isInteger(p) || p < 0 || p > 1000) throw new BadRequestException('page must be a whole number');
+    return this.searchService.sitemapLots(p);
   }
 
   @Get('filters')

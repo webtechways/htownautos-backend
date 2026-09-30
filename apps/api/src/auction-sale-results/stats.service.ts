@@ -48,12 +48,52 @@ export const BREAKDOWN_FIELDS = Object.keys(BREAKDOWN_COLUMNS) as BreakdownField
  * the Final Bid range. Prisma-backed (Postgres), reusing the same title-category
  * derivation utils as the copart/opensearch services.
  */
+/** Sitemap pages: at most this many URLs each (the protocol's cap is 50,000). */
+export const SITEMAP_PAGE_SIZE = 45_000;
+/** Sitemap queries scan whole tables; one result per page is reused for this long. */
+const SITEMAP_CACHE_MS = 60 * 60 * 1000;
+
+export interface SitemapPage {
+  total: number;
+  page: number;
+  pageSize: number;
+  items: { lot: string; saleDate: number | null }[];
+}
+
 @Injectable()
 export class StatsService {
+  private readonly sitemapCache = new Map<string, { at: number; value: SitemapPage }>();
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly titleMapping: TitleMappingService,
   ) {}
+
+  /**
+   * One page of distinct sold lots for search-engine sitemaps: lot number +
+   * its latest sale date (YYYYMMDD), ordered by lot so pages are stable.
+   * Index-only scan over (lot, saleDate); cached for an hour per page.
+   */
+  async sitemapLots(page: number): Promise<SitemapPage> {
+    const key = `sold:${page}`;
+    const hit = this.sitemapCache.get(key);
+    if (hit && Date.now() - hit.at < SITEMAP_CACHE_MS) return hit.value;
+    const size = SITEMAP_PAGE_SIZE;
+    const [rows, totals] = await Promise.all([
+      this.prisma.$queryRaw<{ lot: bigint; saleDate: number | null }[]>`
+        SELECT lot, MAX("saleDate") AS "saleDate" FROM auction_sale_results
+        GROUP BY lot ORDER BY lot LIMIT ${size} OFFSET ${page * size}`,
+      this.prisma.$queryRaw<{ total: bigint }[]>`SELECT COUNT(DISTINCT lot) AS total FROM auction_sale_results`,
+    ]);
+    const value: SitemapPage = {
+      total: Number(totals[0]?.total ?? 0),
+      page,
+      pageSize: size,
+      items: rows.map((r) => ({ lot: String(r.lot), saleDate: r.saleDate ?? null })),
+    };
+    this.sitemapCache.set(key, { at: Date.now(), value });
+    return value;
+  }
 
   async search(dto: QueryStatsDto) {
     const page = dto.page && dto.page > 0 ? dto.page : 1;
