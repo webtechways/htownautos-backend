@@ -63,7 +63,8 @@ export interface MarketReportListing {
  * the shared cache when possible. `price` is null when no mileage was given
  * (MarketCheck needs it) and `{ value: null }` when MarketCheck can't price
  * the VIN. With `cacheOnly`, a part that isn't cached comes back null and
- * nothing is paid for.
+ * nothing is paid for. With `refresh`, the cache is skipped and MarketCheck is
+ * asked again (paid); the new result replaces the cached one for everyone.
  */
 export interface MarketReport {
   vin: string;
@@ -480,10 +481,10 @@ export class MarketCheckService {
     return p;
   }
 
-  private async cachedPrice(vin: string, miles: number, zip: string, cacheOnly: boolean): Promise<MarketReport['price']> {
+  private async cachedPrice(vin: string, miles: number, zip: string, cacheOnly: boolean, refresh: boolean): Promise<MarketReport['price']> {
     const dealerType = 'independent';
     const where = { vin_miles_dealerType_zip: { vin, miles, dealerType, zip } };
-    const hit = await this.prisma.marketCheckPriceCache.findUnique({ where });
+    const hit = refresh ? null : await this.prisma.marketCheckPriceCache.findUnique({ where });
     if (hit && hit.expiresAt > new Date()) {
       return {
         value: hit.marketcheckPrice === null ? null : Number(hit.marketcheckPrice),
@@ -506,8 +507,8 @@ export class MarketCheckService {
     });
   }
 
-  private async cachedVinComps(vin: string, zip: string, cacheOnly: boolean): Promise<MarketReport['comparables']> {
-    const hit = await this.prisma.marketCheckAuctionCache.findUnique({ where: { cacheKey: this.vinCompsKey(vin, zip) } });
+  private async cachedVinComps(vin: string, zip: string, cacheOnly: boolean, refresh: boolean): Promise<MarketReport['comparables']> {
+    const hit = refresh ? null : await this.prisma.marketCheckAuctionCache.findUnique({ where: { cacheKey: this.vinCompsKey(vin, zip) } });
     if (hit && hit.expiresAt > new Date()) {
       return { listings: this.slimListings(hit.listings, vin), numFound: hit.numFound, cached: true, fetchedAt: hit.createdAt.toISOString() };
     }
@@ -550,13 +551,13 @@ export class MarketCheckService {
    * cache miss calls (and pays) MarketCheck; the result is then shared with
    * every later caller for the TTL.
    */
-  async getMarketReport(vinRaw: string, zip: string, miles: number | null, cacheOnly = false): Promise<MarketReport> {
+  async getMarketReport(vinRaw: string, zip: string, miles: number | null, cacheOnly = false, refresh = false): Promise<MarketReport> {
     const vin = (vinRaw || '').toUpperCase();
     if (!/^[A-HJ-NPR-Z0-9]{17}$/.test(vin)) throw new BadRequestException('VIN must be 17 characters');
     if (!/^\d{5}$/.test(zip || '')) throw new BadRequestException('zip must be a 5-digit US ZIP code');
     const [price, comparables] = await Promise.all([
-      miles !== null && miles > 0 ? this.cachedPrice(vin, miles, zip, cacheOnly) : Promise.resolve(null),
-      this.cachedVinComps(vin, zip, cacheOnly),
+      miles !== null && miles > 0 ? this.cachedPrice(vin, miles, zip, cacheOnly, refresh && !cacheOnly) : Promise.resolve(null),
+      this.cachedVinComps(vin, zip, cacheOnly, refresh && !cacheOnly),
     ]);
     return { vin, zip, price, comparables };
   }
