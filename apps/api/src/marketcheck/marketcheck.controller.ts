@@ -1,5 +1,6 @@
-import { Controller, Get, Param, Query } from '@nestjs/common';
+import { BadRequestException, Controller, Get, Param, Query } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiQuery, ApiParam } from '@nestjs/swagger';
+import { RequireApiScopes } from '@htownautos/auth';
 import { MarketCheckService } from './marketcheck.service';
 
 @ApiTags('MarketCheck')
@@ -96,5 +97,26 @@ export class MarketCheckController {
   ) {
     const result = await this.marketCheckService.getComparablesByVin(vin, zip);
     return { data: result };
+  }
+
+  @Get('market-report')
+  @RequireApiScopes('marketcheck:read')
+  @ApiOperation({
+    summary: 'MarketCheck price + nearby comparables for a VIN, served from the shared cache',
+    description: 'Cache first (MARKETCHECK_CACHE_TTL_HOURS, default 7 days); only a miss calls MarketCheck. cacheOnly=true never calls MarketCheck — uncached parts come back null.',
+  })
+  @ApiQuery({ name: 'vin', required: true, example: '5TDKK3DC6DS302565' })
+  @ApiQuery({ name: 'zip', required: true, example: '77063' })
+  @ApiQuery({ name: 'miles', required: false, example: '123000', description: 'Needed for the price; omit to get comparables only' })
+  @ApiQuery({ name: 'cacheOnly', required: false, example: 'false' })
+  async getMarketReport(
+    @Query('vin') vin: string,
+    @Query('zip') zip: string,
+    @Query('miles') miles?: string,
+    @Query('cacheOnly') cacheOnly?: string,
+  ) {
+    const m = miles === undefined || miles === '' ? null : Number(miles);
+    if (m !== null && (!Number.isInteger(m) || m < 0)) throw new BadRequestException('miles must be a whole number');
+    return { data: await this.marketCheckService.getMarketReport(vin, zip, m, cacheOnly === 'true') };
   }
 }

@@ -238,6 +238,14 @@ export class PrismaService implements OnModuleInit, OnModuleDestroy {
     return this.prisma.auctionAnalysisSnapshot;
   }
 
+  get marketCheckPriceCache() {
+    return this.prisma.marketCheckPriceCache;
+  }
+
+  get marketCheckAuctionCache() {
+    return this.prisma.marketCheckAuctionCache;
+  }
+
   get auctionSaleResult() {
     return this.prisma.auctionSaleResult;
   }
