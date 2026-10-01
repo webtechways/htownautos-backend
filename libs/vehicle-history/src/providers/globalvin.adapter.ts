@@ -1,4 +1,4 @@
-import { HttpResponse, ProviderError, ProviderErrorCode, ProviderReport, VehicleHistoryAdapter } from '../types';
+import { HttpResponse, ProviderContext, ProviderError, ProviderErrorCode, ProviderReport, VehicleHistoryAdapter } from '../types';
 import { cleanMessage, sleep, sniff } from '../provider-http';
 
 const NOT_FOUND = /not found|no record|no data|report unavailable|unavailable for this vin|no report/i;
@@ -41,6 +41,27 @@ function decodeInline(report: string | undefined): ProviderReport | null {
   return type ? { body, contentType: type } : null;
 }
 
+/** Turns a completed job into the report: inline base64 first, else the stored file. */
+async function finishJob(ctx: ProviderContext, jobId: string, job: JobStatus | null): Promise<ProviderReport> {
+  const result = job?.result;
+  if (result?.success === false) {
+    const msg = cleanMessage(result.message ?? 'Report unavailable');
+    throw new ProviderError(NOT_FOUND.test(msg) ? 'not_found' : 'upstream', msg);
+  }
+  const inline = decodeInline(result?.report);
+  if (inline) return { ...inline, providerReportId: result?.reportId ?? jobId };
+
+  // Nothing usable inline (e.g. a JSON report): take the stored file.
+  if (result?.reportId) {
+    const file = await ctx.http({ kind: 'fetch', route: '/api/vhrs/:reportId/pdf', path: `/api/vhrs/${encodeURIComponent(result.reportId)}/pdf` });
+    if (!file.ok) throw classify(file);
+    const type = sniff(file.buffer);
+    if (type) return { body: file.buffer, contentType: type, providerReportId: result.reportId };
+    throw file.fail('bad_response', `Report file is ${file.contentType || 'of an unknown type'}, not PDF/HTML`);
+  }
+  throw new ProviderError('bad_response', `Job ${jobId} completed without a report`);
+}
+
 /**
  * globalvin.co supplier API (X-API-Key) — asynchronous: ordering queues a job
  * and the report arrives when /api/jobs/status says it's complete (base64 PDF
@@ -52,7 +73,8 @@ export const globalVinAdapter: VehicleHistoryAdapter = {
   website: 'https://globalvin.co',
   envApiKey: 'GLOBALVIN_API_KEY',
   defaultBaseUrl: 'https://globalvin.co/backend',
-  turnaround: 'Usually under a minute (queued job, polled every 4 s)',
+  turnaround: '1–5 minutes (queued job, polled every 4 s)',
+  defaultTimeoutMs: 300_000,
   supports: ['carfax', 'autocheck'],
   routes: [
     { method: 'GET', route: '/api/usa/report/carfax/:vin', purpose: 'Order a Carfax report (queues a job)', cost: '$3.00' },
@@ -74,7 +96,7 @@ export const globalVinAdapter: VehicleHistoryAdapter = {
     let transientErrors = 0;
     for (let wait = 3000; ; wait = 4000) {
       if (Date.now() + wait > ctx.deadline) {
-        throw new ProviderError('timeout', `Job ${jobId} not ready in time (it may still finish on GlobalVIN's side)`);
+        throw new ProviderError('timeout', `Job ${jobId} not ready in time; checking it again in the background`, null, jobId);
       }
       await sleep(wait);
       let poll: HttpResponse;
@@ -98,23 +120,19 @@ export const globalVinAdapter: VehicleHistoryAdapter = {
       if (job?.isComplete || job?.status === 'completed') break;
     }
 
-    const result = job?.result;
-    if (result?.success === false) {
-      const msg = cleanMessage(result.message ?? 'Report unavailable');
-      throw new ProviderError(NOT_FOUND.test(msg) ? 'not_found' : 'upstream', msg);
-    }
-    const inline = decodeInline(result?.report);
-    if (inline) return { ...inline, providerReportId: result?.reportId ?? jobId };
+    return finishJob(ctx, jobId, job);
+  },
 
-    // Nothing usable inline (e.g. a JSON report): take the stored file.
-    if (result?.reportId) {
-      const file = await ctx.http({ kind: 'fetch', route: '/api/vhrs/:reportId/pdf', path: `/api/vhrs/${encodeURIComponent(result.reportId)}/pdf` });
-      if (!file.ok) throw classify(file);
-      const type = sniff(file.buffer);
-      if (type) return { body: file.buffer, contentType: type, providerReportId: result.reportId };
-      throw file.fail('bad_response', `Report file is ${file.contentType || 'of an unknown type'}, not PDF/HTML`);
+  async resumeJob(ctx, jobId) {
+    const poll = await ctx.http({ kind: 'poll', route: '/api/jobs/status/:jobId', path: `/api/jobs/status/${jobId}`, headers: { 'X-API-Key': ctx.apiKey }, timeoutMs: 20_000 });
+    if (!poll.ok) throw classify(poll);
+    const job = poll.json<{ data?: JobStatus }>()?.data ?? null;
+    if (job?.isFailed || job?.status === 'failed') {
+      const msg = cleanMessage(job.statusMessage ?? job.result?.message ?? 'Job failed');
+      throw poll.fail(NOT_FOUND.test(msg) ? 'not_found' : 'upstream', `Job ${jobId}: ${msg}`);
     }
-    throw new ProviderError('bad_response', `Job ${jobId} completed without a report`);
+    if (!(job?.isComplete || job?.status === 'completed')) return 'pending';
+    return finishJob(ctx, jobId, job);
   },
 
   async healthCheck(ctx) {

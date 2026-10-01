@@ -42,8 +42,8 @@ export class UpdateProviderDto {
   @IsOptional() @IsBoolean() carfaxEnabled?: boolean;
   @IsOptional() @IsBoolean() autocheckEnabled?: boolean;
 
-  @ApiPropertyOptional({ description: 'Budget for one report from this provider, in ms (10 s – 5 min)' })
-  @IsOptional() @IsInt() @Min(10_000) @Max(300_000)
+  @ApiPropertyOptional({ description: 'Budget for one report from this provider, in ms (10 s – 15 min)' })
+  @IsOptional() @IsInt() @Min(10_000) @Max(900_000)
   timeoutMs?: number;
 
   @ApiPropertyOptional({ description: "'' resets to the adapter default" })

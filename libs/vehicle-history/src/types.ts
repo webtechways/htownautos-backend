@@ -39,6 +39,8 @@ export class ProviderError extends Error {
     readonly code: ProviderErrorCode,
     message: string,
     readonly httpStatus: number | null = null,
+    /** An accepted (usually paid) job still running: hand it to resumeJob later. */
+    readonly resumeToken: string | null = null,
   ) {
     super(message);
   }
@@ -136,8 +138,15 @@ export interface VehicleHistoryAdapter {
   defaultBaseUrl: string;
   /** Typical wait for a report, shown in the UI. */
   turnaround: string;
+  /** Time budget a new provider row starts with. */
+  defaultTimeoutMs: number;
   supports: ReportType[];
   routes: ProviderRoute[];
   fetchReport(ctx: ProviderContext, vin: string, type: ReportType): Promise<ProviderReport>;
   healthCheck(ctx: ProviderContext): Promise<HealthResult>;
+  /**
+   * Async providers: one check on a job that outlived the time budget
+   * (ProviderError.resumeToken). 'pending' = not ready yet; throws if it failed.
+   */
+  resumeJob?(ctx: ProviderContext, token: string, vin: string, type: ReportType): Promise<ProviderReport | 'pending'>;
 }

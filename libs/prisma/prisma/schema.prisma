@@ -5671,3 +5671,28 @@ model VehicleHistoryCall {
   @@index([createdAt])
   @@map("vehicle_history_calls")
 }
+
+/// A paid job a provider accepted but hadn't finished when its time budget ran
+/// out. Re-polled in the background so the report still lands in storage and
+/// its order is completed late instead of lost.
+model VehicleHistoryPendingJob {
+  id          String    @id @default(uuid())
+  providerKey String
+  vin         String
+  reportType  String
+  /// The provider's job id.
+  token       String
+  requestId   String?
+  /// pending | completed | failed | expired
+  status      String    @default("pending")
+  checks      Int       @default(0)
+  lastError   String?
+  reportId    String?
+  createdAt   DateTime  @default(now())
+  checkedAt   DateTime?
+  completedAt DateTime?
+
+  @@unique([providerKey, token])
+  @@index([status, createdAt])
+  @@map("vehicle_history_pending_jobs")
+}

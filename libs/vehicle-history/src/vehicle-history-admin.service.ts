@@ -40,6 +40,8 @@ export class VehicleHistoryAdminService {
   async listProviders() {
     await this.history.ensureProviders();
     const rows = await this.prisma.vehicleHistoryProvider.findMany({ orderBy: [{ priority: 'asc' }, { key: 'asc' }] });
+    const pendingRows = await this.prisma.vehicleHistoryPendingJob.groupBy({ by: ['providerKey'], where: { status: 'pending' }, _count: { _all: true } });
+    const pending = new Map(pendingRows.map((p) => [p.providerKey, p._count._all]));
     const now = Date.now();
     return rows
       .filter((r) => ADAPTER_BY_KEY.has(r.key))
@@ -49,6 +51,7 @@ export class VehicleHistoryAdminService {
         const { encryptedApiKey: _secret, ...row } = r;
         return {
           ...row,
+          pendingJobs: pending.get(r.key) ?? 0,
           name: a.name,
           website: a.website,
           turnaround: a.turnaround,

@@ -41,6 +41,7 @@ export const cheapCarfaxAdapter: VehicleHistoryAdapter = {
   envApiKey: 'CARFAX_API',
   defaultBaseUrl: 'https://panel.cheapcarfax.net',
   turnaround: 'Seconds (synchronous)',
+  defaultTimeoutMs: 90_000,
   supports: ['carfax', 'autocheck'],
   routes: [
     { method: 'GET', route: '/api/carfax/vin/:vin/html', purpose: 'Carfax report (HTML)', cost: '1 credit' },
