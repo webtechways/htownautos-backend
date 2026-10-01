@@ -230,6 +230,26 @@ export class PrismaService implements OnModuleInit, OnModuleDestroy {
     return this.prisma.carfaxReport;
   }
 
+  get vehicleHistoryProvider() {
+    return this.prisma.vehicleHistoryProvider;
+  }
+
+  get vehicleHistorySettings() {
+    return this.prisma.vehicleHistorySettings;
+  }
+
+  get vehicleHistoryReport() {
+    return this.prisma.vehicleHistoryReport;
+  }
+
+  get vehicleHistoryRequest() {
+    return this.prisma.vehicleHistoryRequest;
+  }
+
+  get vehicleHistoryCall() {
+    return this.prisma.vehicleHistoryCall;
+  }
+
   get maxBidRecommendation() {
     return this.prisma.maxBidRecommendation;
   }

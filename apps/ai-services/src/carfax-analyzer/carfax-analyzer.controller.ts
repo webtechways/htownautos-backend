@@ -33,12 +33,25 @@ export class CarfaxAnalyzerController {
 
   @Post('fetch')
   @ApiOperation({
-    summary: 'Fetch a Carfax HTML report from the CheapCarfax provider, store in S3, and return a signed URL',
+    summary: "Order the lot's Carfax through the provider chain (fallback + cache) and link it to the listing",
+    description: 'Returns the report, or { pending: true, requestId } when the provider is still working — poll GET /carfax-analyzer/fetch/:requestId.',
   })
   async fetchFromProvider(@Body() dto: FetchCarfaxDto) {
     const result = await this.carfaxAnalyzerService.fetchCarfaxFromProvider(
       dto.auctionListingId,
     );
+    return { data: result };
+  }
+
+  @Get('fetch/:requestId')
+  @ApiOperation({ summary: 'Poll a Carfax order started by POST /carfax-analyzer/fetch' })
+  @ApiParam({ name: 'requestId', description: 'Vehicle history request id' })
+  @ApiQuery({ name: 'auctionListingId', required: true })
+  async fetchStatus(
+    @Param('requestId') requestId: string,
+    @Query('auctionListingId') auctionListingId: string,
+  ) {
+    const result = await this.carfaxAnalyzerService.fetchStatus(auctionListingId, requestId);
     return { data: result };
   }
 
@@ -84,7 +97,7 @@ export class CarfaxAnalyzerController {
   }
 
   @Get('limits')
-  @ApiOperation({ summary: 'Remaining Carfax reports / credits from the CheapCarfax provider' })
+  @ApiOperation({ summary: 'Remaining Carfax reports / credits at CheapCarfax' })
   async getLimits() {
     const data = await this.carfaxAnalyzerService.getProviderLimits();
     return { data };

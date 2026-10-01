@@ -8,16 +8,8 @@ import {
 import OpenAI from 'openai';
 import { PrismaService } from '@htownautos/prisma';
 import { S3Service } from '@htownautos/common';
-
-// Browser-like headers so CheapCarfax's Cloudflare doesn't challenge our
-// server-to-server (datacenter IP) requests as a bot.
-const CARFAX_BROWSER_HEADERS: Record<string, string> = {
-  'User-Agent':
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
-  Accept: 'application/json, text/plain, */*',
-  'Accept-Language': 'en-US,en;q=0.9',
-  Referer: 'https://panel.cheapcarfax.net/',
-};
+import { VehicleHistoryService } from '@htownautos/vehicle-history';
+import type { RequestView } from '@htownautos/vehicle-history';
 
 @Injectable()
 export class CarfaxAnalyzerService {
@@ -27,6 +19,7 @@ export class CarfaxAnalyzerService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly s3Service: S3Service,
+    private readonly vehicleHistory: VehicleHistoryService,
   ) {
     const apiKey = process.env.OPENAI_API_KEY || process.env.TTS_API_KEY;
     if (!apiKey) {
@@ -354,16 +347,8 @@ ${truncatedText}`;
   }
 
   /**
-   * Fetch a Carfax HTML report directly from the CheapCarfax provider,
-   * store the HTML in S3, persist a CarfaxReport record, and return a
-   * signed download URL.
-   *
-   * Consumes 1 credit per call. The caller must ensure the listing exists
-   * and belongs to the correct context before calling this method.
-   */
-  /**
-   * Returns the CheapCarfax account limits/credits (free call, no credit used):
-   * { daily_limit, carfax_reports_left_today, autocheck_reports_left_today, credits }.
+   * CheapCarfax credits/limits for the lot page (free call). Served from the
+   * last health reading when it's under 2 minutes old.
    */
   async getProviderLimits(): Promise<{
     daily_limit: number | null;
@@ -371,54 +356,33 @@ ${truncatedText}`;
     autocheck_reports_left_today: number | null;
     credits: number | null;
   }> {
-    const apiKey = process.env.CARFAX_API ?? '';
-    if (!apiKey) {
-      return {
-        daily_limit: null,
-        carfax_reports_left_today: null,
-        autocheck_reports_left_today: null,
-        credits: null,
-      };
-    }
+    const empty = { daily_limit: null, carfax_reports_left_today: null, autocheck_reports_left_today: null, credits: null };
     try {
-      const res = await fetch('https://panel.cheapcarfax.net/api/user/limits', {
-        headers: { 'x-api-key': apiKey, ...CARFAX_BROWSER_HEADERS },
-      });
-      if (!res.ok) {
-        this.logger.warn(`Carfax limits fetch failed: ${res.status}`);
-        return {
-          daily_limit: null,
-          carfax_reports_left_today: null,
-          autocheck_reports_left_today: null,
-          credits: null,
-        };
+      let row = await this.prisma.vehicleHistoryProvider.findUnique({ where: { key: 'cheapcarfax' } });
+      if (!row?.healthCheckedAt || Date.now() - row.healthCheckedAt.getTime() > 120_000) {
+        row = await this.vehicleHistory.checkHealth('cheapcarfax');
       }
-      const j = (await res.json()) as Record<string, number>;
+      const b = (row?.balance ?? null) as Record<string, number | null> | null;
+      if (!b) return empty;
       return {
-        daily_limit: j.daily_limit ?? null,
-        carfax_reports_left_today: j.carfax_reports_left_today ?? null,
-        autocheck_reports_left_today: j.autocheck_reports_left_today ?? null,
-        credits: j.credits ?? null,
+        daily_limit: b.dailyLimit ?? null,
+        carfax_reports_left_today: b.carfaxLeftToday ?? null,
+        autocheck_reports_left_today: b.autocheckLeftToday ?? null,
+        credits: b.credits ?? null,
       };
     } catch (err) {
       this.logger.warn(`Carfax limits fetch error: ${(err as Error).message}`);
-      return {
-        daily_limit: null,
-        carfax_reports_left_today: null,
-        autocheck_reports_left_today: null,
-        credits: null,
-      };
+      return empty;
     }
   }
 
+  /**
+   * Orders the lot's Carfax through the vehicle-history provider chain (with
+   * fallback and a per-VIN cache), and links the stored report to the listing.
+   * Waits up to ~50 s; a slower provider answers { pending, requestId } and the
+   * page polls fetchStatus().
+   */
   async fetchCarfaxFromProvider(auctionListingId: string) {
-    // 1. Guard: CARFAX_API key must be configured
-    const apiKey = process.env.CARFAX_API ?? '';
-    if (!apiKey) {
-      throw new InternalServerErrorException('CARFAX_API no configurada');
-    }
-
-    // 2. Load the AuctionListing and extract VIN
     const listing = await this.prisma.auctionListing.findUnique({
       where: { lotNumber: BigInt(auctionListingId) },
       select: { lotNumber: true, vin: true },
@@ -426,130 +390,94 @@ ${truncatedText}`;
     if (!listing) {
       throw new NotFoundException('Auction listing not found');
     }
-
-    const rawVin = listing.vin?.replace(/\s/g, '') ?? '';
-    if (!rawVin || rawVin.length !== 17) {
+    const vin = listing.vin?.replace(/\s/g, '') ?? '';
+    if (!vin || vin.length !== 17) {
       throw new BadRequestException('VIN no disponible o inválido para este lote');
     }
-    const vin = rawVin;
 
-    // 3. Call CheapCarfax provider. Their API sits behind Cloudflare, which
-    // sometimes challenges our datacenter egress IP with an HTML block page
-    // instead of JSON. Send browser-like headers and retry a few times to get
-    // past intermittent bot challenges.
-    this.logger.log(`Fetching Carfax from provider for VIN ${vin} (listing ${auctionListingId})`);
-    const url = `https://panel.cheapcarfax.net/api/carfax/vin/${vin}/html`;
+    this.logger.log(`Ordering Carfax for VIN ${vin} (listing ${auctionListingId})`);
+    const view = await this.vehicleHistory.order(
+      { vin, type: 'carfax', source: 'auction-listing', auctionListingId },
+      50_000,
+    );
+    return this.resultFor(auctionListingId, view);
+  }
 
-    let providerRes!: Response;
-    let bodyText = '';
-    let wasHtmlBlock = false;
-    for (let attempt = 1; attempt <= 3; attempt++) {
-      providerRes = await fetch(url, {
-        headers: { 'x-api-key': apiKey, ...CARFAX_BROWSER_HEADERS },
-      });
-      const contentType = providerRes.headers.get('content-type') ?? '';
-      bodyText = await providerRes.text().catch(() => '');
-      wasHtmlBlock =
-        contentType.includes('text/html') ||
-        /^\s*<(?:!doctype|html)/i.test(bodyText) ||
-        /cloudflare|attention required|cf-ray|ie6 oldie/i.test(bodyText.slice(0, 400));
-
-      if (providerRes.ok && !wasHtmlBlock) break; // good JSON response
-      if (wasHtmlBlock && attempt < 3) {
-        this.logger.warn(
-          `Carfax provider returned an HTML/Cloudflare block (attempt ${attempt}/3); retrying`,
-        );
-        await new Promise((r) => setTimeout(r, 1500 * attempt));
-        continue;
-      }
-      break; // non-html error, or out of retries — handle below
+  /** Polled by the lot page while a Carfax order is still running. */
+  async fetchStatus(auctionListingId: string, requestId: string) {
+    const view = await this.vehicleHistory.waitAndView(requestId, 20_000);
+    if (view.reportType !== 'carfax' || view.vin !== (await this.listingVin(auctionListingId))) {
+      throw new NotFoundException('Request not found for this listing');
     }
+    return this.resultFor(auctionListingId, view);
+  }
 
-    if (!providerRes.ok || wasHtmlBlock) {
-      if (wasHtmlBlock) {
-        this.logger.error(
-          `Carfax provider Cloudflare block for VIN ${vin} (status ${providerRes.status})`,
-        );
-        throw new BadRequestException(
-          'El proveedor de Carfax bloqueó temporalmente la solicitud (protección Cloudflare del lado de CheapCarfax). Reintenta en unos minutos.',
-        );
-      }
-      // The provider returns its message in a JSON { message } body and does NOT
-      // always use the matching HTTP status (e.g. "Insufficient credits" → 400).
-      let providerMsg = '';
-      try {
-        providerMsg = (JSON.parse(bodyText)?.message ?? '').toString();
-      } catch {
-        providerMsg = bodyText;
-      }
-      const lower = providerMsg.toLowerCase();
-      if (providerRes.status === 402 || lower.includes('credit')) {
-        throw new BadRequestException(
-          'Sin créditos de Carfax. Recarga en panel.cheapcarfax.net/buy-credits',
-        );
-      }
-      if (providerRes.status === 429 || lower.includes('limit')) {
-        throw new BadRequestException('Límite diario de Carfax alcanzado');
-      }
-      // Never surface a raw HTML/huge body to the client.
-      const cleanMsg = providerMsg.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+  private async listingVin(auctionListingId: string): Promise<string | null> {
+    const l = await this.prisma.auctionListing.findUnique({ where: { lotNumber: BigInt(auctionListingId) }, select: { vin: true } });
+    return l?.vin?.replace(/\s/g, '').toUpperCase() ?? null;
+  }
+
+  private async resultFor(auctionListingId: string, view: RequestView) {
+    if (view.status === 'running') return { pending: true as const, requestId: view.id };
+    if (view.status === 'failed' || !view.report) {
+      const tried = view.attempts
+        .filter((a) => a.outcome === 'failed')
+        .map((a) => `${a.providerKey}: ${a.errorCode}`)
+        .join(' · ');
       throw new BadRequestException(
-        cleanMsg
-          ? `Carfax: ${cleanMsg.slice(0, 160)}`
-          : `Carfax provider error ${providerRes.status}`,
+        `${view.errorMessage ?? 'No se pudo obtener el Carfax'}${tried ? ` (${tried})` : ''}`,
       );
     }
+    return this.attachToListing(auctionListingId, view);
+  }
 
-    const payload = JSON.parse(bodyText) as {
-      yearMakeModel: string;
-      id: string;
-      html: string;
-    };
-    const { yearMakeModel, id: providerId, html } = payload;
-
-    // 4. Upload HTML to S3 — sanitize providerId to safe chars
-    const safeProviderId = providerId.replace(/[^A-Za-z0-9_-]/g, '_');
-    const s3Key = `carfax/${auctionListingId}-${safeProviderId}.html`;
-
-    await this.s3Service.uploadBufferToKey(
-      Buffer.from(html, 'utf8'),
-      s3Key,
-      'text/html',
-    );
-    this.logger.log(`Carfax HTML uploaded to S3: ${s3Key}`);
-
-    // 5. Build plain-text summary for the `analysis` column (used by max-bid)
-    const MAX_ANALYSIS_CHARS = 12000;
-    const stripped = html
-      .replace(/<style[\s\S]*?<\/style>/gi, ' ')
-      .replace(/<script[\s\S]*?<\/script>/gi, ' ')
-      .replace(/<[^>]+>/g, ' ')
-      .replace(/&nbsp;/g, ' ')
-      .replace(/\s+/g, ' ')
-      .trim();
-    const summary = `${yearMakeModel}\n\n${stripped}`.slice(0, MAX_ANALYSIS_CHARS);
-
-    // 6. Persist CarfaxReport
-    const report = await this.prisma.carfaxReport.create({
-      data: {
-        auctionListingId: BigInt(auctionListingId),
-        vin,
-        s3Key,
-        analysis: summary,
-        date: new Date(),
-      },
+  /** Links a stored report to the listing as a CarfaxReport (once per listing + file). */
+  private async attachToListing(auctionListingId: string, view: RequestView) {
+    const rep = view.report!;
+    let report = await this.prisma.carfaxReport.findFirst({
+      where: { auctionListingId: BigInt(auctionListingId), s3Key: rep.s3Key },
     });
-    this.logger.log(`CarfaxReport created: ${report.id} for listing ${auctionListingId}`);
-
-    // 7. Return serialized record + signed URL
-    const signedUrl = await this.s3Service.getSignedUrl(s3Key, 3600);
+    if (!report) {
+      let analysis: string | null = null;
+      if (rep.contentType === 'text/html') {
+        // Plain-text summary for the `analysis` column (used by max-bid).
+        const html = (await this.s3Service.downloadBuffer(rep.s3Key)).toString('utf8');
+        const stripped = html
+          .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+          .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+          .replace(/<[^>]+>/g, ' ')
+          .replace(/&nbsp;/g, ' ')
+          .replace(/\s+/g, ' ')
+          .trim();
+        analysis = `${rep.yearMakeModel ?? ''}\n\n${stripped}`.trim().slice(0, 12000);
+      }
+      report = await this.prisma.carfaxReport.create({
+        data: {
+          auctionListingId: BigInt(auctionListingId),
+          vin: view.vin,
+          s3Key: rep.s3Key,
+          analysis,
+          date: rep.createdAt,
+        },
+      });
+      this.logger.log(`CarfaxReport ${report.id} for listing ${auctionListingId} (${view.cacheHit ? 'cache' : view.providerKey})`);
+      // PDFs (some providers) get the AI analysis the manual-upload flow uses.
+      if (rep.contentType === 'application/pdf') {
+        void this.analyzeReport(report.id).catch((err) =>
+          this.logger.warn(`Background analysis of ${report!.id} failed: ${(err as Error).message}`),
+        );
+      }
+    }
 
     return {
       ...report,
       auctionListingId: report.auctionListingId.toString(),
-      signedUrl,
-      yearMakeModel,
-      contentType: 'text/html' as const,
+      signedUrl: rep.url,
+      yearMakeModel: rep.yearMakeModel ?? '',
+      contentType: rep.contentType,
+      providerKey: view.providerKey,
+      providerName: view.providerName,
+      cacheHit: view.cacheHit,
     };
   }
 }

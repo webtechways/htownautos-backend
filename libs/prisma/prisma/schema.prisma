@@ -5531,3 +5531,143 @@ model LotPricePrediction {
   @@index([modelVersion])
   @@map("lot_price_predictions")
 }
+
+// ─── Vehicle history reports (Carfax / AutoCheck) ─────────────────────────
+// One service orders a report by VIN and walks the providers in priority
+// order, falling back to the next one when a provider is down, out of credits
+// or has nothing for the VIN. Providers are code adapters (libs/vehicle-history);
+// these tables hold their runtime config, health, and every call made to them.
+
+/// A report provider's runtime config, in fallback order. Global (not per tenant).
+model VehicleHistoryProvider {
+  /// Adapter key: 'cheapcarfax' | 'globalvin' | …
+  key                 String    @id
+  /// Lower runs first.
+  priority            Int       @default(100)
+  enabled             Boolean   @default(true)
+  carfaxEnabled       Boolean   @default(true)
+  autocheckEnabled    Boolean   @default(true)
+  /// API key set from the UI (AES-GCM envelope, SOCIAL_TOKEN_KEY). Empty → the adapter's env var.
+  encryptedApiKey     String?
+  /// Overrides the adapter's default base URL.
+  baseUrl             String?
+  /// Budget for one report from this provider (async providers poll until it runs out).
+  timeoutMs           Int       @default(90000)
+
+  // Circuit breaker: after N provider-side failures in a row it's tried last until circuitOpenUntil.
+  consecutiveFailures Int       @default(0)
+  circuitOpenUntil    DateTime?
+  lastSuccessAt       DateTime?
+  lastFailureAt       DateTime?
+  lastError           String?
+
+  /// up | degraded | down | unconfigured | unknown
+  healthStatus        String    @default("unknown")
+  healthCheckedAt     DateTime?
+  healthLatencyMs     Int?
+  healthMessage       String?
+  /// Credits / limits as the provider last reported them.
+  balance             Json?
+
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  @@map("vehicle_history_providers")
+}
+
+/// Router-wide settings (single row).
+model VehicleHistorySettings {
+  id                      String   @id @default("singleton")
+  /// Reuse a stored report for the same VIN + type for this many days (0 = always order a new one).
+  cacheDays               Int      @default(30)
+  /// Provider-side failures in a row before a provider is moved to the end of the line.
+  circuitFailureThreshold Int      @default(3)
+  circuitCooldownMinutes  Int      @default(10)
+  /// Background health check every N minutes (0 = only on demand).
+  healthCheckMinutes      Int      @default(15)
+  /// Call log retention.
+  logRetentionDays        Int      @default(90)
+  updatedAt               DateTime @updatedAt
+
+  @@map("vehicle_history_settings")
+}
+
+/// A stored report (HTML or PDF in S3), reused for the same VIN + type within the cache window.
+model VehicleHistoryReport {
+  id               String                  @id @default(uuid())
+  vin              String
+  /// carfax | autocheck
+  reportType       String
+  providerKey      String
+  providerReportId String?
+  s3Key            String
+  /// text/html | application/pdf
+  contentType      String
+  yearMakeModel    String?
+  sizeBytes        Int?
+  createdAt        DateTime                @default(now())
+  requests         VehicleHistoryRequest[]
+
+  @@index([vin, reportType, createdAt])
+  @@map("vehicle_history_reports")
+}
+
+/// One order for a report: which providers were tried, and how it ended.
+model VehicleHistoryRequest {
+  id               String                @id @default(uuid())
+  vin              String
+  reportType       String
+  /// running | completed | failed
+  status           String                @default("running")
+  /// auction-listing | api | admin-test | …
+  source           String?
+  auctionListingId BigInt?
+  requestedBy      String?
+  tenantId         String?
+  cacheHit         Boolean               @default(false)
+  forced           Boolean               @default(false)
+  reportId         String?
+  report           VehicleHistoryReport? @relation(fields: [reportId], references: [id], onDelete: SetNull)
+  /// Provider that delivered the report.
+  providerKey      String?
+  errorCode        String?
+  errorMessage     String?
+  /// [{ providerKey, outcome, errorCode, message, durationMs }] in the order tried.
+  attemptLog       Json?
+  durationMs       Int?
+  createdAt        DateTime              @default(now())
+  completedAt      DateTime?
+  calls            VehicleHistoryCall[]
+
+  @@index([createdAt])
+  @@index([vin, reportType])
+  @@index([status])
+  @@map("vehicle_history_requests")
+}
+
+/// Every HTTP call made to a provider (reports, job polls, health and balance checks).
+model VehicleHistoryCall {
+  id          String                 @id @default(uuid())
+  providerKey String
+  /// report | poll | fetch | health
+  kind        String
+  reportType  String?
+  method      String
+  /// Route template, e.g. "/api/carfax/vin/:vin/html".
+  route       String
+  httpStatus  Int?
+  ok          Boolean
+  /// timeout | network | cloudflare | auth | no_credits | rate_limited | not_found | invalid_vin | upstream | bad_response
+  errorCode   String?
+  message     String?
+  durationMs  Int
+  vin         String?
+  requestId   String?
+  request     VehicleHistoryRequest? @relation(fields: [requestId], references: [id], onDelete: SetNull)
+  createdAt   DateTime               @default(now())
+
+  @@index([providerKey, createdAt])
+  @@index([requestId])
+  @@index([createdAt])
+  @@map("vehicle_history_calls")
+}
