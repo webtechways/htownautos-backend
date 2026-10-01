@@ -133,11 +133,11 @@ export class VehicleHistoryAdminService {
         orderBy: { createdAt: 'desc' },
         skip: (page - 1) * limit,
         take: limit,
-        include: { report: { select: { id: true, s3Key: true, contentType: true, yearMakeModel: true } }, _count: { select: { calls: true } } },
+        include: { report: { select: { id: true, s3Key: true, contentType: true, yearMakeModel: true } }, _count: { select: { calls: true } }, webhooks: { orderBy: { createdAt: 'desc' }, take: 1, select: { status: true, attempts: true, lastStatus: true, lastError: true, deliveredAt: true } } },
       }),
     ]);
     return {
-      data: rows.map(({ _count, ...r }) => ({ ...r, auctionListingId: r.auctionListingId?.toString() ?? null, callCount: _count.calls })),
+      data: rows.map(({ _count, webhooks, ...r }) => ({ ...r, auctionListingId: r.auctionListingId?.toString() ?? null, callCount: _count.calls, webhook: webhooks[0] ?? null })),
       total,
       page,
       limit,
@@ -200,7 +200,7 @@ export class VehicleHistoryAdminService {
     const byError = errorRows as ErrorAgg[];
 
     // Requests: outcome, fallbacks that saved the day, and who served what.
-    const totals = { total: requests.length, completed: 0, failed: 0, running: 0, cacheHits: 0, rescuedByFallback: 0, avgMs: null as number | null };
+    const totals = { total: requests.length, completed: 0, failed: 0, running: 0, delayed: 0, cacheHits: 0, rescuedByFallback: 0, avgMs: null as number | null };
     const served = new Map<string, { carfax: number; autocheck: number; firstChoice: number; asFallback: number; durations: number[] }>();
     const failures = new Map<string, number>();
     const daily = new Map<string, { date: string; completed: number; failed: number; cacheHits: number }>();
@@ -210,6 +210,7 @@ export class VehicleHistoryAdminService {
       const d = daily.get(day) ?? { date: day, completed: 0, failed: 0, cacheHits: 0 };
       daily.set(day, d);
       if (r.status === 'running') { totals.running++; continue; }
+      if (r.status === 'delayed') { totals.delayed++; continue; }
       if (r.status === 'failed') {
         totals.failed++;
         d.failed++;

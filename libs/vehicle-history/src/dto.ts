@@ -18,6 +18,12 @@ export class OrderReportDto {
   @IsBoolean()
   force?: boolean;
 
+  @ApiPropertyOptional({ description: 'API keys only: https URL that gets a signed POST when the order completes or fails (X-VH-Signature: t=<unix>,v1=HMAC-SHA256(sha256hex(apiKey), "<t>.<body>"))' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  callbackUrl?: string;
+
   @ApiPropertyOptional({ description: 'Seconds to wait for the result before answering "running" (0–50, default 25)' })
   @IsOptional()
   @IsInt()

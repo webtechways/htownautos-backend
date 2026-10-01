@@ -1,10 +1,11 @@
-import { Body, Controller, Get, Param, Patch, Post, Put, Query, Req, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, Param, Patch, Post, Put, Query, Req, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiQuery, ApiTags } from '@nestjs/swagger';
 import { ADMIN_ROLES, RequireApiScopes, RequireRoles, RolesGuard } from '@htownautos/auth';
 import { VehicleHistoryService } from './vehicle-history.service';
 import { VehicleHistoryAdminService } from './vehicle-history-admin.service';
 import { OrderReportDto, ReorderProvidersDto, TestProviderDto, UpdateProviderDto, UpdateSettingsDto } from './dto';
 import { REPORT_TYPES, ReportType } from './types';
+import { isAllowedCallbackUrl } from './vehicle-history-webhooks.service';
 
 interface AuthedRequest {
   user?: { id?: string };
@@ -33,9 +34,12 @@ export class VehicleHistoryController {
   @ApiOperation({
     summary: 'Order a Carfax or AutoCheck report by VIN',
     description:
-      'Served from the cache when a report for the VIN + type is recent enough (settings.cacheDays); otherwise the providers are tried in priority order until one delivers. Waits up to `wait` seconds (default 25); a request still running comes back with status "running" — poll GET /vehicle-history/requests/:id.',
+      'Served from the cache when a report for the VIN + type is recent enough (settings.cacheDays); otherwise the providers are tried in priority order until one delivers. Waits up to `wait` seconds (default 25); a request still running comes back with status "running" (or "delayed": a provider is finishing a paid job in the background) — poll GET /vehicle-history/requests/:id, or pass callbackUrl to be notified.',
   })
   order(@Body() dto: OrderReportDto, @Req() req: AuthedRequest) {
+    if (dto.callbackUrl && (!req.apiKey || !isAllowedCallbackUrl(dto.callbackUrl))) {
+      throw new BadRequestException('callbackUrl must be a public https URL, and is only for API keys');
+    }
     return this.history.order(
       {
         vin: dto.vin,
@@ -44,6 +48,7 @@ export class VehicleHistoryController {
         source: req.apiKey ? 'api' : 'crm',
         requestedBy: req.apiKey ? `api-key:${req.apiKey.id}` : req.user?.id ?? null,
         tenantId: req.tenant?.id ?? null,
+        callbackUrl: dto.callbackUrl ?? null,
       },
       (dto.wait ?? 25) * 1000,
     );

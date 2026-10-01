@@ -418,7 +418,7 @@ ${truncatedText}`;
   }
 
   private async resultFor(auctionListingId: string, view: RequestView) {
-    if (view.status === 'running') return { pending: true as const, requestId: view.id };
+    if (view.status === 'running' || view.status === 'delayed') return { pending: true as const, requestId: view.id };
     if (view.status === 'failed' || !view.report) {
       const tried = view.attempts
         .filter((a) => a.outcome === 'failed')

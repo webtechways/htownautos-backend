@@ -5617,7 +5617,7 @@ model VehicleHistoryRequest {
   id               String                @id @default(uuid())
   vin              String
   reportType       String
-  /// running | completed | failed
+  /// running | delayed (a provider is finishing a paid job in the background) | completed | failed
   status           String                @default("running")
   /// auction-listing | api | admin-test | …
   source           String?
@@ -5637,7 +5637,10 @@ model VehicleHistoryRequest {
   durationMs       Int?
   createdAt        DateTime              @default(now())
   completedAt      DateTime?
+  /// API callers: notified here (signed POST) when the order completes or fails.
+  callbackUrl      String?
   calls            VehicleHistoryCall[]
+  webhooks         VehicleHistoryWebhook[]
 
   @@index([createdAt])
   @@index([vin, reportType])
@@ -5695,4 +5698,26 @@ model VehicleHistoryPendingJob {
   @@unique([providerKey, token])
   @@index([status, createdAt])
   @@map("vehicle_history_pending_jobs")
+}
+
+/// A signed POST to an order's callbackUrl when it completes or fails, retried with backoff.
+model VehicleHistoryWebhook {
+  id            String                @id @default(uuid())
+  requestId     String
+  request       VehicleHistoryRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  url           String
+  /// report.completed | report.failed
+  event         String
+  /// pending | delivered | failed
+  status        String                @default("pending")
+  attempts      Int                   @default(0)
+  nextAttemptAt DateTime              @default(now())
+  lastStatus    Int?
+  lastError     String?
+  createdAt     DateTime              @default(now())
+  deliveredAt   DateTime?
+
+  @@index([status, nextAttemptAt])
+  @@index([requestId])
+  @@map("vehicle_history_webhooks")
 }

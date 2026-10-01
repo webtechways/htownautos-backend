@@ -6,6 +6,7 @@ import { S3Service } from '@htownautos/common';
 import { decryptSecret, encryptSecret } from '@htownautos/social';
 import { ADAPTERS, ADAPTER_BY_KEY } from './providers';
 import { createContext } from './provider-http';
+import { VehicleHistoryWebhookService } from './vehicle-history-webhooks.service';
 import { CallEntry, ProviderError, ReportType, REPORT_TYPES, VehicleHistoryAdapter } from './types';
 
 type ProviderRow = Prisma.VehicleHistoryProviderGetPayload<object>;
@@ -38,13 +39,16 @@ export interface OrderInput {
   tenantId?: string | null;
   /** Admin test: use only this provider (ignores its toggles and circuit). */
   onlyProvider?: string;
+  /** API callers: signed POST here when the order completes or fails. */
+  callbackUrl?: string | null;
 }
 
 export interface RequestView {
   id: string;
   vin: string;
   reportType: ReportType;
-  status: 'running' | 'completed' | 'failed';
+  /** delayed = every provider ran out of time but one is still finishing a paid job; it will end as completed or failed. */
+  status: 'running' | 'delayed' | 'completed' | 'failed';
   source: string | null;
   cacheHit: boolean;
   forced: boolean;
@@ -79,6 +83,8 @@ const ERROR_TEXT: Record<string, string> = {
   no_providers: 'No provider is enabled and configured for this report type',
   all_failed: 'Every provider failed; see the attempts',
   interrupted: 'The request was interrupted (server restart); order it again',
+  delayed: 'A provider is still finishing it; it will be delivered when ready',
+  expired: 'The provider never finished the report',
 };
 
 export function normalizeVin(raw: string): string {
@@ -102,6 +108,7 @@ export class VehicleHistoryService implements OnModuleInit {
   constructor(
     private readonly prisma: PrismaService,
     private readonly s3: S3Service,
+    private readonly webhooks: VehicleHistoryWebhookService,
   ) {}
 
   async onModuleInit() {
@@ -180,13 +187,20 @@ export class VehicleHistoryService implements OnModuleInit {
       requestedBy: input.requestedBy ?? null,
       tenantId: input.tenantId ?? null,
       forced: !!input.force,
+      callbackUrl: input.callbackUrl ?? null,
     };
 
     // Same VIN + type already being ordered: join it instead of paying twice.
     // The marker is set before the first await so simultaneous clicks see it.
     if (!input.onlyProvider) {
       const existing = this.inflight.get(flightKey);
-      if (existing) return this.waitAndView(await existing, waitMs);
+      if (existing) {
+        const id = await existing;
+        if (input.callbackUrl) {
+          await this.prisma.vehicleHistoryRequest.updateMany({ where: { id, callbackUrl: null }, data: { callbackUrl: input.callbackUrl } });
+        }
+        return this.waitAndView(id, waitMs);
+      }
     }
     let resolveId!: (id: string) => void;
     let rejectId!: (err: unknown) => void;
@@ -214,6 +228,7 @@ export class VehicleHistoryService implements OnModuleInit {
             });
             resolveId(row.id);
             release();
+            await this.webhooks.enqueue(row.id);
             return this.view(row.id);
           }
         }
@@ -271,6 +286,7 @@ export class VehicleHistoryService implements OnModuleInit {
 
     let lastError: ProviderError | null = null;
     let allNotFound = true;
+    let queuedJob = false;
     for (const [i, c] of [...primary, ...deferred].entries()) {
       const isDeferred = i >= primary.length;
       const calls: CallEntry[] = [];
@@ -296,6 +312,7 @@ export class VehicleHistoryService implements OnModuleInit {
           data: { status: 'completed', reportId: stored.id, providerKey: c.row.key, attemptLog: attempts as unknown as Prisma.InputJsonValue, durationMs: Date.now() - started, completedAt: new Date() },
         });
         this.logger.log(`${type} ${vin} served by ${c.row.key} after ${attempts.filter((a) => a.outcome === 'failed').length} failed attempt(s)`);
+        await this.webhooks.enqueue(requestId);
         return;
       } catch (raw) {
         const err = raw instanceof ProviderError ? raw : new ProviderError('upstream', String((raw as Error)?.message ?? raw).slice(0, 300));
@@ -312,6 +329,7 @@ export class VehicleHistoryService implements OnModuleInit {
         if (err.code !== 'not_found') allNotFound = false;
         // An accepted (paid) job that outlived the budget is checked again in the background.
         if (err.resumeToken && c.adapter.resumeJob) {
+          queuedJob = true;
           await this.prisma.vehicleHistoryPendingJob
             .upsert({
               where: { providerKey_token: { providerKey: c.row.key, token: err.resumeToken } },
@@ -327,6 +345,14 @@ export class VehicleHistoryService implements OnModuleInit {
     }
 
     const tried = attempts.some((a) => a.outcome === 'failed');
+    if (queuedJob) {
+      // A paid job is still being finished: the order stays open until it lands or gives up.
+      await this.prisma.vehicleHistoryRequest.update({
+        where: { id: requestId },
+        data: { status: 'delayed', errorCode: 'delayed', errorMessage: ERROR_TEXT.delayed, attemptLog: attempts as unknown as Prisma.InputJsonValue, durationMs: Date.now() - started },
+      });
+      return;
+    }
     const code = !tried ? 'no_providers' : allNotFound ? 'not_found' : lastError?.scope === 'input' ? lastError.code : 'all_failed';
     await this.prisma.vehicleHistoryRequest.update({
       where: { id: requestId },
@@ -339,6 +365,7 @@ export class VehicleHistoryService implements OnModuleInit {
         completedAt: new Date(),
       },
     });
+    await this.webhooks.enqueue(requestId);
   }
 
   /** Provider-side failures feed the circuit breaker; "no report for this VIN" proves it's up. */
@@ -531,6 +558,7 @@ export class VehicleHistoryService implements OnModuleInit {
       where: { id: { in: ids }, status: 'running' },
       data: { status: 'failed', errorCode: 'interrupted', errorMessage: ERROR_TEXT.interrupted, completedAt: new Date() },
     });
+    for (const id of ids) await this.webhooks.enqueue(id);
   }
 
   /**
@@ -540,10 +568,14 @@ export class VehicleHistoryService implements OnModuleInit {
    */
   @Cron('*/2 * * * *')
   async resumePendingJobs() {
-    await this.prisma.vehicleHistoryPendingJob.updateMany({
+    const expired = await this.prisma.vehicleHistoryPendingJob.findMany({
       where: { status: 'pending', createdAt: { lt: new Date(Date.now() - RESUME_WINDOW_MS) } },
-      data: { status: 'expired', checkedAt: new Date() },
+      select: { id: true, requestId: true },
     });
+    for (const job of expired) {
+      await this.prisma.vehicleHistoryPendingJob.update({ where: { id: job.id }, data: { status: 'expired', checkedAt: new Date() } });
+      await this.closeDelayed(job.requestId, 'expired', ERROR_TEXT.expired);
+    }
     const jobs = await this.prisma.vehicleHistoryPendingJob.findMany({ where: { status: 'pending' }, orderBy: { createdAt: 'asc' }, take: 20 });
     for (const job of jobs) await this.resumeJob(job.id).catch((err) => this.logger.warn(`Resume ${job.id}: ${(err as Error).message}`));
   }
@@ -569,12 +601,13 @@ export class VehicleHistoryService implements OnModuleInit {
       const stored = await this.storeReport(job.vin, type, job.providerKey, result);
       await this.prisma.vehicleHistoryProvider.update({ where: { key: job.providerKey }, data: { consecutiveFailures: 0, circuitOpenUntil: null, lastSuccessAt: new Date() } });
       const request = job.requestId ? await this.prisma.vehicleHistoryRequest.findUnique({ where: { id: job.requestId } }) : null;
-      if (request && request.status === 'failed') {
+      if (request && (request.status === 'failed' || request.status === 'delayed')) {
         const attempts = [...(((request.attemptLog as unknown) as AttemptEntry[]) ?? []), { providerKey: job.providerKey, outcome: 'success' as const, late: true, durationMs: Date.now() - job.createdAt.getTime() }];
         await this.prisma.vehicleHistoryRequest.update({
           where: { id: request.id },
           data: { status: 'completed', reportId: stored.id, providerKey: job.providerKey, errorCode: null, errorMessage: null, attemptLog: attempts as unknown as Prisma.InputJsonValue, completedAt: new Date() },
         });
+        await this.webhooks.enqueue(request.id);
       }
       this.logger.log(`${type} ${job.vin}: ${job.providerKey} job ${job.token} delivered late`);
       return this.prisma.vehicleHistoryPendingJob.update({
@@ -588,11 +621,25 @@ export class VehicleHistoryService implements OnModuleInit {
       await this.saveCalls(job.providerKey, calls, job.requestId, job.vin);
       // A network blip is retried on the next tick; a definite answer ends the job.
       const final = err.code !== 'network' && err.code !== 'timeout' && !(err.code === 'upstream' && (err.httpStatus ?? 0) >= 500);
-      return this.prisma.vehicleHistoryPendingJob.update({
+      const updated = await this.prisma.vehicleHistoryPendingJob.update({
         where: { id: job.id },
         data: { status: final ? 'failed' : 'pending', lastError: `${err.code}: ${err.message}`.slice(0, 500), checks: { increment: 1 }, checkedAt: new Date() },
       });
+      if (final) await this.closeDelayed(job.requestId, err.code, err.code === 'not_found' ? ERROR_TEXT.not_found : err.message);
+      return updated;
     }
+  }
+
+  /** A delayed order whose last background job gave up ends as failed (and its caller is told). */
+  private async closeDelayed(requestId: string | null, code: string, message: string) {
+    if (!requestId) return;
+    const stillPending = await this.prisma.vehicleHistoryPendingJob.count({ where: { requestId, status: 'pending' } });
+    if (stillPending) return;
+    const { count } = await this.prisma.vehicleHistoryRequest.updateMany({
+      where: { id: requestId, status: 'delayed' },
+      data: { status: 'failed', errorCode: code, errorMessage: message.slice(0, 500), completedAt: new Date() },
+    });
+    if (count) await this.webhooks.enqueue(requestId);
   }
 
   /** Call log retention. */

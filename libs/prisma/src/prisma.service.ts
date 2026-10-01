@@ -254,6 +254,10 @@ export class PrismaService implements OnModuleInit, OnModuleDestroy {
     return this.prisma.vehicleHistoryPendingJob;
   }
 
+  get vehicleHistoryWebhook() {
+    return this.prisma.vehicleHistoryWebhook;
+  }
+
   get maxBidRecommendation() {
     return this.prisma.maxBidRecommendation;
   }
