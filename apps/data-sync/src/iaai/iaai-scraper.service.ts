@@ -16,6 +16,8 @@ type Run = Prisma.IaaiScrapeRunGetPayload<{}>;
 
 /** A run whose worker stopped heartbeating this long ago is considered orphaned. */
 const STALE_RUN_MS = 3 * 60_000;
+/** A running reindex whose progress has not moved for this long was abandoned. */
+const REINDEX_STALE_MS = 3 * 60_000;
 /** Consecutive failed pages before the pass gives up. */
 const MAX_CONSECUTIVE_FAILURES = 5;
 const HEADERS = {
@@ -85,7 +87,13 @@ export class IaaiScraperService implements OnModuleInit {
     if (this.reindexing) return;
     const cfg = await this.prisma.iaaiScraperConfig.findUnique({ where: { id: 'singleton' } });
     if (!cfg?.reindexRequestedAt) return;
-    if (cfg.reindexStartedAt && cfg.reindexStartedAt >= cfg.reindexRequestedAt) return;
+    // A reindex marked running that nobody advances (every batch writes its
+    // progress) was abandoned — e.g. the OLD container of a rolling deploy took
+    // the request and was stopped mid-way. This process is not running it
+    // (`reindexing` is false), so it starts over.
+    const abandoned = cfg.reindexStatus === 'running' && Date.now() - cfg.updatedAt.getTime() > REINDEX_STALE_MS;
+    if (!abandoned && cfg.reindexStartedAt && cfg.reindexStartedAt >= cfg.reindexRequestedAt) return;
+    if (abandoned) this.logger.warn(`[IaaiIndex] reindex at ${cfg.reindexDone}/${cfg.reindexTotal} stopped advancing: starting it again`);
     this.reindexing = true;
     const startedAt = new Date();
     try {
