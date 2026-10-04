@@ -9,4 +9,9 @@ export class RetryFailedDto {
   @IsArray()
   @IsString({ each: true })
   lots?: string[];
+
+  /** COPART | IAAI. Sin el campo, los de las dos subastas. */
+  @IsOptional()
+  @IsString()
+  auction?: string;
 }

@@ -3487,7 +3487,10 @@ model AuctionMonitorSession {
 // the pausable image-cache crawler. The image-service consumer finalizes each
 // row's status (done/failed) after uploading to S3. Global (auction data is shared).
 model ImageCacheJob {
-  lotNumber       BigInt    @id
+  /// COPART | IAAI. Part of the key: an IAAI stock number can equal a Copart lot number.
+  auction         String    @default("COPART")
+  /// Copart lot number, or IAAI stock number.
+  lotNumber       BigInt
   status          String    @default("pending") // pending | processing | done | failed | skipped
   // `skipped` = Copart answered with zero images. NOT terminal: it usually means
   // "no photos yet" —they are published days after the lot is listed— so the
@@ -3501,7 +3504,9 @@ model ImageCacheJob {
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 
+  @@id([auction, lotNumber])
   @@index([status, priority])
+  @@index([auction, status])
   @@map("image_cache_jobs")
 }
 

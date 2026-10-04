@@ -1,0 +1,283 @@
+import { Injectable, NotFoundException } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
+import { PrismaService } from '@htownautos/prisma';
+import { iaaiGalleryImages } from '@htownautos/common';
+import { SearchAuctionsDto } from '../opensearch/dto/search-auctions.dto';
+
+type Row = Prisma.IaaiListingGetPayload<{}>;
+type Agg = { key: string | number; count: number };
+
+const TZ = 'America/Chicago';
+const FACET_TTL_MS = 2 * 60_000;
+const FACET_LIMIT = 500;
+
+/** Central-time parts of an auction instant, in Copart's format: YYYYMMDD, "MONDAY", "0830" (24 h). */
+function saleParts(d: Date | null) {
+  if (!d) return { saleDate: null, saleDateFormatted: null, dayOfWeek: null, saleTime: null };
+  const p = Object.fromEntries(
+    new Intl.DateTimeFormat('en-US', { timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit', weekday: 'long', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
+      .formatToParts(d)
+      .map((x) => [x.type, x.value]),
+  );
+  return {
+    saleDate: Number(`${p.year}${p.month}${p.day}`),
+    saleDateFormatted: `${p.month}/${p.day}/${p.year}`,
+    dayOfWeek: p.weekday ? p.weekday.toUpperCase() : null,
+    saleTime: `${p.hour}${p.minute}`,
+  };
+}
+
+/** YYYYMMDD (a day in Central time) → the UTC instant that day starts. */
+function centralDayStart(yyyymmdd: number): Date {
+  const s = String(yyyymmdd);
+  const guess = new Date(Date.UTC(Number(s.slice(0, 4)), Number(s.slice(4, 6)) - 1, Number(s.slice(6, 8)), 6));
+  // Central is UTC-5/-6: walk back to the first instant whose Central date matches.
+  const date = (d: Date) => new Intl.DateTimeFormat('en-CA', { timeZone: TZ }).format(d);
+  const target = `${s.slice(0, 4)}-${s.slice(4, 6)}-${s.slice(6, 8)}`;
+  let t = guess.getTime();
+  while (date(new Date(t - 3600_000)) === target) t -= 3600_000;
+  while (date(new Date(t)) !== target) t += 3600_000;
+  return new Date(t);
+}
+
+const runsDrivesOf = (r: { runAndDrive: boolean | null; startCode: string | null }) =>
+  r.runAndDrive ? 'Run & Drive' : r.startCode;
+
+/**
+ * IAAI lots (scraped from bidexport) shaped exactly like the Copart search
+ * results, so /dashboard/auction-iaai can render them with the same page.
+ * Same query parameters as /auctions/search; the ones with no IAAI equivalent
+ * (seller category, sale light, Carfax…) are ignored.
+ */
+@Injectable()
+export class IaaiListingsService {
+  private facetCache = new Map<string, { at: number; value: Record<string, Agg[]> }>();
+
+  constructor(private readonly prisma: PrismaService) {}
+
+  async search(q: SearchAuctionsDto) {
+    const page = Math.max(1, Number(q.page) || 1);
+    const limit = Math.min(100, Math.max(1, Number(q.limit) || 25));
+    const where = this.where(q);
+    const dir: Prisma.SortOrder = q.sortOrder === 'asc' ? 'asc' : 'desc';
+    const nl = { sort: dir, nulls: 'last' as const };
+    const orderBy: Prisma.IaaiListingOrderByWithRelationInput[] =
+      q.sortBy === 'saleDate' ? [{ auctionAt: nl }]
+      : q.sortBy === 'year' ? [{ year: nl }]
+      : q.sortBy === 'odometer' ? [{ odometer: nl }]
+      : q.sortBy === 'highBid' ? [{ currentBid: nl }]
+      : [{ firstSeenAt: dir }];
+    orderBy.push({ stockNumber: 'asc' });
+
+    const [total, rows] = await Promise.all([
+      this.prisma.iaaiListing.count({ where }),
+      this.prisma.iaaiListing.findMany({ where, orderBy, skip: (page - 1) * limit, take: limit, omit: { raw: true } }),
+    ]);
+    const totalPages = Math.ceil(total / limit);
+    return {
+      data: rows.map((r) => this.toListing(r as Row)),
+      meta: { page, limit, total, totalPages, hasNextPage: page < totalPages, hasPreviousPage: page > 1 },
+      ...(q.includeAggregations && { aggregations: await this.facets(q.make, q.model) }),
+    };
+  }
+
+  async getOne(stockOrId: string) {
+    const stock = stockOrId.replace(/^iaai-/, '');
+    const row = await this.prisma.iaaiListing.findUnique({ where: { stockNumber: stock }, omit: { raw: true } });
+    if (!row) throw new NotFoundException(`IAAI lot ${stock} not found`);
+    return this.toListing(row as Row);
+  }
+
+  /** Gallery in the image cache's shape; IAAI's own URLs until the photos are copied. */
+  async gallery(stockOrId: string) {
+    const stock = stockOrId.replace(/^iaai-/, '');
+    const row = await this.prisma.iaaiListing.findUnique({ where: { stockNumber: stock }, select: { images: true, imageSourceUrls: true } });
+    if (!row) throw new NotFoundException(`IAAI lot ${stock} not found`);
+    const cached = row.images as { images?: { sequence: number; thumbnail: string; fullSize: string }[] } | null;
+    const images = cached?.images?.length ? cached.images : iaaiGalleryImages(row.imageSourceUrls);
+    return { lotNumber: stock, imageCount: images.length, images, cached: !!cached?.images?.length };
+  }
+
+  /** Facets with counts over the active lots, cascading by make/model like Copart. */
+  async facets(make?: string[], model?: string[]): Promise<Record<string, Agg[]>> {
+    const key = JSON.stringify([make ?? [], model ?? []]);
+    const hit = this.facetCache.get(key);
+    if (hit && Date.now() - hit.at < FACET_TTL_MS) return hit.value;
+
+    const base: Prisma.IaaiListingWhereInput = { isActive: true };
+    const withMake: Prisma.IaaiListingWhereInput = { ...base, ...(make?.length && { make: { in: make } }) };
+    const withModel: Prisma.IaaiListingWhereInput = { ...withMake, ...(model?.length && { model: { in: model } }) };
+
+    const group = async (field: keyof Row, where: Prisma.IaaiListingWhereInput): Promise<Agg[]> => {
+      const rows = (await this.prisma.iaaiListing.groupBy({
+        by: [field] as any,
+        where: { ...where, [field]: { not: null } },
+        _count: { _all: true },
+        orderBy: { _count: { stockNumber: 'desc' } },
+        take: FACET_LIMIT,
+      } as any)) as unknown as Array<Record<string, any>>;
+      return rows.map((r) => ({ key: r[field as string], count: r._count._all }));
+    };
+
+    const [total, makes, models, trims, years, states, bodyTypes, transmissions, fuelTypes, damageTypes, saleStatuses, titleTypes, colors, cylinders, drivetrains, yards, sellers, lotCondCodes, rd] =
+      await Promise.all([
+        this.prisma.iaaiListing.count({ where: base }),
+        group('make', base),
+        group('model', withMake),
+        group('series', withModel),
+        group('year', withModel),
+        group('locationState', withModel),
+        group('bodyStyle', withModel),
+        group('transmission', withModel),
+        group('fuelType', withModel),
+        group('primaryDamage', withModel),
+        group('vehicleStatus', withModel),
+        group('saleDocument', withModel),
+        group('color', withModel),
+        group('cylinders', withModel),
+        group('drivelineType', withModel),
+        group('branchName', withModel),
+        group('seller', withModel),
+        group('startCode', withModel),
+        this.prisma.iaaiListing.groupBy({ by: ['runAndDrive', 'startCode'], where: withModel, _count: { _all: true } }),
+      ]);
+    const rdMap = new Map<string, number>();
+    for (const r of rd) {
+      const k = runsDrivesOf(r);
+      if (k) rdMap.set(k, (rdMap.get(k) ?? 0) + r._count._all);
+    }
+    const value = {
+      sources: [{ key: 'iaai', count: total }],
+      makes, models, trims, years, states, bodyTypes, transmissions, fuelTypes, damageTypes, saleStatuses, titleTypes,
+      titleCategories: [], colors, cylinders, drivetrains, sellerCategories: [], yards, sellers, lotCondCodes,
+      runsDrivesOptions: [...rdMap].map(([key, count]) => ({ key, count })).sort((a, b) => b.count - a.count),
+      saleLights: [],
+    };
+    this.facetCache.set(key, { at: Date.now(), value });
+    return value;
+  }
+
+  private where(q: SearchAuctionsDto): Prisma.IaaiListingWhereInput {
+    const and: Prisma.IaaiListingWhereInput[] = [];
+    const list = (v: unknown): string[] => (Array.isArray(v) ? v : typeof v === 'string' && v ? v.split(',') : []).map((s) => String(s).trim()).filter(Boolean);
+    const inList = (field: string, v: unknown) => {
+      const l = list(v);
+      if (l.length) and.push({ [field]: { in: l } });
+    };
+    const num = (v: unknown) => (v === undefined || v === null || v === '' ? undefined : Number(v));
+
+    if (!q.discarded) and.push({ isActive: true });
+    const term = q.search?.trim();
+    if (term) {
+      and.push({
+        OR: [
+          { stockNumber: { contains: term } },
+          { vin: { contains: term.toUpperCase() } },
+          { make: { contains: term, mode: 'insensitive' } },
+          { model: { contains: term, mode: 'insensitive' } },
+          { series: { contains: term, mode: 'insensitive' } },
+        ],
+      });
+    }
+    const ids = list(q.sourceIds).concat(list(q.ids).map((id) => id.replace(/^iaai-/, '')));
+    if (ids.length) and.push({ stockNumber: { in: ids } });
+    if (q.vin) and.push({ vin: { contains: q.vin.toUpperCase() } });
+    if (num(q.year)) and.push({ year: num(q.year) });
+    if (num(q.yearMin) || num(q.yearMax)) and.push({ year: { gte: num(q.yearMin), lte: num(q.yearMax) } });
+    inList('make', q.make);
+    inList('model', q.model);
+    inList('series', q.trim);
+    inList('bodyStyle', q.bodyType);
+    inList('branchName', q.yardName);
+    inList('seller', q.sellerName);
+    inList('drivelineType', q.drivetrain);
+    inList('color', q.color);
+    inList('cylinders', q.cylinders);
+    inList('locationState', q.locationState);
+    inList('primaryDamage', q.damageDescription);
+    inList('saleDocument', q.saleTitleType);
+    if (q.transmission) and.push({ transmission: q.transmission });
+    if (q.fuelType) and.push({ fuelType: q.fuelType });
+    if (q.saleStatus) and.push({ vehicleStatus: q.saleStatus });
+    if (q.lotCondCode) and.push({ startCode: q.lotCondCode });
+    if (num(q.odometerMin) !== undefined || num(q.odometerMax) !== undefined) and.push({ odometer: { gte: num(q.odometerMin), lte: num(q.odometerMax) } });
+    if (num(q.priceMin) !== undefined || num(q.priceMax) !== undefined) and.push({ currentBid: { gte: num(q.priceMin), lte: num(q.priceMax) } });
+    if (q.hasBuyItNow) and.push({ buyNowPrice: { gt: 0 } });
+    if (q.hasKeys) {
+      const yes = /^(y|yes|true|present)$/i.test(q.hasKeys);
+      and.push({ keys: yes ? 'PRESENT' : { not: 'PRESENT' } });
+    }
+    if (q.runsDrives) {
+      and.push(q.runsDrives === 'Run & Drive' ? { runAndDrive: true } : { startCode: q.runsDrives, NOT: { runAndDrive: true } });
+    }
+    if (num(q.saleDateFrom) || num(q.saleDateTo)) {
+      const to = num(q.saleDateTo);
+      and.push({
+        auctionAt: {
+          ...(num(q.saleDateFrom) && { gte: centralDayStart(num(q.saleDateFrom)!) }),
+          ...(to && { lt: new Date(centralDayStart(to).getTime() + 86400_000) }),
+        },
+      });
+    }
+    return and.length ? { AND: and } : {};
+  }
+
+  /** One IAAI lot in the AuctionListing shape the auction page renders. */
+  private toListing(r: Row) {
+    const cached = r.images as { images?: { thumbnail: string; fullSize: string }[] } | null;
+    const gallery = cached?.images?.length ? cached.images : iaaiGalleryImages(r.imageSourceUrls);
+    return {
+      // Prefixed so it never equals a Copart listing id in the page's caches and React keys.
+      id: `iaai-${r.stockNumber}`,
+      source: 'iaai' as const,
+      sourceId: r.stockNumber,
+      vin: r.vin,
+      year: r.year,
+      make: r.make,
+      model: r.model,
+      trim: r.series,
+      bodyType: r.bodyStyle,
+      color: r.color,
+      interiorColor: null,
+      engine: r.engineSize,
+      transmission: r.transmission,
+      fuelType: r.fuelType,
+      drivetrain: r.drivelineType,
+      cylinders: r.cylinders,
+      odometer: r.odometer,
+      locationCity: r.locationCity,
+      locationState: r.locationState,
+      locationZip: r.locationZip,
+      locationCountry: 'US',
+      images: gallery.map((g) => g.thumbnail),
+      mainImage: gallery[0]?.thumbnail ?? null,
+      createdAt: r.firstSeenAt,
+      updatedAt: r.updatedAt,
+      indexedAt: r.lastSeenAt,
+      damageDescription: r.primaryDamage,
+      secondaryDamage: r.secondaryDamage,
+      ...saleParts(r.auctionAt),
+      saleStatus: r.vehicleStatus,
+      saleTitleState: r.certState,
+      saleTitleType: r.saleDocument,
+      hasKeys: r.keys === 'PRESENT' ? 'YES' : r.keys ? 'NO' : null,
+      runsDrives: runsDrivesOf(r),
+      lotCondCode: r.startCode,
+      wholesale: null,
+      saleLight: null,
+      discarded: !r.isActive,
+      highBid: r.currentBid,
+      buyItNowPrice: r.buyNowPrice,
+      estRetailValue: r.acv,
+      repairCost: r.repairCost,
+      yardName: r.branchName,
+      yardNumber: r.branchCode,
+      itemNumber: null,
+      sellerName: r.seller,
+      photosCached: !!cached?.images?.length,
+      lossType: r.lossType,
+      odometerStatus: r.odometerStatus,
+      auctionAt: r.auctionAt,
+    };
+  }
+}

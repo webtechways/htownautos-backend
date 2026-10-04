@@ -75,6 +75,7 @@ export class ImageCacheEnqueuerService {
     // yet" filter runs in the query instead of pulling rows to filter in memory.
     const stale = await this.prisma.imageCacheJob.findMany({
       where: {
+        auction: 'COPART',
         status: 'skipped',
         OR: [
           { priority: { gte: todayInt } },
@@ -96,7 +97,7 @@ export class ImageCacheEnqueuerService {
     if (!stale.length) return 0;
 
     const { count } = await this.prisma.imageCacheJob.updateMany({
-      where: { lotNumber: { in: stale.map((j) => j.lotNumber) }, status: 'skipped' },
+      where: { auction: 'COPART', lotNumber: { in: stale.map((j) => j.lotNumber) }, status: 'skipped' },
       data: { status: 'pending', attempts: 0 },
     });
     this.logger.log(
@@ -123,6 +124,7 @@ export class ImageCacheEnqueuerService {
          SET priority = l."saleDate"
         FROM auction_listings l
        WHERE l."lotNumber" = j."lotNumber"
+         AND j.auction = 'COPART'
          AND j.priority IS NULL
          AND l."saleDate" IS NOT NULL
     `;

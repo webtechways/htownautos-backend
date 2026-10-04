@@ -176,7 +176,7 @@ export class ImageRetentionService {
         // The backfill seeder only looks at lots created in the last 48h, so an
         // old lot will not be re-queued by this.
         await this.prisma.imageCacheJob
-          .delete({ where: { lotNumber: lot } })
+          .delete({ where: { auction_lotNumber: { auction: 'COPART', lotNumber: lot } } })
           .catch(() => undefined);
         deletedLots++;
       } catch (err: any) {

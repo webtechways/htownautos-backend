@@ -7,8 +7,11 @@ import {
   CopartImagesService,
   ImageFetchBlockedError,
   GALLERY_CACHE_QUEUE,
+  iaaiGalleryImages,
 } from '@htownautos/common';
 import type { GalleryCacheMessage } from '@htownautos/common';
+
+type Auction = 'COPART' | 'IAAI';
 import { futureSaleWhere } from '@htownautos/auction-matching';
 
 // Fallbacks if the singleton control row is missing.
@@ -140,8 +143,8 @@ export class ImageCacheCrawlerService {
     // intentionally ignored; new arrivals come through the enqueuer, this is a
     // safety net for any the enqueuer missed. Soonest auction first.
     const inserted = await this.prisma.$executeRaw`
-      INSERT INTO "image_cache_jobs" ("lotNumber", "status", "priority", "source", "updatedAt")
-      SELECT al."lotNumber", 'pending', al."saleDate", 'backfill', NOW()
+      INSERT INTO "image_cache_jobs" ("auction", "lotNumber", "status", "priority", "source", "updatedAt")
+      SELECT 'COPART', al."lotNumber", 'pending', al."saleDate", 'backfill', NOW()
       FROM "auction_listings" al
       WHERE al."auctionName" = 'Copart'
         AND al."galleryCache" IS NULL
@@ -149,13 +152,45 @@ export class ImageCacheCrawlerService {
         AND al."discarded" = false
         AND al."createdAt" >= NOW() - INTERVAL '48 hours'
         AND (al."saleDate" IS NULL OR al."saleDate" >= ${saleFloor})
-        AND NOT EXISTS (SELECT 1 FROM "image_cache_jobs" j WHERE j."lotNumber" = al."lotNumber")
+        AND NOT EXISTS (SELECT 1 FROM "image_cache_jobs" j WHERE j."auction" = 'COPART' AND j."lotNumber" = al."lotNumber")
       ORDER BY al."saleDate" ASC NULLS LAST
       LIMIT ${SEED_BATCH}
-      ON CONFLICT ("lotNumber") DO NOTHING
+      ON CONFLICT ("auction", "lotNumber") DO NOTHING
     `;
     if (inserted > 0) {
       this.logger.log(`[ImageCacheCrawler] Seeded ${inserted} lot(s) into the queue from backlog`);
+    }
+    await this.topUpIaai();
+  }
+
+  /**
+   * IAAI lots still without photos, from the scraper's table. Unlike Copart
+   * there is no 48h window: the whole IAAI backlog is wanted, soonest auction
+   * first, and a lot that already has photos is never queued again.
+   * Off when Settings → IAAI Scraper has photo download disabled.
+   */
+  private async topUpIaai(): Promise<void> {
+    const cfg = await this.prisma.iaaiScraperConfig.findUnique({ where: { id: 'singleton' }, select: { downloadImages: true, imagesOnlyUpcoming: true } });
+    if (!cfg?.downloadImages) return;
+    const upcomingOnly = cfg.imagesOnlyUpcoming;
+    const inserted = await this.prisma.$executeRaw`
+      INSERT INTO "image_cache_jobs" ("auction", "lotNumber", "status", "priority", "source", "updatedAt")
+      SELECT 'IAAI', l."stockNumber"::bigint, 'pending',
+             to_char((l."auctionAt" AT TIME ZONE 'UTC') AT TIME ZONE 'America/Chicago', 'YYYYMMDD')::int,
+             'backfill', NOW()
+      FROM "iaai_listings" l
+      WHERE l."images" IS NULL
+        AND l."imageCount" > 0
+        AND l."isActive" = true
+        AND l."stockNumber" ~ '^[0-9]{1,18}$'
+        AND (${!upcomingOnly} OR l."auctionAt" IS NULL OR l."auctionAt" > NOW())
+        AND NOT EXISTS (SELECT 1 FROM "image_cache_jobs" j WHERE j."auction" = 'IAAI' AND j."lotNumber" = l."stockNumber"::bigint)
+      ORDER BY l."auctionAt" ASC NULLS LAST
+      LIMIT ${SEED_BATCH}
+      ON CONFLICT ("auction", "lotNumber") DO NOTHING
+    `;
+    if (inserted > 0) {
+      this.logger.log(`[ImageCacheCrawler] Seeded ${inserted} IAAI lot(s) into the queue`);
     }
   }
 
@@ -165,18 +200,24 @@ export class ImageCacheCrawlerService {
       where: { status: 'pending' },
       orderBy: [{ priority: 'asc' }, { createdAt: 'asc' }],
       take: lotsPerTick,
-      select: { lotNumber: true, attempts: true },
+      select: { auction: true, lotNumber: true, attempts: true },
     });
     if (jobs.length === 0) return;
 
     for (const job of jobs) {
       const lotNumber = job.lotNumber.toString();
+      const auction = job.auction as Auction;
 
       // Mark processing + bump attempts (job-level dispatch count, not proxy retries).
       await this.prisma.imageCacheJob.update({
-        where: { lotNumber: job.lotNumber },
+        where: { auction_lotNumber: { auction, lotNumber: job.lotNumber } },
         data: { status: 'processing', attempts: { increment: 1 }, lastAttemptAt: new Date() },
       });
+
+      if (auction === 'IAAI') {
+        await this.dispatchIaai(job.lotNumber);
+        continue;
+      }
 
       // Skip if it was cached on-demand meanwhile.
       const listing = await this.prisma.auctionListing.findUnique({
@@ -184,7 +225,7 @@ export class ImageCacheCrawlerService {
         select: { galleryCache: true },
       });
       if (listing?.galleryCache) {
-        await this.markDone(job.lotNumber);
+        await this.markDone('COPART', job.lotNumber);
         continue;
       }
 
@@ -193,47 +234,78 @@ export class ImageCacheCrawlerService {
         if (images.length === 0) {
           // 404 / no images published yet → not an error, just unavailable. Mark
           // skipped so it leaves the queue and never lands in the errors table.
-          await this.markSkipped(job.lotNumber);
+          await this.markSkipped('COPART', job.lotNumber);
           continue;
         }
-        const msg: GalleryCacheMessage = { lotNumber, images, jobId: lotNumber };
+        const msg: GalleryCacheMessage = { lotNumber, images, jobId: lotNumber, auction: 'COPART' };
         const ok = await this.rabbitMQ.publish(GALLERY_CACHE_QUEUE, msg);
         if (!ok) {
           // Queue unavailable — leave it for the next tick.
           await this.prisma.imageCacheJob.update({
-            where: { lotNumber: job.lotNumber },
+            where: { auction_lotNumber: { auction: 'COPART', lotNumber: job.lotNumber } },
             data: { status: 'pending', lastError: 'RabbitMQ unavailable' },
           });
         }
         // On success the image-service consumer finalizes the job (done/failed).
       } catch (err) {
         if (err instanceof ImageFetchBlockedError) {
-          await this.markFailed(job.lotNumber, `Blocked after ${err.attempts} attempts (status ${err.lastStatus ?? 'n/a'})`);
+          await this.markFailed('COPART', job.lotNumber, `Blocked after ${err.attempts} attempts (status ${err.lastStatus ?? 'n/a'})`);
         } else {
-          await this.markFailed(job.lotNumber, (err as Error).message);
+          await this.markFailed('COPART', job.lotNumber, (err as Error).message);
         }
       }
     }
   }
 
-  private async markDone(lotNumber: bigint): Promise<void> {
+  /**
+   * IAAI: the photo list is already in the scraped lot, so nothing is fetched
+   * here. A lot that has photos is closed without downloading anything.
+   */
+  private async dispatchIaai(lot: bigint): Promise<void> {
+    const stock = lot.toString();
+    const listing = await this.prisma.iaaiListing.findUnique({
+      where: { stockNumber: stock },
+      select: { images: true, imageSourceUrls: true },
+    });
+    if (listing?.images) {
+      await this.markDone('IAAI', lot);
+      return;
+    }
+    const images = iaaiGalleryImages(listing?.imageSourceUrls);
+    if (!images.length) {
+      await this.markSkipped('IAAI', lot);
+      await this.prisma.iaaiListing.updateMany({ where: { stockNumber: stock, images: { equals: Prisma.DbNull } }, data: { imagesStatus: 'none' } });
+      return;
+    }
+    await this.prisma.iaaiListing.updateMany({ where: { stockNumber: stock }, data: { imagesStatus: 'processing', imagesClaimedAt: new Date() } });
+    const msg: GalleryCacheMessage = { lotNumber: stock, images, jobId: stock, auction: 'IAAI' };
+    const ok = await this.rabbitMQ.publish(GALLERY_CACHE_QUEUE, msg);
+    if (!ok) {
+      await this.prisma.imageCacheJob.update({
+        where: { auction_lotNumber: { auction: 'IAAI', lotNumber: lot } },
+        data: { status: 'pending', lastError: 'RabbitMQ unavailable' },
+      });
+    }
+  }
+
+  private async markDone(auction: Auction, lotNumber: bigint): Promise<void> {
     await this.prisma.imageCacheJob.update({
-      where: { lotNumber },
+      where: { auction_lotNumber: { auction, lotNumber } },
       data: { status: 'done', lastError: null, failedSequences: Prisma.DbNull },
     });
   }
 
-  private async markFailed(lotNumber: bigint, error: string): Promise<void> {
+  private async markFailed(auction: Auction, lotNumber: bigint, error: string): Promise<void> {
     await this.prisma.imageCacheJob.update({
-      where: { lotNumber },
+      where: { auction_lotNumber: { auction, lotNumber } },
       data: { status: 'failed', lastError: error, lastAttemptAt: new Date() },
     });
   }
 
   /** Terminal, non-error state for lots with no images available (404/empty). */
-  private async markSkipped(lotNumber: bigint): Promise<void> {
+  private async markSkipped(auction: Auction, lotNumber: bigint): Promise<void> {
     await this.prisma.imageCacheJob.update({
-      where: { lotNumber },
+      where: { auction_lotNumber: { auction, lotNumber } },
       data: { status: 'skipped', lastError: null, lastAttemptAt: new Date() },
     });
   }

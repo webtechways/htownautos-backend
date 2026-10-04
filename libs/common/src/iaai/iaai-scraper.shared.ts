@@ -216,3 +216,21 @@ export function mapBidexportItem(doc: Record<string, any>): IaaiMappedListing | 
     },
   };
 }
+
+// ── Photos ───────────────────────────────────────────────────────────────────
+
+/** IAAI's resizer serves any size of the same photo: `...&width=845&height=633`. */
+export function iaaiResize(url: string, width: number, height: number): string {
+  if (!/[?&]width=\d+/.test(url)) return url;
+  return url.replace(/([?&])width=\d+/, `$1width=${width}`).replace(/([?&])height=\d+/, `$1height=${height}`);
+}
+
+/**
+ * The scraped photo URLs of an IAAI lot as the image cache's gallery list:
+ * the same thumbnail (`thb`) + full size (`hrs`) pair Copart galleries have,
+ * so one consumer and one gallery format serve both auctions.
+ */
+export function iaaiGalleryImages(sourceUrls: unknown): { sequence: number; thumbnail: string; fullSize: string }[] {
+  const urls = Array.isArray(sourceUrls) ? sourceUrls.filter((u): u is string => typeof u === 'string' && /^https?:\/\//.test(u)) : [];
+  return urls.map((url, i) => ({ sequence: i + 1, thumbnail: iaaiResize(url, 320, 240), fullSize: url }));
+}

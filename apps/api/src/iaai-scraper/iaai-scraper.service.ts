@@ -32,8 +32,8 @@ export class IaaiScraperService {
     const byImages = Object.fromEntries(images.map((g) => [g.imagesStatus, g._count._all]));
     // Photos actually copied (a lot may keep fewer than IAAI lists: per-lot cap, partial failures).
     const [{ n: photosDone }] = await this.prisma.$queryRaw<{ n: number }[]>`
-      SELECT COALESCE(SUM(jsonb_array_length("images")), 0)::int AS n
-      FROM "iaai_listings" WHERE "imagesStatus" = 'done' AND jsonb_typeof("images") = 'array'`;
+      SELECT COALESCE(SUM(("images"->>'imageCount')::int), 0)::int AS n
+      FROM "iaai_listings" WHERE "images" IS NOT NULL AND jsonb_typeof("images") = 'object'`;
 
     // A heartbeat older than 3 min means the worker is not actually on it.
     const stalled = current?.status === 'running' && current.heartbeatAt && now.getTime() - current.heartbeatAt.getTime() > 3 * 60_000;
@@ -156,18 +156,20 @@ export class IaaiScraperService {
       }),
     ]);
     return {
-      data: data.map(({ images, ...l }) => ({ ...l, thumbnail: Array.isArray(images) ? ((images[0] as string) ?? null) : null })),
+      data: data.map(({ images, ...l }) => ({ ...l, thumbnail: (images as { images?: { thumbnail?: string }[] } | null)?.images?.[0]?.thumbnail ?? null })),
       total,
       page: q.page,
       limit: take,
     };
   }
 
+  /** Photos are downloaded by the image cache: put its failed IAAI jobs back in line. */
   async retryFailedImages() {
-    const res = await this.prisma.iaaiListing.updateMany({
-      where: { imagesStatus: 'failed' },
-      data: { imagesStatus: 'pending', imagesAttempts: 0, imagesError: null },
+    const res = await this.prisma.imageCacheJob.updateMany({
+      where: { auction: 'IAAI', status: 'failed' },
+      data: { status: 'pending', attempts: 0, lastError: null, failedSequences: Prisma.DbNull },
     });
+    await this.prisma.iaaiListing.updateMany({ where: { imagesStatus: 'failed' }, data: { imagesStatus: 'pending', imagesError: null } });
     return { requeued: res.count };
   }
 }

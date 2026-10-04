@@ -133,5 +133,7 @@ export {
   scheduleWantsRun,
   nextScheduledStart,
   zonedClock,
+  iaaiResize,
+  iaaiGalleryImages,
 } from './iaai/iaai-scraper.shared';
 export type { IaaiSchedule, IaaiMappedListing } from './iaai/iaai-scraper.shared';

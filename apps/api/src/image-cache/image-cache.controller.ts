@@ -14,6 +14,12 @@ import { ImageCacheService } from './image-cache.service';
 import { UpdateImageScrapeConfigDto } from './dto/update-image-scrape-config.dto';
 import { RetryFailedDto } from './dto/retry-failed.dto';
 
+/** `copart` / `IAAI` / anything else → the stored value, or undefined (= both). */
+const auctionOf = (v?: string): string | undefined => {
+  const u = v?.toUpperCase();
+  return u === 'COPART' || u === 'IAAI' ? u : undefined;
+};
+
 /**
  * Settings → Image Cache control plane. Global (auction data is shared), staff-only
  * via ClerkJwtGuard. Drives the crawler pause/rate config and exposes the queue,
@@ -42,22 +48,23 @@ export class ImageCacheController {
   @ApiOperation({ summary: 'Queued/processing jobs (paginated)' })
   jobs(
     @Query('status') status?: string,
+    @Query('auction') auction?: string,
     @Query('page') page?: string,
     @Query('limit') limit?: string,
   ) {
-    return this.service.listJobs({ status, page: Number(page), limit: Number(limit) });
+    return this.service.listJobs({ status, auction: auctionOf(auction), page: Number(page), limit: Number(limit) });
   }
 
   @Get('failures')
   @ApiOperation({ summary: 'Lots that failed after every retry' })
-  failures(@Query('page') page?: string, @Query('limit') limit?: string) {
-    return this.service.listFailures({ page: Number(page), limit: Number(limit) });
+  failures(@Query('auction') auction?: string, @Query('page') page?: string, @Query('limit') limit?: string) {
+    return this.service.listFailures({ auction: auctionOf(auction), page: Number(page), limit: Number(limit) });
   }
 
   @Post('jobs/:lot/retry')
   @ApiOperation({ summary: 'Re-queue a failed lot' })
-  retry(@Param('lot') lot: string) {
-    return this.service.retryJob(lot);
+  retry(@Param('lot') lot: string, @Query('auction') auction?: string) {
+    return this.service.retryJob(lot, auctionOf(auction) ?? 'COPART');
   }
 
   @Post('jobs/requeue-retryable')
@@ -74,13 +81,13 @@ export class ImageCacheController {
     description: 'Sin `lots` reencola todos los fallidos. Pone attempts a 0.',
   })
   retryMany(@Body() dto: RetryFailedDto) {
-    return this.service.retryFailed(dto.lots);
+    return this.service.retryFailed(dto.lots, auctionOf(dto.auction));
   }
 
   @Get('cached')
   @ApiOperation({ summary: 'Recently cached lots' })
-  cached(@Query('page') page?: string, @Query('limit') limit?: string) {
-    return this.service.listCached({ page: Number(page), limit: Number(limit) });
+  cached(@Query('auction') auction?: string, @Query('page') page?: string, @Query('limit') limit?: string) {
+    return this.service.listCached({ auction: auctionOf(auction), page: Number(page), limit: Number(limit) });
   }
 
   @Get('proxies')

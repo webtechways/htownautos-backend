@@ -27,6 +27,13 @@ const HEADERS = {
 };
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** YYYYMMDD of the auction in Central time: the image cache's priority (soonest first). */
+const saleDateInt = (d: Date | null): number | null => {
+  if (!d) return null;
+  const s = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Chicago', year: 'numeric', month: '2-digit', day: '2-digit' }).format(d);
+  return Number(s.replace(/-/g, '')) || null;
+};
 const between = (min: number, max: number) => min + Math.floor(Math.random() * Math.max(0, max - min));
 
 /**
@@ -158,7 +165,7 @@ export class IaaiScraperService implements OnModuleInit {
         continue;
       }
 
-      const { created, updated } = await this.store(page.data);
+      const { created, updated } = await this.store(page.data, cfg.downloadImages);
       pagesThisSegment += 1;
       const nextSkip = run.nextSkip + pageSize;
       run = await this.prisma.iaaiScrapeRun.update({
@@ -208,15 +215,19 @@ export class IaaiScraperService implements OnModuleInit {
     throw lastErr ?? new Error('fetch failed');
   }
 
-  /** Upsert one page. Photos go back to `pending` only when their list changes. */
-  private async store(items: Record<string, any>[]): Promise<{ created: number; updated: number }> {
+  /**
+   * Upsert one page, and queue the photos of lots that have none yet in the
+   * image cache (Settings → Image Cache downloads them). A lot that already
+   * has its photos is never queued again, even if IAAI changes the URLs.
+   */
+  private async store(items: Record<string, any>[], queuePhotos: boolean): Promise<{ created: number; updated: number }> {
     const mapped = items.map(mapBidexportItem).filter((m): m is NonNullable<typeof m> => !!m);
     if (!mapped.length) return { created: 0, updated: 0 };
     const unique = [...new Map(mapped.map((m) => [m.stockNumber, m])).values()];
 
     const existing = await this.prisma.iaaiListing.findMany({
       where: { stockNumber: { in: unique.map((m) => m.stockNumber) } },
-      select: { stockNumber: true, imageSourceHash: true, imagesStatus: true },
+      select: { stockNumber: true, imageSourceHash: true, imagesStatus: true, images: true },
     });
     const known = new Map(existing.map((e) => [e.stockNumber, e]));
 
@@ -252,7 +263,8 @@ export class IaaiScraperService implements OnModuleInit {
       await this.prisma.$transaction(
         old.map((m) => {
           const prev = known.get(m.stockNumber)!;
-          const photosChanged = prev.imageSourceHash !== m.imageHash;
+          // Already have the photos: keep them, never download again.
+          const photosChanged = !prev.images && prev.imageSourceHash !== m.imageHash;
           return this.prisma.iaaiListing.update({
             where: { stockNumber: m.stockNumber },
             data: {
@@ -272,6 +284,21 @@ export class IaaiScraperService implements OnModuleInit {
           });
         }),
       );
+    }
+    if (queuePhotos) {
+      const needPhotos = unique.filter((m) => m.imageUrls.length && !known.get(m.stockNumber)?.images && /^\d{1,18}$/.test(m.stockNumber));
+      if (needPhotos.length) {
+        await this.prisma.imageCacheJob.createMany({
+          data: needPhotos.map((m) => ({
+            auction: 'IAAI',
+            lotNumber: BigInt(m.stockNumber),
+            priority: saleDateInt(m.data.auctionAt as Date | null),
+            status: 'pending',
+            source: 'new_lot',
+          })),
+          skipDuplicates: true,
+        });
+      }
     }
     return { created: fresh.length, updated: old.length };
   }

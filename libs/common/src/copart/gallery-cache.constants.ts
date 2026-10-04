@@ -12,4 +12,6 @@ export interface GalleryCacheMessage {
   lotNumber: string;
   images: GalleryImage[];
   jobId?: string;
+  /** Which auction the lot belongs to. Absent = COPART (messages from before IAAI). */
+  auction?: 'COPART' | 'IAAI';
 }

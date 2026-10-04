@@ -53,11 +53,12 @@ export class GalleryCacheService implements OnModuleInit, OnModuleDestroy {
 
   private async handleMessage(msg: GalleryCacheMessage): Promise<void> {
     const { lotNumber, images } = msg;
+    const auction = msg.auction ?? 'COPART';
 
     if (!lotNumber || !images?.length) {
       this.logger.warn(`[GalleryCache] Invalid message: missing lotNumber or images`);
       if (lotNumber) {
-        await this.finalizeJob(lotNumber, 'failed', [], 'No images to cache');
+        await this.finalizeJob(auction, lotNumber, 'failed', [], 'No images to cache');
       }
       return;
     }
@@ -65,19 +66,15 @@ export class GalleryCacheService implements OnModuleInit, OnModuleDestroy {
     // Idempotency guard. Duplicate messages for the same lot are normal (a
     // requeued job republishes), and re-downloading a gallery we already have
     // costs a full round of proxy traffic and S3 writes for nothing.
-    const existing = await this.prisma.auctionListing.findUnique({
-      where: { lotNumber: BigInt(lotNumber) },
-      select: { galleryCache: true },
-    });
-    if (existing?.galleryCache) {
-      await this.finalizeJob(lotNumber, 'done', [], null);
-      this.logger.log(`[GalleryCache] Lot ${lotNumber} already cached — skipping`);
+    if (await this.alreadyCached(auction, lotNumber)) {
+      await this.finalizeJob(auction, lotNumber, 'done', [], null);
+      this.logger.log(`[GalleryCache] ${auction} lot ${lotNumber} already cached — skipping`);
       return;
     }
 
     const { maxAttempts, concurrency, perSequenceDelayMs } = await this.getConfig();
     this.logger.log(
-      `[GalleryCache] Processing lot ${lotNumber} (${images.length} images, ` +
+      `[GalleryCache] Processing ${auction} lot ${lotNumber} (${images.length} images, ` +
         `concurrency=${concurrency}, maxAttempts=${maxAttempts})`,
     );
 
@@ -85,8 +82,8 @@ export class GalleryCacheService implements OnModuleInit, OnModuleDestroy {
     // Each proxied request rotates the Webshare exit IP; blocks retry up to maxAttempts.
     const perSequence = await mapWithConcurrency(images, concurrency, async (img) => {
       const [thumbnail, fullSize] = await Promise.all([
-        this.uploadImage(lotNumber, img.sequence, 'thb', img.thumbnail, maxAttempts),
-        this.uploadImage(lotNumber, img.sequence, 'hrs', img.fullSize, maxAttempts),
+        this.uploadImage(auction, lotNumber, img.sequence, 'thb', img.thumbnail, maxAttempts),
+        this.uploadImage(auction, lotNumber, img.sequence, 'hrs', img.fullSize, maxAttempts),
       ]);
       if (perSequenceDelayMs > 0) await this.sleep(perSequenceDelayMs);
       return { sequence: img.sequence, thumbnail, fullSize };
@@ -116,8 +113,14 @@ export class GalleryCacheService implements OnModuleInit, OnModuleDestroy {
     }
 
     if (cachedImages.length === 0) {
-      this.logger.error(`[GalleryCache] All uploads failed for lot ${lotNumber}`);
+      this.logger.error(`[GalleryCache] All uploads failed for ${auction} lot ${lotNumber}`);
+      if (auction === 'IAAI') {
+        await this.prisma.iaaiListing
+          .updateMany({ where: { stockNumber: lotNumber }, data: { imagesStatus: 'failed', imagesError: `All ${images.length} images failed` } })
+          .catch(() => undefined);
+      }
       await this.finalizeJob(
+        auction,
         lotNumber,
         'failed',
         failedSequences,
@@ -132,13 +135,25 @@ export class GalleryCacheService implements OnModuleInit, OnModuleDestroy {
       images: cachedImages,
     };
 
-    await this.prisma.auctionListing.update({
-      where: { lotNumber: BigInt(lotNumber) },
-      data: {
-        galleryCache: JSON.stringify(cacheData),
-        galleryCachedAt: new Date(),
-      },
-    });
+    if (auction === 'IAAI') {
+      await this.prisma.iaaiListing.update({
+        where: { stockNumber: lotNumber },
+        data: {
+          images: cacheData,
+          imagesStatus: 'done',
+          imagesError: failedSequences.length ? `${failedSequences.length} of ${images.length} failed` : null,
+          imagesUpdatedAt: new Date(),
+        },
+      });
+    } else {
+      await this.prisma.auctionListing.update({
+        where: { lotNumber: BigInt(lotNumber) },
+        data: {
+          galleryCache: JSON.stringify(cacheData),
+          galleryCachedAt: new Date(),
+        },
+      });
+    }
 
     const failed = failedSequences.length;
     if (failed > 0) {
@@ -153,6 +168,7 @@ export class GalleryCacheService implements OnModuleInit, OnModuleDestroy {
     }
 
     await this.finalizeJob(
+      auction,
       lotNumber,
       'done',
       failedSequences,
@@ -161,6 +177,7 @@ export class GalleryCacheService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async uploadImage(
+    auction: 'COPART' | 'IAAI',
     lotNumber: string,
     sequence: number,
     suffix: string,
@@ -169,7 +186,8 @@ export class GalleryCacheService implements OnModuleInit, OnModuleDestroy {
   ): Promise<string | null> {
     if (!sourceUrl) return null;
 
-    const key = `gallery/${lotNumber}/${sequence}_${suffix}.jpg`;
+    // IAAI stock numbers and Copart lot numbers can collide: separate prefixes.
+    const key = auction === 'IAAI' ? `iaai/${lotNumber}/${sequence}_${suffix}.jpg` : `gallery/${lotNumber}/${sequence}_${suffix}.jpg`;
 
     try {
       // Download from Copart via the Webshare backbone proxy (retries on block).
@@ -191,7 +209,20 @@ export class GalleryCacheService implements OnModuleInit, OnModuleDestroy {
    * on-demand path, which has no job row. A successful on-demand cache also
    * closes any pending backfill job for the same lot (dedup).
    */
+  private async alreadyCached(auction: 'COPART' | 'IAAI', lotNumber: string): Promise<boolean> {
+    if (auction === 'IAAI') {
+      const row = await this.prisma.iaaiListing.findUnique({ where: { stockNumber: lotNumber }, select: { images: true } });
+      return !!row?.images;
+    }
+    const row = await this.prisma.auctionListing.findUnique({
+      where: { lotNumber: BigInt(lotNumber) },
+      select: { galleryCache: true },
+    });
+    return !!row?.galleryCache;
+  }
+
   private async finalizeJob(
+    auction: 'COPART' | 'IAAI',
     lotNumber: string,
     status: 'done' | 'failed',
     failedSequences: number[],
@@ -199,7 +230,7 @@ export class GalleryCacheService implements OnModuleInit, OnModuleDestroy {
   ): Promise<void> {
     try {
       await this.prisma.imageCacheJob.updateMany({
-        where: { lotNumber: BigInt(lotNumber) },
+        where: { auction, lotNumber: BigInt(lotNumber) },
         data: {
           status,
           failedSequences: failedSequences.length ? failedSequences : Prisma.DbNull,

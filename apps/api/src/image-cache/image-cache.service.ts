@@ -86,9 +86,10 @@ export class ImageCacheService {
 
   /** Live counters + config for the control panel. */
   async getStatus() {
-    const [grouped, cachedCount, config] = await Promise.all([
-      this.prisma.imageCacheJob.groupBy({ by: ['status'], _count: { _all: true } }),
+    const [grouped, cachedCount, cachedIaai, config] = await Promise.all([
+      this.prisma.imageCacheJob.groupBy({ by: ['auction', 'status'], _count: { _all: true } }),
       this.prisma.auctionListing.count({ where: { galleryCachedAt: { not: null } } }),
+      this.prisma.iaaiListing.count({ where: { images: { not: Prisma.DbNull } } }),
       this.getConfig(),
     ]);
 
@@ -97,7 +98,14 @@ export class ImageCacheService {
     const retentionEligible = await this.countRetentionEligible(config.retentionDays);
 
     const counts = { pending: 0, processing: 0, done: 0, failed: 0 } as Record<string, number>;
-    for (const g of grouped) counts[g.status] = g._count._all;
+    const byAuction: Record<string, Record<string, number>> = {
+      COPART: { pending: 0, processing: 0, done: 0, failed: 0, skipped: 0 },
+      IAAI: { pending: 0, processing: 0, done: 0, failed: 0, skipped: 0 },
+    };
+    for (const g of grouped) {
+      counts[g.status] = (counts[g.status] ?? 0) + g._count._all;
+      (byAuction[g.auction] ??= {})[g.status] = g._count._all;
+    }
 
     // Tick runs every minute → ETA ≈ pending / lotsPerTick minutes.
     const perTick = config.lotsPerTick || 1;
@@ -117,7 +125,9 @@ export class ImageCacheService {
     return {
       counts,
       queueDepth: counts.pending + counts.processing,
-      cachedListings: cachedCount,
+      cachedListings: cachedCount + cachedIaai,
+      cachedByAuction: { COPART: cachedCount, IAAI: cachedIaai },
+      byAuction,
       etaMinutes,
       storageBytes: this.storageBytes,
       storageObjects: this.storageObjects,
@@ -187,11 +197,12 @@ export class ImageCacheService {
       });
   }
 
-  async listJobs(params: { status?: string; page?: number; limit?: number }): Promise<Paginated<any>> {
+  async listJobs(params: { status?: string; auction?: string; page?: number; limit?: number }): Promise<Paginated<any>> {
     const { p, l, skip } = clampPage(params.page, params.limit);
-    const where: Prisma.ImageCacheJobWhereInput = params.status
-      ? { status: params.status }
-      : {};
+    const where: Prisma.ImageCacheJobWhereInput = {
+      ...(params.status && { status: params.status }),
+      ...(params.auction && { auction: params.auction }),
+    };
 
     const [rows, total] = await Promise.all([
       this.prisma.imageCacheJob.findMany({
@@ -207,10 +218,11 @@ export class ImageCacheService {
   }
 
   /** Lots that failed after every retry, or cached with some failed sequences. */
-  async listFailures(params: { page?: number; limit?: number }): Promise<Paginated<any>> {
+  async listFailures(params: { auction?: string; page?: number; limit?: number }): Promise<Paginated<any>> {
     const { p, l, skip } = clampPage(params.page, params.limit);
     const where: Prisma.ImageCacheJobWhereInput = {
       OR: [{ status: 'failed' }, { failedSequences: { not: Prisma.DbNull } }],
+      ...(params.auction && { auction: params.auction }),
     };
 
     const [rows, total] = await Promise.all([
@@ -227,17 +239,17 @@ export class ImageCacheService {
   }
 
   /** Re-queue a failed lot so the crawler picks it up again. */
-  async retryJob(lotNumberStr: string) {
+  async retryJob(lotNumberStr: string, auction = 'COPART') {
     const lotNumber = BigInt(lotNumberStr);
     await this.prisma.imageCacheJob.update({
-      where: { lotNumber },
+      where: { auction_lotNumber: { auction, lotNumber } },
       data: {
         status: 'pending',
         lastError: null,
         failedSequences: Prisma.DbNull,
       },
     });
-    return { lotNumber: lotNumberStr, status: 'pending' };
+    return { lotNumber: lotNumberStr, auction, status: 'pending' };
   }
 
   /**
@@ -272,6 +284,7 @@ export class ImageCacheService {
          SET priority = l."saleDate"
         FROM auction_listings l
        WHERE l."lotNumber" = j."lotNumber"
+         AND j.auction = 'COPART'
          AND j.priority IS NULL
          AND l."saleDate" IS NOT NULL
     `;
@@ -310,8 +323,8 @@ export class ImageCacheService {
     return { requeued: res.count, failed, skipped };
   }
 
-  async retryFailed(lots?: string[]): Promise<{ requeued: number }> {
-    const where: Prisma.ImageCacheJobWhereInput = { status: 'failed' };
+  async retryFailed(lots?: string[], auction?: string): Promise<{ requeued: number }> {
+    const where: Prisma.ImageCacheJobWhereInput = { status: 'failed', ...(auction && { auction }) };
     if (lots?.length) {
       const ids: bigint[] = [];
       for (const l of lots) {
@@ -340,8 +353,31 @@ export class ImageCacheService {
   }
 
   /** Recently cached lots (source of truth = AuctionListing.galleryCachedAt). */
-  async listCached(params: { page?: number; limit?: number }): Promise<Paginated<any>> {
+  async listCached(params: { auction?: string; page?: number; limit?: number }): Promise<Paginated<any>> {
     const { p, l, skip } = clampPage(params.page, params.limit);
+    if (params.auction === 'IAAI') {
+      const iw: Prisma.IaaiListingWhereInput = { images: { not: Prisma.DbNull } };
+      const [rows, total] = await Promise.all([
+        this.prisma.iaaiListing.findMany({
+          where: iw,
+          orderBy: { imagesUpdatedAt: { sort: 'desc', nulls: 'last' } },
+          skip,
+          take: l,
+          select: { stockNumber: true, year: true, make: true, model: true, images: true, imagesUpdatedAt: true },
+        }),
+        this.prisma.iaaiListing.count({ where: iw }),
+      ]);
+      const data = rows.map((r) => ({
+        auction: 'IAAI',
+        lotNumber: r.stockNumber,
+        year: r.year,
+        make: r.make,
+        model: r.model,
+        imageCount: (r.images as { imageCount?: number } | null)?.imageCount ?? 0,
+        cachedAt: r.imagesUpdatedAt,
+      }));
+      return { data, total, page: p, limit: l };
+    }
     const where: Prisma.AuctionListingWhereInput = { galleryCachedAt: { not: null } };
 
     const [rows, total] = await Promise.all([
@@ -363,6 +399,7 @@ export class ImageCacheService {
     ]);
 
     const data = rows.map((r) => ({
+      auction: 'COPART',
       lotNumber: r.lotNumber.toString(),
       year: r.year,
       make: r.make,
@@ -396,6 +433,7 @@ export class ImageCacheService {
 
   // ── helpers ────────────────────────────────────────────────────────────────
   private serializeJob(r: {
+    auction: string;
     lotNumber: bigint;
     status: string;
     priority: number | null;
@@ -408,6 +446,7 @@ export class ImageCacheService {
     updatedAt: Date;
   }) {
     return {
+      auction: r.auction,
       lotNumber: r.lotNumber.toString(),
       status: r.status,
       priority: r.priority,
