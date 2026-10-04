@@ -352,7 +352,9 @@ export class AuctionSearchService {
     if (!cats.length) return undefined;
     const sources = dto.source ?? [];
     const should: any[] = [];
-    if (sources.includes('copart') || (dto.allAuctions && !sources.length)) {
+    // With allAuctions the Auction filter narrows by itself; the title clause
+    // must cover both auctions or it would also narrow the Auction facet.
+    if (dto.allAuctions || sources.includes('copart')) {
       const c = this.copartTitleClause(cats, titleOverrides);
       if (c) should.push({ bool: { filter: [{ term: { 'source.keyword': 'copart' } }, c] } });
     }
