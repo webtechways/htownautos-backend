@@ -398,4 +398,13 @@ export class SearchAuctionsDto {
   @Transform(({ value }) => value === 'true' || value === true)
   @IsBoolean()
   includeAggregations?: boolean = false;
+
+  @ApiPropertyOptional({
+    description:
+      'Search Copart and IAAI together (both indexes). `source` then works as an ordinary filter whose own facet keeps both options.',
+  })
+  @IsOptional()
+  @Transform(({ value }) => value === 'true' || value === true)
+  @IsBoolean()
+  allAuctions?: boolean;
 }

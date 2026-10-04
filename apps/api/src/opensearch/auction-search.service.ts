@@ -323,8 +323,10 @@ export class AuctionSearchService {
   private unifiedScope(dto: SearchAuctionsDto, index: string): { index: string; filters: any[] } | null {
     if (index !== AUCTION_INDEX_NAME) return null;
     const sources = dto.source ?? [];
-    if (!sources.includes('iaai')) return null;
-    const both = sources.includes('copart');
+    // allAuctions: both indexes always, `source` is just a filter (its facet
+    // then still lists both auctions). Otherwise source=…iaai… picks the indexes.
+    if (!dto.allAuctions && !sources.includes('iaai')) return null;
+    const both = dto.allAuctions || sources.includes('copart');
     const iaaiPublic = {
       bool: {
         filter: [
@@ -350,7 +352,7 @@ export class AuctionSearchService {
     if (!cats.length) return undefined;
     const sources = dto.source ?? [];
     const should: any[] = [];
-    if (sources.includes('copart')) {
+    if (sources.includes('copart') || (dto.allAuctions && !sources.length)) {
       const c = this.copartTitleClause(cats, titleOverrides);
       if (c) should.push({ bool: { filter: [{ term: { 'source.keyword': 'copart' } }, c] } });
     }
