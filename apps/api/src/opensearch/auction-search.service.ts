@@ -1,9 +1,9 @@
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
-import { OpenSearchService, AUCTION_INDEX_NAME, AuctionSyncService, parseListingImages } from '@htownautos/opensearch';
+import { OpenSearchService, AUCTION_INDEX_NAME, AuctionSyncService, parseListingImages, IAAI_INDEX_NAME } from '@htownautos/opensearch';
 import type { UnifiedAuction, AuctionAggregations, AuctionSearchResult } from '@htownautos/opensearch';
 import { PrismaService } from '@htownautos/prisma';
 import { RabbitMQService } from '@htownautos/rabbitmq';
-import { CopartImagesService, GALLERY_CACHE_QUEUE, codesForTitleCategories, deriveTitleCategory, allKnownCodes, TITLE_CATEGORIES, geocodeZip, boundingBox, normalizeToken, houstonSaleDate } from '@htownautos/common';
+import { CopartImagesService, GALLERY_CACHE_QUEUE, codesForTitleCategories, deriveTitleCategory, allKnownCodes, TITLE_CATEGORIES, geocodeZip, boundingBox, normalizeToken, houstonSaleDate, iaaiGalleryImages } from '@htownautos/common';
 import type { TitleCategory, TitleOverrides, GalleryImage, GalleryResponse, GalleryCacheMessage } from '@htownautos/common';
 import { TitleMappingService } from '../title-mapping/title-mapping.service';
 import { PricePredictionService } from '../price-prediction/price-prediction.service';
@@ -164,15 +164,23 @@ export class AuctionSearchService {
       }
     }
 
+    // `source=copart,iaai` (PrecioFinal's listing): both indexes in one query.
+    const unified = this.unifiedScope(dto, index);
+    if (unified) {
+      index = unified.index;
+      titleClause = await this.unifiedTitleClause(dto, titleOverrides);
+    }
+    const extraFilters = unified?.filters;
+
     const query = this.buildQuery(
-      dto, carfaxSourceIds, inspectableYardNames, titleOverrides, undefined, servedPca, titleClause);
+      dto, carfaxSourceIds, inspectableYardNames, titleOverrides, undefined, servedPca, titleClause, extraFilters);
 
     // Build sort
     const sort = this.buildSort(sortBy, sortOrder);
 
     // Build aggregations if requested
     const aggs = dto.includeAggregations
-      ? this.buildAggregations(dto, carfaxSourceIds, inspectableYardNames, titleOverrides, titleClause)
+      ? this.buildAggregations(dto, carfaxSourceIds, inspectableYardNames, titleOverrides, titleClause, extraFilters)
       : undefined;
 
     const searchBody: any = {
@@ -267,6 +275,89 @@ export class AuctionSearchService {
    * other options vanish from the sidebar and multi-select becomes impossible.
    * Every other filter still applies, which keeps the counts honest.
    */
+  /** Copart's title-category clause: categories → Copart title codes. */
+  private copartTitleClause(cats: string[], titleOverrides?: TitleOverrides): any {
+    const bothCases = (arr: string[]) =>
+      Array.from(new Set(arr.flatMap((c) => [c.toLowerCase(), c.toUpperCase()])));
+    const known = cats.filter((c) => c !== 'unknown');
+    const should: any[] = [];
+    if (known.length > 0) {
+      const codes = codesForTitleCategories(known, titleOverrides);
+      if (codes.length > 0) should.push({ terms: { 'saleTitleType.keyword': bothCases(codes) } });
+    }
+    if (cats.includes('unknown')) {
+      should.push({
+        bool: { must_not: { terms: { 'saleTitleType.keyword': bothCases(allKnownCodes(titleOverrides)) } } },
+      });
+    }
+    if (should.length === 0) return null;
+    return should.length === 1 ? should[0] : { bool: { should, minimum_should_match: 1 } };
+  }
+
+  private iaaiTitleDocsCache: { at: number; docs: (string | null)[] } | null = null;
+
+  /**
+   * IAAI's title-category clause. IAAI stores title DOCUMENTS (CLEAR,
+   * SALVAGE…), not Copart codes: each distinct document is classified with the
+   * same shared rule the card label uses.
+   */
+  async iaaiTitleClause(cats: string[], titleOverrides?: TitleOverrides): Promise<any> {
+    if (!this.iaaiTitleDocsCache || Date.now() - this.iaaiTitleDocsCache.at > 5 * 60_000) {
+      const rows = await this.prisma.iaaiListing.groupBy({ by: ['saleDocument'] });
+      this.iaaiTitleDocsCache = { at: Date.now(), docs: rows.map((r) => r.saleDocument) };
+    }
+    const docs = this.iaaiTitleDocsCache.docs.filter((d) => cats.includes(deriveTitleCategory(d, titleOverrides)));
+    const named = docs.filter((d): d is string => !!d);
+    const should: any[] = [];
+    if (named.length) should.push({ terms: { 'saleTitleType.keyword': named } });
+    if (docs.includes(null)) should.push({ bool: { must_not: { exists: { field: 'saleTitleType' } } } });
+    return should.length ? { bool: { should, minimum_should_match: 1 } } : { bool: { must_not: { match_all: {} } } };
+  }
+
+  /**
+   * `source` containing "iaai" on a default (Copart) search means: read the
+   * IAAI index too. Only PrecioFinal's public listing asks for it; every other
+   * caller keeps the Copart-only behaviour. IAAI lots enter the public listing
+   * only when they have photos, a real make (not OTHER) and a future auction.
+   */
+  private unifiedScope(dto: SearchAuctionsDto, index: string): { index: string; filters: any[] } | null {
+    if (index !== AUCTION_INDEX_NAME) return null;
+    const sources = dto.source ?? [];
+    if (!sources.includes('iaai')) return null;
+    const both = sources.includes('copart');
+    const iaaiPublic = {
+      bool: {
+        filter: [
+          { term: { 'source.keyword': 'iaai' } },
+          { term: { publicListing: true } },
+          { range: { saleDate: { gte: this.getTodayAsInt() } } },
+        ],
+      },
+    };
+    return {
+      index: both ? `${AUCTION_INDEX_NAME},${IAAI_INDEX_NAME}` : IAAI_INDEX_NAME,
+      filters: [
+        both
+          ? { bool: { should: [{ term: { 'source.keyword': 'copart' } }, iaaiPublic], minimum_should_match: 1 } }
+          : iaaiPublic,
+      ],
+    };
+  }
+
+  /** Title categories across both auctions: Copart codes for Copart docs, IAAI documents for IAAI docs. */
+  private async unifiedTitleClause(dto: SearchAuctionsDto, titleOverrides?: TitleOverrides): Promise<any> {
+    const cats = dto.titleCategory ?? [];
+    if (!cats.length) return undefined;
+    const sources = dto.source ?? [];
+    const should: any[] = [];
+    if (sources.includes('copart')) {
+      const c = this.copartTitleClause(cats, titleOverrides);
+      if (c) should.push({ bool: { filter: [{ term: { 'source.keyword': 'copart' } }, c] } });
+    }
+    should.push({ bool: { filter: [{ term: { 'source.keyword': 'iaai' } }, await this.iaaiTitleClause(cats, titleOverrides)] } });
+    return { bool: { should, minimum_should_match: 1 } };
+  }
+
   private buildQuery(
     dto: SearchAuctionsDto,
     carfaxSourceIds?: string[],
@@ -280,9 +371,11 @@ export class AuctionSearchService {
      * caller resolves the categories itself; Copart passes nothing.
      */
     titleClause?: any,
+    /** Always-on filters of the caller (e.g. which IAAI lots are public). */
+    extraFilters?: any[],
   ): any {
     const must: any[] = [];
-    const filter: any[] = [];
+    const filter: any[] = [...(extraFilters ?? [])];
     const keep = (facet: FacetKey) => omitFacet !== facet;
 
     // Exclude already-auctioned items from the DEFAULT browse view only
@@ -520,27 +613,8 @@ export class AuctionSearchService {
     if (keep('title') && titleClause && dto.titleCategory && dto.titleCategory.length > 0) {
       filter.push(titleClause);
     } else if (keep('title') && dto.titleCategory && dto.titleCategory.length > 0) {
-      const bothCases = (arr: string[]) =>
-        Array.from(new Set(arr.flatMap((c) => [c.toLowerCase(), c.toUpperCase()])));
-      const cats = dto.titleCategory;
-      const known = cats.filter((c) => c !== 'unknown');
-      const wantUnknown = cats.includes('unknown');
-      const should: any[] = [];
-
-      if (known.length > 0) {
-        const codes = codesForTitleCategories(known, titleOverrides);
-        if (codes.length > 0) should.push({ terms: { 'saleTitleType.keyword': bothCases(codes) } });
-      }
-      if (wantUnknown) {
-        should.push({
-          bool: { must_not: { terms: { 'saleTitleType.keyword': bothCases(allKnownCodes(titleOverrides)) } } },
-        });
-      }
-      if (should.length === 1) {
-        filter.push(should[0]);
-      } else if (should.length > 1) {
-        filter.push({ bool: { should, minimum_should_match: 1 } });
-      }
+      const clause = this.copartTitleClause(dto.titleCategory, titleOverrides);
+      if (clause) filter.push(clause);
     }
 
     // Has keys filter
@@ -729,6 +803,7 @@ export class AuctionSearchService {
     inspectableYardNames?: string[],
     titleOverrides?: TitleOverrides,
     titleClause?: any,
+    extraFilters?: any[],
   ): any {
     const base = this.baseAggregations();
     const out: any = {};
@@ -755,6 +830,7 @@ export class AuctionSearchService {
               facet,
               undefined,
               titleClause,
+              extraFilters,
             ),
             aggs: { unfiltered: definition },
           },
@@ -937,7 +1013,13 @@ export class AuctionSearchService {
   async getFilterOptions(dto?: SearchAuctionsDto, index: string = AUCTION_INDEX_NAME, titleClause?: any): Promise<AuctionAggregations> {
     const titleOverrides = await this.titleMapping.getOverrides();
     // Build query based on current filter selections for cascading
-    const query = dto ? this.buildQuery(dto, undefined, undefined, titleOverrides, undefined, undefined, titleClause) : { match_all: {} };
+    const unified = dto ? this.unifiedScope(dto, index) : null;
+    if (unified) {
+      index = unified.index;
+      titleClause = await this.unifiedTitleClause(dto!, titleOverrides);
+    }
+    const extraFilters = unified?.filters;
+    const query = dto ? this.buildQuery(dto, undefined, undefined, titleOverrides, undefined, undefined, titleClause, extraFilters) : { match_all: {} };
 
     const searchBody: any = {
       size: 0,
@@ -945,7 +1027,7 @@ export class AuctionSearchService {
       // Same rule as the main search: a facet the user is filtering on must not
       // filter its own option list, or it collapses to the current selection.
       aggs: dto
-        ? this.buildAggregations(dto, undefined, undefined, titleOverrides, titleClause)
+        ? this.buildAggregations(dto, undefined, undefined, titleOverrides, titleClause, extraFilters)
         : this.baseAggregations(),
     };
 
@@ -961,11 +1043,11 @@ export class AuctionSearchService {
   /**
    * Get a single auction by ID
    */
-  async findById(id: string): Promise<UnifiedAuction | null> {
+  async findById(id: string, index: string = AUCTION_INDEX_NAME): Promise<UnifiedAuction | null> {
     try {
       const client = this.openSearchService.getClient();
       const result = await client.get({
-        index: AUCTION_INDEX_NAME,
+        index,
         id,
       });
       return (result.body._source as UnifiedAuction) ?? null;
@@ -1018,6 +1100,11 @@ export class AuctionSearchService {
 
   async findBySourceId(source: 'copart' | 'iaai', sourceId: string): Promise<(Omit<UnifiedAuction, 'discarded' | 'discardReason' | 'discardedAt'> & DiscardFields) | null> {
     const id = `${source}_${sourceId}`;
+    if (source === 'iaai') {
+      // IAAI lots live in their own index and have no discard state.
+      const iaai = await this.findById(id, IAAI_INDEX_NAME);
+      return iaai ? { ...iaai, discarded: false, discardReason: null, discardedAt: null } : null;
+    }
     const doc = await this.findById(id);
     if (!doc) return null;
 
@@ -1244,6 +1331,16 @@ export class AuctionSearchService {
   }
 
   /** Bypass: fetch directly from Copart API, no cache read/write */
+  /** Photos of an IAAI lot: our copies once the image cache has them, IAAI's URLs until then. */
+  async getIaaiGallery(stockOrId: string): Promise<GalleryResponse> {
+    const stock = stockOrId.replace(/^iaai-/, '');
+    const row = await this.prisma.iaaiListing.findUnique({ where: { stockNumber: stock }, select: { images: true, imageSourceUrls: true } });
+    if (!row) throw new NotFoundException(`IAAI lot ${stock} not found`);
+    const cached = row.images as { images?: { sequence: number; thumbnail: string; fullSize: string }[] } | null;
+    const images = cached?.images?.length ? cached.images : iaaiGalleryImages(row.imageSourceUrls);
+    return { lotNumber: stock, imageCount: images.length, images } as GalleryResponse;
+  }
+
   async getCopartGalleryRaw(lotNumberStr: string): Promise<GalleryResponse> {
     let images: GalleryImage[] = [];
     try {

@@ -68,8 +68,11 @@ export class IaaiScraperService implements OnModuleInit {
 
   async onModuleInit() {
     const cfg = await this.config();
-    // A reindex that was running when the process died: run it again.
-    if (cfg.reindexStatus === 'running') {
+    // A reindex that was running when the process died, or an index built by
+    // an older document shape (the code changed how documents look): rebuild.
+    const stale = await this.index.needsReindex().catch(() => false);
+    if (cfg.reindexStatus === 'running' || stale) {
+      if (stale) this.logger.log('[IaaiIndex] document shape changed since the last index: re-indexing');
       await this.prisma.iaaiScraperConfig.update({ where: { id: 'singleton' }, data: { reindexRequestedAt: new Date() } });
     }
   }

@@ -69,16 +69,11 @@ export class IaaiListingsService {
    * (CLEAR, SALVAGE…), not Copart codes, so the categories are resolved here
    * with the same classifier the card label and the facet counts use.
    */
+  /** Title categories for the index: the shared IAAI clause of the search engine. */
   private async indexTitleClause(q: SearchAuctionsDto): Promise<any> {
     const cats = (Array.isArray(q.titleCategory) ? q.titleCategory : []) as string[];
     if (!cats.length) return undefined;
-    const overrides = await this.titleMapping.getOverrides();
-    const docs = (await this.titleDocs()).filter((d) => cats.includes(deriveTitleCategory(d, overrides)));
-    const named = docs.filter((d): d is string => !!d);
-    const should: any[] = [];
-    if (named.length) should.push({ terms: { 'saleTitleType.keyword': named } });
-    if (docs.includes(null)) should.push({ bool: { must_not: { exists: { field: 'saleTitleType' } } } });
-    return should.length ? { bool: { should, minimum_should_match: 1 } } : { bool: { must_not: { match_all: {} } } };
+    return this.auctionSearch.iaaiTitleClause(cats, await this.titleMapping.getOverrides());
   }
 
   async search(q: SearchAuctionsDto) {

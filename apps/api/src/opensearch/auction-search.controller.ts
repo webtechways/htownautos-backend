@@ -108,6 +108,14 @@ export class AuctionSearchController {
     return this.searchService.getCopartGallery(id);
   }
 
+  @Get('get-gallery/iaai/:stock')
+  @Public()
+  @ApiOperation({ summary: 'Gallery of an IAAI lot (same shape as the Copart gallery)' })
+  @ApiParam({ name: 'stock', description: 'IAAI stock number' })
+  async getIaaiGallery(@Param('stock') stock: string) {
+    return this.searchService.getIaaiGallery(stock);
+  }
+
   @Get('last-sync')
   @Public()
   @ApiOperation({ summary: 'Get last Copart sync timestamp' })
