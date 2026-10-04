@@ -124,3 +124,14 @@ export type { RunpodPod, CreatePodInput } from './runpod/runpod.service';
 // data-sync (para saber que vectores estan al dia).
 export { rutaAsset, ficheroPca, leerMetaPca } from './embed/pca-assets';
 export type { MetaPca } from './embed/pca-assets';
+
+// IAAI scraper (bidexport.com): mapping + schedule, shared by data-sync and the API
+export {
+  BIDEXPORT_FILTER_URL,
+  mapBidexportItem,
+  inIaaiWindow,
+  scheduleWantsRun,
+  nextScheduledStart,
+  zonedClock,
+} from './iaai/iaai-scraper.shared';
+export type { IaaiSchedule, IaaiMappedListing } from './iaai/iaai-scraper.shared';

@@ -2410,6 +2410,7 @@ model Yard {
   updatedAt DateTime @updatedAt
 
   auctionListings AuctionListing[]
+  iaaiListings    IaaiListing[]
   inspections     VehicleInspection[]
 
   @@unique([source, yardNumber])
@@ -5541,18 +5542,18 @@ model LotPricePrediction {
 /// A report provider's runtime config, in fallback order. Global (not per tenant).
 model VehicleHistoryProvider {
   /// Adapter key: 'cheapcarfax' | 'globalvin' | …
-  key                 String    @id
+  key              String  @id
   /// Lower runs first.
-  priority            Int       @default(100)
-  enabled             Boolean   @default(true)
-  carfaxEnabled       Boolean   @default(true)
-  autocheckEnabled    Boolean   @default(true)
+  priority         Int     @default(100)
+  enabled          Boolean @default(true)
+  carfaxEnabled    Boolean @default(true)
+  autocheckEnabled Boolean @default(true)
   /// API key set from the UI (AES-GCM envelope, SOCIAL_TOKEN_KEY). Empty → the adapter's env var.
-  encryptedApiKey     String?
+  encryptedApiKey  String?
   /// Overrides the adapter's default base URL.
-  baseUrl             String?
+  baseUrl          String?
   /// Budget for one report from this provider (async providers poll until it runs out).
-  timeoutMs           Int       @default(90000)
+  timeoutMs        Int     @default(90000)
 
   // Circuit breaker: after N provider-side failures in a row it's tried last until circuitOpenUntil.
   consecutiveFailures Int       @default(0)
@@ -5562,15 +5563,15 @@ model VehicleHistoryProvider {
   lastError           String?
 
   /// up | degraded | down | unconfigured | unknown
-  healthStatus        String    @default("unknown")
-  healthCheckedAt     DateTime?
-  healthLatencyMs     Int?
-  healthMessage       String?
+  healthStatus    String    @default("unknown")
+  healthCheckedAt DateTime?
+  healthLatencyMs Int?
+  healthMessage   String?
   /// Credits / limits as the provider last reported them.
-  balance             Json?
+  balance         Json?
 
-  createdAt           DateTime  @default(now())
-  updatedAt           DateTime  @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@map("vehicle_history_providers")
 }
@@ -5614,20 +5615,20 @@ model VehicleHistoryReport {
 
 /// One order for a report: which providers were tried, and how it ended.
 model VehicleHistoryRequest {
-  id               String                @id @default(uuid())
+  id               String                  @id @default(uuid())
   vin              String
   reportType       String
   /// running | delayed (a provider is finishing a paid job in the background) | completed | failed
-  status           String                @default("running")
+  status           String                  @default("running")
   /// auction-listing | api | admin-test | …
   source           String?
   auctionListingId BigInt?
   requestedBy      String?
   tenantId         String?
-  cacheHit         Boolean               @default(false)
-  forced           Boolean               @default(false)
+  cacheHit         Boolean                 @default(false)
+  forced           Boolean                 @default(false)
   reportId         String?
-  report           VehicleHistoryReport? @relation(fields: [reportId], references: [id], onDelete: SetNull)
+  report           VehicleHistoryReport?   @relation(fields: [reportId], references: [id], onDelete: SetNull)
   /// Provider that delivered the report.
   providerKey      String?
   errorCode        String?
@@ -5635,7 +5636,7 @@ model VehicleHistoryRequest {
   /// [{ providerKey, outcome, errorCode, message, durationMs }] in the order tried.
   attemptLog       Json?
   durationMs       Int?
-  createdAt        DateTime              @default(now())
+  createdAt        DateTime                @default(now())
   completedAt      DateTime?
   /// API callers: notified here (signed POST) when the order completes or fails.
   callbackUrl      String?
@@ -5720,4 +5721,162 @@ model VehicleHistoryWebhook {
   @@index([status, nextAttemptAt])
   @@index([requestId])
   @@map("vehicle_history_webhooks")
+}
+
+// ── IAAI scraper (bidexport.com) ─────────────────────────────────────────────
+
+/// One IAAI lot as scraped from bidexport.com, keyed by IAAI's stock number.
+/// Normalized columns for search plus `raw` (the source document minus the
+/// image list and the key/value block, which live in their own columns).
+model IaaiListing {
+  stockNumber String  @id
+  externalId  String? // bidexport's own document id
+  providerId  Int?
+
+  vin           String?
+  year          Int?
+  make          String?
+  model         String?
+  series        String?
+  bodyStyle     String?
+  color         String?
+  engineSize    String?
+  transmission  String?
+  fuelType      String?
+  drivelineType String?
+  cylinders     String?
+  vehicleType   String?
+
+  odometer          Int?
+  odometerStatus    String?
+  primaryDamage     String?
+  secondaryDamage   String?
+  lossType          String?
+  saleDocument      String?
+  saleDocumentBrand String?
+  certState         String?
+  runAndDrive       Boolean?
+  startCode         String? // STARTS / STATIONARY / …
+  keys              String? // PRESENT / MISSING
+  acv               Int?
+  repairCost        Int?
+
+  currentBid   Int?
+  buyNowPrice  Int? // bidexport `stockPrice`
+  reservePrice Int?
+
+  branchCode      Int?
+  branchName      String?
+  yardId          String?
+  yard            Yard?   @relation(fields: [yardId], references: [id], onDelete: SetNull)
+  locationAddress String?
+  locationCity    String?
+  locationState   String?
+  locationZip     String?
+
+  seller        String?
+  auctionType   String?
+  auctionAt     DateTime? // UTC
+  timezone      String?
+  vehicleStatus String?
+  whoCanBuy     String?
+  publicAuction Boolean?
+
+  // Photos: the IAAI URLs as listed, and our copies once downloaded.
+  imageSourceUrls Json?
+  imageSourceHash String?
+  imageCount      Int       @default(0)
+  images          Json? // public CDN URLs, same order as the source
+  imagesStatus    String    @default("none") // none | pending | processing | done | failed
+  imagesAttempts  Int       @default(0)
+  imagesError     String?
+  imagesClaimedAt DateTime?
+  imagesUpdatedAt DateTime?
+
+  raw             Json
+  isActive        Boolean   @default(true)
+  sourceCreatedAt DateTime?
+  firstSeenAt     DateTime  @default(now())
+  lastSeenAt      DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@index([isActive, auctionAt])
+  @@index([imagesStatus, auctionAt])
+  @@index([lastSeenAt])
+  @@index([vin])
+  @@index([make, model])
+  @@index([branchCode])
+  @@map("iaai_listings")
+}
+
+/// Singleton control row for the IAAI scraper (Settings → IAAI Scraper).
+model IaaiScraperConfig {
+  id     String  @id @default("singleton")
+  /// Master switch: stops page fetching and image downloads.
+  paused Boolean @default(true)
+
+  /// window   = every day (on `daysOfWeek`) between windowStart and windowEnd
+  /// interval = a full pass every `intervalHours`
+  /// manual   = only when someone presses Start
+  scheduleMode  String @default("window")
+  windowStart   String @default("06:00")
+  windowEnd     String @default("22:00")
+  timezone      String @default("America/Chicago")
+  daysOfWeek    Int[]  @default([0, 1, 2, 3, 4, 5, 6])
+  /// window: minimum hours between the start of two passes (0 = back to back);
+  /// interval: hours between passes.
+  intervalHours Int    @default(6)
+  /// Stop a pass after this many minutes (0 = no limit).
+  maxRunMinutes Int    @default(0)
+
+  pageSize           Int     @default(100)
+  pageDelayMinMs     Int     @default(1500)
+  pageDelayMaxMs     Int     @default(4000)
+  maxPagesPerRun     Int     @default(0) // 0 = until the end
+  requestTimeoutMs   Int     @default(60000)
+  maxRetries         Int     @default(3)
+  useProxy           Boolean @default(false)
+  /// Lots not seen for this long are marked inactive after a completed pass.
+  inactiveAfterHours Int     @default(48)
+
+  downloadImages     Boolean @default(true)
+  imageLotsPerTick   Int     @default(10) // lots per minute
+  imageConcurrency   Int     @default(4)
+  imageMaxPerLot     Int     @default(0) // 0 = all
+  imageMaxAttempts   Int     @default(3)
+  imagesOnlyUpcoming Boolean @default(true) // skip lots whose auction already passed
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("iaai_scraper_config")
+}
+
+/// One pass over bidexport's listing (`skip` 0 → count), resumable.
+model IaaiScrapeRun {
+  id             String    @id @default(uuid())
+  trigger        String // schedule | manual
+  /// queued | running | interrupted | completed | stopped | failed
+  status         String    @default("queued")
+  stopRequested  Boolean   @default(false)
+  maxRunMinutes  Int?
+  nextSkip       Int       @default(0)
+  pagesFetched   Int       @default(0)
+  itemsSeen      Int       @default(0)
+  itemsCreated   Int       @default(0)
+  itemsUpdated   Int       @default(0)
+  totalReported  Int?
+  markedInactive Int       @default(0)
+  errors         Int       @default(0)
+  lastError      String?
+  message        String?
+  requestedBy    String?
+  createdAt      DateTime  @default(now())
+  startedAt      DateTime?
+  finishedAt     DateTime?
+  heartbeatAt    DateTime?
+
+  @@index([status])
+  @@index([createdAt])
+  @@map("iaai_scrape_runs")
 }

@@ -74,8 +74,11 @@ export class ProxyService {
    */
   async fetchViaProxy(
     url: string,
-    opts?: { maxAttempts?: number; headers?: Record<string, string> },
+    opts?: { maxAttempts?: number; headers?: Record<string, string>; method?: string; body?: string; timeoutMs?: number },
   ): Promise<Response> {
+    const method = opts?.method ?? 'GET';
+    const body = opts?.body;
+    const timeoutMs = opts?.timeoutMs ?? REQUEST_TIMEOUT_MS;
     const maxAttempts = opts?.maxAttempts ?? DEFAULT_MAX_ATTEMPTS;
     const headers = { ...DEFAULT_HEADERS, ...(opts?.headers ?? {}) };
     let lastStatus: number | undefined;
@@ -89,19 +92,23 @@ export class ProxyService {
           agent = new ProxyAgent({
             uri: proxyUrl,
             connectTimeout: 10_000,
-            headersTimeout: REQUEST_TIMEOUT_MS,
-            bodyTimeout: REQUEST_TIMEOUT_MS,
+            headersTimeout: timeoutMs,
+            bodyTimeout: timeoutMs,
           });
           res = (await undiciFetch(url, {
             dispatcher: agent,
+            method,
+            body,
             headers,
-            signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+            signal: AbortSignal.timeout(timeoutMs),
           })) as unknown as Response;
         } else {
           // No proxy configured (local/dev) → direct fetch.
           res = await fetch(url, {
+            method,
+            body,
             headers,
-            signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+            signal: AbortSignal.timeout(timeoutMs),
           });
         }
 

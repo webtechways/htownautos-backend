@@ -334,6 +334,18 @@ export class PrismaService implements OnModuleInit, OnModuleDestroy {
     return this.prisma.imageCacheJob;
   }
 
+  get iaaiListing() {
+    return this.prisma.iaaiListing;
+  }
+
+  get iaaiScraperConfig() {
+    return this.prisma.iaaiScraperConfig;
+  }
+
+  get iaaiScrapeRun() {
+    return this.prisma.iaaiScrapeRun;
+  }
+
   get imageScrapeConfig() {
     return this.prisma.imageScrapeConfig;
   }

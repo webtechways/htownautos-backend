@@ -36,6 +36,8 @@ import { IdentityQuotaNotifierService } from './identity/identity-quota-notifier
 import { ClerkEventsConsumer } from './identity/clerk-events.consumer';
 import { ClerkEventsSweepService } from './identity/clerk-events-sweep.service';
 import { PortalSignupNotifierService } from './identity/portal-signup-notifier.service';
+import { IaaiScraperService } from './iaai/iaai-scraper.service';
+import { IaaiImagesService } from './iaai/iaai-images.service';
 
 
 @Module({
@@ -69,6 +71,8 @@ import { PortalSignupNotifierService } from './identity/portal-signup-notifier.s
     ImageCacheEnqueuerService,
     ImageCacheCrawlerService,
     ImageRetentionService,
+    IaaiScraperService,
+    IaaiImagesService,
     RunpodService,
     EmbedJobService,
     EmbedJobWatchdogService,

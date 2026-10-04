@@ -67,6 +67,7 @@ import { ProxySyncModule } from './proxy-sync/proxy-sync.module';
 import { ImageCacheModule } from './image-cache/image-cache.module';
 import { NewLotsStatsModule } from './new-lots-stats/new-lots-stats.module';
 import { AuctionCalendarModule } from './auction-calendar/auction-calendar.module';
+import { IaaiScraperModule } from './iaai-scraper/iaai-scraper.module';
 import { AuctionMonitorModule } from './auction-monitor/auction-monitor.module';
 import { ScraperAgentsModule } from './scraper-agents/scraper-agents.module';
 import { ScraperWorkersModule } from './scraper-workers/scraper-workers.module';
@@ -180,6 +181,7 @@ import { PublicStartModule } from './public-start/public-start.module';
     ImageCacheModule,
     NewLotsStatsModule,
     AuctionCalendarModule,
+    IaaiScraperModule,
     AuctionMonitorModule,
     ScraperAgentsModule,
     ScraperWorkersModule,
