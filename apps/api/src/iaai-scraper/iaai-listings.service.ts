@@ -1,7 +1,8 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '@htownautos/prisma';
-import { iaaiGalleryImages } from '@htownautos/common';
+import { deriveTitleCategory, iaaiGalleryImages } from '@htownautos/common';
+import { TitleMappingService } from '../title-mapping/title-mapping.service';
 import { SearchAuctionsDto } from '../opensearch/dto/search-auctions.dto';
 
 type Row = Prisma.IaaiListingGetPayload<{}>;
@@ -53,12 +54,45 @@ const runsDrivesOf = (r: { runAndDrive: boolean | null; startCode: string | null
 export class IaaiListingsService {
   private facetCache = new Map<string, { at: number; value: Record<string, Agg[]> }>();
 
-  constructor(private readonly prisma: PrismaService) {}
+  private titleDocsCache: { at: number; docs: (string | null)[] } | null = null;
+
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly titleMapping: TitleMappingService,
+  ) {}
+
+  /**
+   * IAAI's title documents (CLEAR, SALVAGE, NON-REPAIRABLE, BILL OF SALE…),
+   * a handful of distinct values. Cached: they barely change.
+   */
+  private async titleDocs(): Promise<(string | null)[]> {
+    if (this.titleDocsCache && Date.now() - this.titleDocsCache.at < FACET_TTL_MS) return this.titleDocsCache.docs;
+    const rows = await this.prisma.iaaiListing.groupBy({ by: ['saleDocument'] });
+    const docs = rows.map((r) => r.saleDocument);
+    this.titleDocsCache = { at: Date.now(), docs };
+    return docs;
+  }
+
+  /**
+   * Title category filter (Clean / Rebuilt / Salvage / Non-repairable /
+   * Unknown), classified exactly like Copart and like the card label: the
+   * shared deriveTitleCategory plus the staff-learned mappings.
+   */
+  private async titleCategoryWhere(cats: string[]): Promise<Prisma.IaaiListingWhereInput | null> {
+    if (!cats.length) return null;
+    const overrides = await this.titleMapping.getOverrides();
+    const docs = (await this.titleDocs()).filter((d) => cats.includes(deriveTitleCategory(d, overrides)));
+    const named = docs.filter((d): d is string => !!d);
+    const or: Prisma.IaaiListingWhereInput[] = [];
+    if (named.length) or.push({ saleDocument: { in: named } });
+    if (docs.includes(null)) or.push({ saleDocument: null });
+    return or.length ? { OR: or } : { stockNumber: { in: [] } };
+  }
 
   async search(q: SearchAuctionsDto) {
     const page = Math.max(1, Number(q.page) || 1);
     const limit = Math.min(100, Math.max(1, Number(q.limit) || 25));
-    const where = this.where(q);
+    const where = await this.where(q);
     const dir: Prisma.SortOrder = q.sortOrder === 'asc' ? 'asc' : 'desc';
     const nl = { sort: dir, nulls: 'last' as const };
     const orderBy: Prisma.IaaiListingOrderByWithRelationInput[] =
@@ -119,7 +153,7 @@ export class IaaiListingsService {
       return rows.map((r) => ({ key: r[field as string], count: r._count._all }));
     };
 
-    const [total, makes, models, trims, years, states, bodyTypes, transmissions, fuelTypes, damageTypes, saleStatuses, titleTypes, colors, cylinders, drivetrains, yards, sellers, lotCondCodes, rd] =
+    const [total, makes, models, trims, years, states, bodyTypes, transmissions, fuelTypes, damageTypes, saleStatuses, titleTypes, colors, cylinders, drivetrains, yards, sellers, lotCondCodes, rd, titleRows, overrides] =
       await Promise.all([
         this.prisma.iaaiListing.count({ where: base }),
         group('make', base),
@@ -140,7 +174,14 @@ export class IaaiListingsService {
         group('seller', withModel),
         group('startCode', withModel),
         this.prisma.iaaiListing.groupBy({ by: ['runAndDrive', 'startCode'], where: withModel, _count: { _all: true } }),
+        this.prisma.iaaiListing.groupBy({ by: ['saleDocument'], where: withModel, _count: { _all: true } }),
+        this.titleMapping.getOverrides(),
       ]);
+    const catCounts = new Map<string, number>();
+    for (const r of titleRows) {
+      const cat = deriveTitleCategory(r.saleDocument, overrides);
+      catCounts.set(cat, (catCounts.get(cat) ?? 0) + r._count._all);
+    }
     const rdMap = new Map<string, number>();
     for (const r of rd) {
       const k = runsDrivesOf(r);
@@ -149,7 +190,7 @@ export class IaaiListingsService {
     const value = {
       sources: [{ key: 'iaai', count: total }],
       makes, models, trims, years, states, bodyTypes, transmissions, fuelTypes, damageTypes, saleStatuses, titleTypes,
-      titleCategories: [], colors, cylinders, drivetrains, sellerCategories: [], yards, sellers, lotCondCodes,
+      titleCategories: [...catCounts].map(([key, count]) => ({ key, count })), colors, cylinders, drivetrains, sellerCategories: [], yards, sellers, lotCondCodes,
       runsDrivesOptions: [...rdMap].map(([key, count]) => ({ key, count })).sort((a, b) => b.count - a.count),
       saleLights: [],
     };
@@ -157,7 +198,7 @@ export class IaaiListingsService {
     return value;
   }
 
-  private where(q: SearchAuctionsDto): Prisma.IaaiListingWhereInput {
+  private async where(q: SearchAuctionsDto): Promise<Prisma.IaaiListingWhereInput> {
     const and: Prisma.IaaiListingWhereInput[] = [];
     const list = (v: unknown): string[] => (Array.isArray(v) ? v : typeof v === 'string' && v ? v.split(',') : []).map((s) => String(s).trim()).filter(Boolean);
     const inList = (field: string, v: unknown) => {
@@ -196,6 +237,8 @@ export class IaaiListingsService {
     inList('locationState', q.locationState);
     inList('primaryDamage', q.damageDescription);
     inList('saleDocument', q.saleTitleType);
+    const byCategory = await this.titleCategoryWhere(list(q.titleCategory));
+    if (byCategory) and.push(byCategory);
     if (q.transmission) and.push({ transmission: q.transmission });
     if (q.fuelType) and.push({ fuelType: q.fuelType });
     if (q.saleStatus) and.push({ vehicleStatus: q.saleStatus });
