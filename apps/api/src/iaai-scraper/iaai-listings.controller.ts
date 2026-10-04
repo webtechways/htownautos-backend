@@ -20,9 +20,8 @@ export class IaaiListingsController {
 
   @Get('filters')
   @ApiOperation({ summary: 'Facets with counts, cascading by make/model' })
-  filters(@Query('make') make?: string, @Query('model') model?: string) {
-    const list = (v?: string) => (v ? v.split(',').map((s) => s.trim()).filter(Boolean) : undefined);
-    return this.service.facets(list(make), list(model));
+  filters(@Query() q: SearchAuctionsDto) {
+    return this.service.filters(q);
   }
 
   @Get('get-gallery/:stock')

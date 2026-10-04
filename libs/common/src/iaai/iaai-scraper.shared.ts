@@ -234,3 +234,22 @@ export function iaaiGalleryImages(sourceUrls: unknown): { sequence: number; thum
   const urls = Array.isArray(sourceUrls) ? sourceUrls.filter((u): u is string => typeof u === 'string' && /^https?:\/\//.test(u)) : [];
   return urls.map((url, i) => ({ sequence: i + 1, thumbnail: iaaiResize(url, 320, 240), fullSize: url }));
 }
+
+/**
+ * An IAAI auction instant as Copart's sale fields, in Central time (the
+ * business's zone): saleDate YYYYMMDD, "10/07/2026", "MONDAY", "0830" (24 h).
+ */
+export function iaaiSaleParts(d: Date | null): { saleDate: number | null; saleDateFormatted: string | null; dayOfWeek: string | null; saleTime: string | null } {
+  if (!d) return { saleDate: null, saleDateFormatted: null, dayOfWeek: null, saleTime: null };
+  const p = Object.fromEntries(
+    new Intl.DateTimeFormat('en-US', { timeZone: 'America/Chicago', year: 'numeric', month: '2-digit', day: '2-digit', weekday: 'long', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
+      .formatToParts(d)
+      .map((x) => [x.type, x.value]),
+  );
+  return {
+    saleDate: Number(`${p.year}${p.month}${p.day}`),
+    saleDateFormatted: `${p.month}/${p.day}/${p.year}`,
+    dayOfWeek: p.weekday ? String(p.weekday).toUpperCase() : null,
+    saleTime: `${p.hour}${p.minute}`,
+  };
+}

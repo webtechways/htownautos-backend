@@ -342,6 +342,14 @@ export class PrismaService implements OnModuleInit, OnModuleDestroy {
     return this.prisma.iaaiScraperConfig;
   }
 
+  get iaaiFavorite() {
+    return this.prisma.iaaiFavorite;
+  }
+
+  get auctionListingGroupIaaiItem() {
+    return this.prisma.auctionListingGroupIaaiItem;
+  }
+
   get iaaiScrapeRun() {
     return this.prisma.iaaiScrapeRun;
   }

@@ -2,6 +2,7 @@ import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '@htownautos/prisma';
+import { IaaiIndexService } from '@htownautos/opensearch';
 import {
   BIDEXPORT_FILTER_URL,
   ProxyService,
@@ -54,13 +55,80 @@ export class IaaiScraperService implements OnModuleInit {
   private readonly logger = new Logger(IaaiScraperService.name);
   private busy = false;
 
+  private reindexing = false;
+  private photosBusy = false;
+  /** Photos copied after this instant still have to reach the index. */
+  private photosSyncedTo = new Date(Date.now() - 2 * 3600_000);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly proxy: ProxyService,
+    private readonly index: IaaiIndexService,
   ) {}
 
   async onModuleInit() {
-    await this.config();
+    const cfg = await this.config();
+    // A reindex that was running when the process died: run it again.
+    if (cfg.reindexStatus === 'running') {
+      await this.prisma.iaaiScraperConfig.update({ where: { id: 'singleton' }, data: { reindexRequestedAt: new Date() } });
+    }
+  }
+
+  // ── OpenSearch ─────────────────────────────────────────────────────────
+
+  /** Runs a reindex requested from the UI (Re-index / Delete & Re-index). */
+  @Cron(CronExpression.EVERY_10_SECONDS)
+  async reindexTick(): Promise<void> {
+    if (this.reindexing) return;
+    const cfg = await this.prisma.iaaiScraperConfig.findUnique({ where: { id: 'singleton' } });
+    if (!cfg?.reindexRequestedAt) return;
+    if (cfg.reindexStartedAt && cfg.reindexStartedAt >= cfg.reindexRequestedAt) return;
+    this.reindexing = true;
+    const startedAt = new Date();
+    try {
+      await this.prisma.iaaiScraperConfig.update({
+        where: { id: 'singleton' },
+        data: { reindexStatus: 'running', reindexStartedAt: startedAt, reindexFinishedAt: null, reindexDone: 0, reindexTotal: 0, reindexError: null },
+      });
+      this.logger.log(`[IaaiIndex] reindex started${cfg.reindexRecreate ? ' (recreate)' : ''}`);
+      const done = await this.index.reindexAll(cfg.reindexRecreate, async (d, total) => {
+        await this.prisma.iaaiScraperConfig.update({ where: { id: 'singleton' }, data: { reindexDone: d, reindexTotal: total } });
+      });
+      await this.prisma.iaaiScraperConfig.update({
+        where: { id: 'singleton' },
+        data: { reindexStatus: 'done', reindexFinishedAt: new Date(), reindexDone: done, reindexRecreate: false },
+      });
+      this.logger.log(`[IaaiIndex] reindex done: ${done} lots`);
+    } catch (err) {
+      const msg = (err as Error).message.slice(0, 500);
+      await this.prisma.iaaiScraperConfig.update({ where: { id: 'singleton' }, data: { reindexStatus: 'failed', reindexFinishedAt: new Date(), reindexError: msg } });
+      this.logger.error(`[IaaiIndex] reindex failed: ${msg}`);
+    } finally {
+      this.reindexing = false;
+    }
+  }
+
+  /** Photos the image cache copied since the last sync → refresh those documents. */
+  @Cron('*/2 * * * *')
+  async syncPhotosToIndex(): Promise<void> {
+    if (this.photosBusy || this.reindexing) return;
+    this.photosBusy = true;
+    try {
+      const since = this.photosSyncedTo;
+      const rows = await this.prisma.iaaiListing.findMany({
+        where: { imagesUpdatedAt: { gt: since }, isActive: true },
+        orderBy: { imagesUpdatedAt: 'asc' },
+        take: 2000,
+        select: { stockNumber: true, imagesUpdatedAt: true },
+      });
+      if (!rows.length) return;
+      await this.index.indexStocks(rows.map((r) => r.stockNumber));
+      this.photosSyncedTo = rows[rows.length - 1].imagesUpdatedAt ?? since;
+    } catch (err) {
+      this.logger.warn(`[IaaiIndex] photo sync failed: ${(err as Error).message}`);
+    } finally {
+      this.photosBusy = false;
+    }
   }
 
   private async config(): Promise<Config> {
@@ -165,7 +233,10 @@ export class IaaiScraperService implements OnModuleInit {
         continue;
       }
 
-      const { created, updated } = await this.store(page.data, cfg.downloadImages);
+      const { created, updated, stocks } = await this.store(page.data, cfg.downloadImages);
+      // Keep OpenSearch in step page by page. A failure here never stops the
+      // pass: the next pass or a manual reindex catches up.
+      await this.index.indexStocks(stocks).catch((err) => this.logger.warn(`[IaaiIndex] page index failed: ${(err as Error).message}`));
       pagesThisSegment += 1;
       const nextSkip = run.nextSkip + pageSize;
       run = await this.prisma.iaaiScrapeRun.update({
@@ -220,9 +291,9 @@ export class IaaiScraperService implements OnModuleInit {
    * image cache (Settings → Image Cache downloads them). A lot that already
    * has its photos is never queued again, even if IAAI changes the URLs.
    */
-  private async store(items: Record<string, any>[], queuePhotos: boolean): Promise<{ created: number; updated: number }> {
+  private async store(items: Record<string, any>[], queuePhotos: boolean): Promise<{ created: number; updated: number; stocks: string[] }> {
     const mapped = items.map(mapBidexportItem).filter((m): m is NonNullable<typeof m> => !!m);
-    if (!mapped.length) return { created: 0, updated: 0 };
+    if (!mapped.length) return { created: 0, updated: 0, stocks: [] };
     const unique = [...new Map(mapped.map((m) => [m.stockNumber, m])).values()];
 
     const existing = await this.prisma.iaaiListing.findMany({
@@ -300,7 +371,7 @@ export class IaaiScraperService implements OnModuleInit {
         });
       }
     }
-    return { created: fresh.length, updated: old.length };
+    return { created: fresh.length, updated: old.length, stocks: unique.map((m) => m.stockNumber) };
   }
 
   /**
@@ -310,10 +381,12 @@ export class IaaiScraperService implements OnModuleInit {
    */
   private async markInactive(cfg: Config): Promise<number> {
     if (cfg.inactiveAfterHours <= 0) return 0;
-    const res = await this.prisma.iaaiListing.updateMany({
-      where: { isActive: true, lastSeenAt: { lt: new Date(Date.now() - cfg.inactiveAfterHours * 3600_000) } },
-      data: { isActive: false },
-    });
+    const where = { isActive: true, lastSeenAt: { lt: new Date(Date.now() - cfg.inactiveAfterHours * 3600_000) } };
+    const gone = await this.prisma.iaaiListing.findMany({ where, select: { stockNumber: true } });
+    if (!gone.length) return 0;
+    const res = await this.prisma.iaaiListing.updateMany({ where, data: { isActive: false } });
+    // Sold / withdrawn lots leave the listing's index too.
+    await this.index.removeStocks(gone.map((g) => g.stockNumber)).catch(() => 0);
     return res.count;
   }
 }

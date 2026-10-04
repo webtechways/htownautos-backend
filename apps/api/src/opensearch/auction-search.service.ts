@@ -85,6 +85,9 @@ export interface AuctionSitemapPage {
   items: { lot: string; saleDate: number | null }[];
 }
 
+/** Bucket key for lots with no title value (see the titleTypes aggregation). */
+const NO_TITLE = '__no_title__';
+
 @Injectable()
 export class AuctionSearchService {
   private readonly logger = new Logger(AuctionSearchService.name);
@@ -100,7 +103,11 @@ export class AuctionSearchService {
     private readonly precios: PricePredictionService,
   ) {}
 
-  async search(dto: SearchAuctionsDto): Promise<AuctionSearchResult> {
+  /**
+   * `index` lets the IAAI listing run the exact same query, facets and sorting
+   * over its own index (iaai_listings, same document shape). Default: Copart.
+   */
+  async search(dto: SearchAuctionsDto, index: string = AUCTION_INDEX_NAME, titleClause?: any): Promise<AuctionSearchResult> {
     const { page = 1, limit = 25, sortBy = 'createdAt', sortOrder = 'desc' } = dto;
     const from = (page - 1) * limit;
 
@@ -158,14 +165,14 @@ export class AuctionSearchService {
     }
 
     const query = this.buildQuery(
-      dto, carfaxSourceIds, inspectableYardNames, titleOverrides, undefined, servedPca);
+      dto, carfaxSourceIds, inspectableYardNames, titleOverrides, undefined, servedPca, titleClause);
 
     // Build sort
     const sort = this.buildSort(sortBy, sortOrder);
 
     // Build aggregations if requested
     const aggs = dto.includeAggregations
-      ? this.buildAggregations(dto, carfaxSourceIds, inspectableYardNames, titleOverrides)
+      ? this.buildAggregations(dto, carfaxSourceIds, inspectableYardNames, titleOverrides, titleClause)
       : undefined;
 
     const searchBody: any = {
@@ -193,7 +200,7 @@ export class AuctionSearchService {
     }
 
     try {
-      const result = await this.openSearchService.search(AUCTION_INDEX_NAME, searchBody);
+      const result = await this.openSearchService.search(index, searchBody);
 
       const data: UnifiedAuction[] = result.hits.hits.map((hit: any) => hit._source);
       await this.hydrateMainImages(data);
@@ -267,6 +274,12 @@ export class AuctionSearchService {
     titleOverrides?: TitleOverrides,
     omitFacet?: FacetKey,
     servedPca?: string | null,
+    /**
+     * Ready-made clause for the title category filter. The IAAI index stores
+     * title DOCUMENTS ("CLEAR", "SALVAGE") rather than Copart codes, so its
+     * caller resolves the categories itself; Copart passes nothing.
+     */
+    titleClause?: any,
   ): any {
     const must: any[] = [];
     const filter: any[] = [];
@@ -504,7 +517,9 @@ export class AuctionSearchService {
     // "unknown" → any doc whose code is NOT in the known set (incl. missing).
     // The prod index stores codes UPPERCASE (dynamic mapping, case-sensitive)
     // while a fresh index lowercases them (normalizer); match both cases.
-    if (keep('title') && dto.titleCategory && dto.titleCategory.length > 0) {
+    if (keep('title') && titleClause && dto.titleCategory && dto.titleCategory.length > 0) {
+      filter.push(titleClause);
+    } else if (keep('title') && dto.titleCategory && dto.titleCategory.length > 0) {
       const bothCases = (arr: string[]) =>
         Array.from(new Set(arr.flatMap((c) => [c.toLowerCase(), c.toUpperCase()])));
       const cats = dto.titleCategory;
@@ -713,6 +728,7 @@ export class AuctionSearchService {
     carfaxSourceIds?: string[],
     inspectableYardNames?: string[],
     titleOverrides?: TitleOverrides,
+    titleClause?: any,
   ): any {
     const base = this.baseAggregations();
     const out: any = {};
@@ -737,6 +753,8 @@ export class AuctionSearchService {
               inspectableYardNames,
               titleOverrides,
               facet,
+              undefined,
+              titleClause,
             ),
             aggs: { unfiltered: definition },
           },
@@ -807,7 +825,9 @@ export class AuctionSearchService {
         terms: { field: 'saleStatus.keyword', size: 10 },
       },
       titleTypes: {
-        terms: { field: 'saleTitleType.keyword', size: 40 },
+        // `missing`: lots with no title value are "Unknown" for the filter
+        // (must_not known codes matches them), so they must count there too.
+        terms: { field: 'saleTitleType.keyword', size: 40, missing: NO_TITLE },
       },
       colors: {
         terms: { field: 'colorCanonical.keyword', size: 40 },
@@ -853,12 +873,14 @@ export class AuctionSearchService {
     };
 
     // Roll raw title-type buckets up into the primary categories (incl. unknown).
-    const titleTypeBuckets = parseBuckets(bucketsOf(aggs.titleTypes));
+    const allTitleBuckets = parseBuckets(bucketsOf(aggs.titleTypes));
+    // The no-title bucket only feeds the Unknown category, never a code option.
+    const titleTypeBuckets = allTitleBuckets.filter((b) => b.key !== NO_TITLE);
     const categoryCounts = Object.fromEntries(
       TITLE_CATEGORIES.map((cat) => [cat, 0]),
     ) as Record<TitleCategory, number>;
-    for (const b of titleTypeBuckets) {
-      categoryCounts[deriveTitleCategory(String(b.key), titleOverrides)] += b.count;
+    for (const b of allTitleBuckets) {
+      categoryCounts[b.key === NO_TITLE ? 'unknown' : deriveTitleCategory(String(b.key), titleOverrides)] += b.count;
     }
     const titleCategories = (Object.keys(categoryCounts) as TitleCategory[])
       .map((key) => ({ key, count: categoryCounts[key] }))
@@ -912,10 +934,10 @@ export class AuctionSearchService {
    * Get filter options (distinct values) for building UI filters
    * Supports cascading filters - when make is selected, models are filtered to that make
    */
-  async getFilterOptions(dto?: SearchAuctionsDto): Promise<AuctionAggregations> {
+  async getFilterOptions(dto?: SearchAuctionsDto, index: string = AUCTION_INDEX_NAME, titleClause?: any): Promise<AuctionAggregations> {
     const titleOverrides = await this.titleMapping.getOverrides();
     // Build query based on current filter selections for cascading
-    const query = dto ? this.buildQuery(dto, undefined, undefined, titleOverrides) : { match_all: {} };
+    const query = dto ? this.buildQuery(dto, undefined, undefined, titleOverrides, undefined, undefined, titleClause) : { match_all: {} };
 
     const searchBody: any = {
       size: 0,
@@ -923,12 +945,12 @@ export class AuctionSearchService {
       // Same rule as the main search: a facet the user is filtering on must not
       // filter its own option list, or it collapses to the current selection.
       aggs: dto
-        ? this.buildAggregations(dto, undefined, undefined, titleOverrides)
+        ? this.buildAggregations(dto, undefined, undefined, titleOverrides, titleClause)
         : this.baseAggregations(),
     };
 
     try {
-      const result = await this.openSearchService.search(AUCTION_INDEX_NAME, searchBody);
+      const result = await this.openSearchService.search(index, searchBody);
       return this.parseAggregations(result.aggregations, titleOverrides);
     } catch (error) {
       this.logger.error(`Error getting filter options: ${error.message}`);

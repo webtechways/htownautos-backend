@@ -135,5 +135,6 @@ export {
   zonedClock,
   iaaiResize,
   iaaiGalleryImages,
+  iaaiSaleParts,
 } from './iaai/iaai-scraper.shared';
 export type { IaaiSchedule, IaaiMappedListing } from './iaai/iaai-scraper.shared';

@@ -1,8 +1,10 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '@htownautos/prisma';
-import { deriveTitleCategory, iaaiGalleryImages } from '@htownautos/common';
+import { deriveTitleCategory, iaaiGalleryImages, iaaiSaleParts } from '@htownautos/common';
 import { TitleMappingService } from '../title-mapping/title-mapping.service';
+import { IAAI_INDEX_NAME, IaaiIndexService } from '@htownautos/opensearch';
+import { AuctionSearchService } from '../opensearch/auction-search.service';
 import { SearchAuctionsDto } from '../opensearch/dto/search-auctions.dto';
 
 type Row = Prisma.IaaiListingGetPayload<{}>;
@@ -11,22 +13,6 @@ type Agg = { key: string | number; count: number };
 const TZ = 'America/Chicago';
 const FACET_TTL_MS = 2 * 60_000;
 const FACET_LIMIT = 500;
-
-/** Central-time parts of an auction instant, in Copart's format: YYYYMMDD, "MONDAY", "0830" (24 h). */
-function saleParts(d: Date | null) {
-  if (!d) return { saleDate: null, saleDateFormatted: null, dayOfWeek: null, saleTime: null };
-  const p = Object.fromEntries(
-    new Intl.DateTimeFormat('en-US', { timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit', weekday: 'long', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
-      .formatToParts(d)
-      .map((x) => [x.type, x.value]),
-  );
-  return {
-    saleDate: Number(`${p.year}${p.month}${p.day}`),
-    saleDateFormatted: `${p.month}/${p.day}/${p.year}`,
-    dayOfWeek: p.weekday ? p.weekday.toUpperCase() : null,
-    saleTime: `${p.hour}${p.minute}`,
-  };
-}
 
 /** YYYYMMDD (a day in Central time) → the UTC instant that day starts. */
 function centralDayStart(yyyymmdd: number): Date {
@@ -56,10 +42,67 @@ export class IaaiListingsService {
 
   private titleDocsCache: { at: number; docs: (string | null)[] } | null = null;
 
+  private indexCount: { at: number; n: number } | null = null;
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly titleMapping: TitleMappingService,
+    private readonly auctionSearch: AuctionSearchService,
+    private readonly iaaiIndex: IaaiIndexService,
   ) {}
+
+  /**
+   * Search and facets run on OpenSearch (index iaai_listings) with the Copart
+   * engine — same query, facets and sort as /auctions/search — once the index
+   * holds documents. Until the first index (or if OpenSearch fails) they fall
+   * back to Postgres, so the page never goes blank.
+   */
+  private async useIndex(): Promise<boolean> {
+    if (!this.indexCount || Date.now() - this.indexCount.at > 60_000) {
+      this.indexCount = { at: Date.now(), n: await this.iaaiIndex.count() };
+    }
+    return this.indexCount.n > 0;
+  }
+
+  /**
+   * The title-category filter for the index: IAAI stores title documents
+   * (CLEAR, SALVAGE…), not Copart codes, so the categories are resolved here
+   * with the same classifier the card label and the facet counts use.
+   */
+  private async indexTitleClause(q: SearchAuctionsDto): Promise<any> {
+    const cats = (Array.isArray(q.titleCategory) ? q.titleCategory : []) as string[];
+    if (!cats.length) return undefined;
+    const overrides = await this.titleMapping.getOverrides();
+    const docs = (await this.titleDocs()).filter((d) => cats.includes(deriveTitleCategory(d, overrides)));
+    const named = docs.filter((d): d is string => !!d);
+    const should: any[] = [];
+    if (named.length) should.push({ terms: { 'saleTitleType.keyword': named } });
+    if (docs.includes(null)) should.push({ bool: { must_not: { exists: { field: 'saleTitleType' } } } });
+    return should.length ? { bool: { should, minimum_should_match: 1 } } : { bool: { must_not: { match_all: {} } } };
+  }
+
+  async search(q: SearchAuctionsDto) {
+    if (await this.useIndex()) {
+      try {
+        return await this.auctionSearch.search(q, IAAI_INDEX_NAME, await this.indexTitleClause(q));
+      } catch {
+        // fall through to Postgres
+      }
+    }
+    return this.searchDb(q);
+  }
+
+  async filters(q: SearchAuctionsDto) {
+    if (await this.useIndex()) {
+      try {
+        return await this.auctionSearch.getFilterOptions(q, IAAI_INDEX_NAME, await this.indexTitleClause(q));
+      } catch {
+        // fall through to Postgres
+      }
+    }
+    const list = (v: unknown) => (Array.isArray(v) ? v : typeof v === 'string' && v ? v.split(',') : undefined) as string[] | undefined;
+    return this.facets(list(q.make), list(q.model));
+  }
 
   /**
    * IAAI's title documents (CLEAR, SALVAGE, NON-REPAIRABLE, BILL OF SALE…),
@@ -89,7 +132,7 @@ export class IaaiListingsService {
     return or.length ? { OR: or } : { stockNumber: { in: [] } };
   }
 
-  async search(q: SearchAuctionsDto) {
+  async searchDb(q: SearchAuctionsDto) {
     const page = Math.max(1, Number(q.page) || 1);
     const limit = Math.min(100, Math.max(1, Number(q.limit) || 25));
     const where = await this.where(q);
@@ -299,7 +342,7 @@ export class IaaiListingsService {
       indexedAt: r.lastSeenAt,
       damageDescription: r.primaryDamage,
       secondaryDamage: r.secondaryDamage,
-      ...saleParts(r.auctionAt),
+      ...iaaiSaleParts(r.auctionAt),
       saleStatus: r.vehicleStatus,
       saleTitleState: r.certState,
       saleTitleType: r.saleDocument,

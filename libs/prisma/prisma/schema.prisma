@@ -539,6 +539,7 @@ model Tenant {
   vehicleStatuses         VehicleStatus[]
   vehicles                Vehicle[]
   auctionFavorites        AuctionFavorite[]
+  iaaiFavorites           IaaiFavorite[]
   buyerFavorites          BuyerFavorite[]
   vehicleInspections      VehicleInspection[]
   auctionListingGroups    AuctionListingGroup[]
@@ -3553,6 +3554,8 @@ model AuctionListingGroup {
 
   tenant Tenant                    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   items  AuctionListingGroupItem[]
+  /// IAAI lots in the group (own table: items has a FK to the Copart listings).
+  iaaiItems AuctionListingGroupIaaiItem[]
 
   @@unique([tenantId, name])
   @@index([tenantId])
@@ -5799,6 +5802,8 @@ model IaaiListing {
   imagesUpdatedAt DateTime?
 
   raw             Json
+  favorites       IaaiFavorite[]
+  groupItems      AuctionListingGroupIaaiItem[]
   isActive        Boolean   @default(true)
   sourceCreatedAt DateTime?
   firstSeenAt     DateTime  @default(now())
@@ -5851,6 +5856,16 @@ model IaaiScraperConfig {
   imageMaxAttempts   Int     @default(3)
   imagesOnlyUpcoming Boolean @default(true) // skip lots whose auction already passed
 
+  // OpenSearch (index iaai_listings). The UI requests a reindex; data-sync runs it.
+  reindexRequestedAt DateTime?
+  reindexRecreate    Boolean   @default(false)
+  reindexStatus      String    @default("idle") // idle | running | done | failed
+  reindexStartedAt   DateTime?
+  reindexFinishedAt  DateTime?
+  reindexDone        Int       @default(0)
+  reindexTotal       Int       @default(0)
+  reindexError       String?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -5884,4 +5899,34 @@ model IaaiScrapeRun {
   @@index([status])
   @@index([createdAt])
   @@map("iaai_scrape_runs")
+}
+
+/// A user's favorite IAAI lot (Copart favorites are AuctionFavorite, keyed by lot number).
+model IaaiFavorite {
+  id          String   @id @default(uuid())
+  tenantId    String
+  userId      String
+  stockNumber String
+  createdAt   DateTime @default(now())
+
+  tenant  Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  listing IaaiListing @relation(fields: [stockNumber], references: [stockNumber], onDelete: Cascade)
+
+  @@unique([tenantId, userId, stockNumber])
+  @@index([tenantId, userId])
+  @@map("iaai_favorites")
+}
+
+/// An IAAI lot inside a listing group (sub-listing). Groups are shared with Copart.
+model AuctionListingGroupIaaiItem {
+  groupId     String   @db.Uuid
+  stockNumber String
+  createdAt   DateTime @default(now())
+
+  group   AuctionListingGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  listing IaaiListing         @relation(fields: [stockNumber], references: [stockNumber], onDelete: Cascade)
+
+  @@id([groupId, stockNumber])
+  @@index([stockNumber])
+  @@map("auction_listing_group_iaai_items")
 }

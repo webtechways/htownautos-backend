@@ -2,6 +2,9 @@ import { Injectable, NotFoundException, BadRequestException } from '@nestjs/comm
 import { PrismaService } from '@htownautos/prisma';
 import { FavoriteType } from './dto/toggle-favorite.dto';
 
+/** IAAI listing ids come as `iaai-<stock>` from the listing page, or the bare stock. */
+const iaaiStock = (id: string) => id.replace(/^iaai-/, '');
+
 @Injectable()
 export class FavoritesService {
   constructor(
@@ -48,6 +51,18 @@ export class FavoritesService {
       return { id: favorite.id, type, listingId, added: true };
     }
 
+    if (type === FavoriteType.IAAI) {
+      const stockNumber = iaaiStock(listingId);
+      const listing = await this.prisma.iaaiListing.findUnique({ where: { stockNumber }, select: { stockNumber: true } });
+      if (!listing) throw new NotFoundException(`IAAI lot ${stockNumber} not found`);
+      const favorite = await this.prisma.iaaiFavorite.upsert({
+        where: { tenantId_userId_stockNumber: { tenantId, userId, stockNumber } },
+        update: {},
+        create: { tenantId, userId, stockNumber },
+      });
+      return { id: favorite.id, type, listingId, added: true };
+    }
+
     throw new BadRequestException(`Invalid favorite type: ${type}`);
   }
 
@@ -76,6 +91,11 @@ export class FavoritesService {
           },
         });
       }
+      return { type, listingId, removed: true };
+    }
+
+    if (type === FavoriteType.IAAI) {
+      await this.prisma.iaaiFavorite.deleteMany({ where: { tenantId, userId, stockNumber: iaaiStock(listingId) } });
       return { type, listingId, removed: true };
     }
 
@@ -110,6 +130,11 @@ export class FavoritesService {
       return listings.map((l) => l.lotNumber.toString());
     }
 
+    if (type === FavoriteType.IAAI) {
+      const favorites = await this.prisma.iaaiFavorite.findMany({ where: { tenantId, userId }, select: { stockNumber: true } });
+      return favorites.map((f) => f.stockNumber);
+    }
+
     return [];
   }
 
@@ -139,6 +164,13 @@ export class FavoritesService {
             lotNumber: listing.lotNumber,
           },
         },
+      });
+      return !!favorite;
+    }
+
+    if (type === FavoriteType.IAAI) {
+      const favorite = await this.prisma.iaaiFavorite.findUnique({
+        where: { tenantId_userId_stockNumber: { tenantId, userId, stockNumber: iaaiStock(listingId) } },
       });
       return !!favorite;
     }

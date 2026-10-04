@@ -5,6 +5,7 @@ import {
   Patch,
   Delete,
   Body,
+  Query,
   Param,
   UseGuards,
 } from '@nestjs/common';
@@ -64,8 +65,9 @@ export class ListingGroupsController {
   async getGroupsForLot(
     @CurrentTenant() tenantId: string,
     @Param('lotNumber') lotNumber: string,
+    @Query('auction') auction?: string,
   ) {
-    return this.service.getGroupsForLot(tenantId, lotNumber);
+    return this.service.getGroupsForLot(tenantId, lotNumber, auction);
   }
 
   @Get(':id/items')
@@ -73,8 +75,9 @@ export class ListingGroupsController {
   async getItems(
     @CurrentTenant() tenantId: string,
     @Param('id') id: string,
+    @Query('auction') auction?: string,
   ) {
-    return this.service.getItems(tenantId, id);
+    return this.service.getItems(tenantId, id, auction);
   }
 
   @Post(':id/items')
@@ -83,8 +86,9 @@ export class ListingGroupsController {
     @CurrentTenant() tenantId: string,
     @Param('id') id: string,
     @Body() dto: AddItemsToGroupDto,
+    @Query('auction') auction?: string,
   ) {
-    return this.service.addItems(tenantId, id, dto.lotNumbers);
+    return this.service.addItems(tenantId, id, dto.lotNumbers, auction);
   }
 
   @Delete(':id/items/:lotNumber')
@@ -93,7 +97,8 @@ export class ListingGroupsController {
     @CurrentTenant() tenantId: string,
     @Param('id') id: string,
     @Param('lotNumber') lotNumber: string,
+    @Query('auction') auction?: string,
   ) {
-    return this.service.removeItem(tenantId, id, lotNumber);
+    return this.service.removeItem(tenantId, id, lotNumber, auction);
   }
 }

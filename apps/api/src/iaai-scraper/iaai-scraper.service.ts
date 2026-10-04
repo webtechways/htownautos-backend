@@ -3,12 +3,30 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '@htownautos/prisma';
 import { inIaaiWindow, nextScheduledStart } from '@htownautos/common';
 import { UpdateIaaiScraperConfigDto } from './iaai-scraper.dto';
+import { IaaiIndexService } from '@htownautos/opensearch';
 
 const ACTIVE = ['queued', 'running'];
 
 @Injectable()
 export class IaaiScraperService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly index: IaaiIndexService,
+  ) {}
+
+  /**
+   * Ask data-sync to re-index every active lot into OpenSearch. `recreate`
+   * drops the index first (so documents of lots that are gone disappear).
+   */
+  async reindex(recreate: boolean) {
+    await this.config();
+    const cfg = await this.prisma.iaaiScraperConfig.findUnique({ where: { id: 'singleton' } });
+    if (cfg?.reindexStatus === 'running') throw new BadRequestException('A reindex is already running');
+    return this.prisma.iaaiScraperConfig.update({
+      where: { id: 'singleton' },
+      data: { reindexRequestedAt: new Date(), reindexRecreate: recreate, reindexStatus: 'queued', reindexError: null },
+    });
+  }
 
   private config() {
     return this.prisma.iaaiScraperConfig.upsert({ where: { id: 'singleton' }, create: {}, update: {} });
@@ -24,6 +42,7 @@ export class IaaiScraperService {
       this.prisma.iaaiListing.groupBy({ by: ['isActive'], _count: { _all: true } }),
       this.prisma.iaaiListing.groupBy({ by: ['imagesStatus'], _count: { _all: true } }),
     ]);
+    const indexed = await this.index.count();
     const lastCompleted = await this.prisma.iaaiScrapeRun.findFirst({ where: { status: 'completed' }, orderBy: { finishedAt: 'desc' } });
     const interrupted = await this.prisma.iaaiScrapeRun.findFirst({ where: { status: 'interrupted' }, orderBy: { createdAt: 'desc' } });
 
@@ -48,6 +67,15 @@ export class IaaiScraperService {
       lastCompleted,
       recentRuns: lastRuns,
       listings: { total: active + inactive, active, inactive },
+      index: {
+        documents: indexed,
+        status: cfg.reindexStatus,
+        done: cfg.reindexDone,
+        total: cfg.reindexTotal,
+        startedAt: cfg.reindexStartedAt,
+        finishedAt: cfg.reindexFinishedAt,
+        error: cfg.reindexError,
+      },
       images: {
         none: byImages.none ?? 0,
         pending: byImages.pending ?? 0,

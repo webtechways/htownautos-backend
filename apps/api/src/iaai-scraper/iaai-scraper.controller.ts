@@ -39,6 +39,12 @@ export class IaaiScraperController {
     return this.service.stop();
   }
 
+  @Post('reindex')
+  @ApiOperation({ summary: 'Re-index all active IAAI lots into OpenSearch (recreate = delete the index first)' })
+  reindex(@Body() body: { recreate?: boolean }) {
+    return this.service.reindex(!!body?.recreate);
+  }
+
   @Get('runs')
   @ApiOperation({ summary: 'Pass history, newest first' })
   runs(@Query('page') page?: string, @Query('limit') limit?: string) {
