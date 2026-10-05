@@ -136,12 +136,13 @@ export class SearchAuctionsDto {
   })
   yardName?: string[];
 
-  @ApiPropertyOptional({ description: 'Filter by seller name (comma-separated for multiple)' })
+  @ApiPropertyOptional({ description: 'Filter by seller name: comma-separated, or "|"-separated when a name contains a comma' })
   @IsOptional()
   @IsArray()
   @IsString({ each: true })
   @Transform(({ value }) => {
-    if (typeof value === 'string') return value.split(',');
+    // Some seller names carry commas ("SANTANDER BANK, NATIONAL ASSOC"): callers join those with "|".
+    if (typeof value === 'string') return value.split(value.includes('|') ? '|' : ',').filter(Boolean);
     return value;
   })
   sellerName?: string[];
