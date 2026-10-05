@@ -666,6 +666,19 @@ export class AuctionSearchService {
       filter.push({ range: { estRetailValue: rangeQuery } });
     }
 
+    // Current bid ceiling (alerts' "max cost"): a lot nobody has bid on yet is $0.
+    if (dto.bidMax !== undefined) {
+      filter.push({
+        bool: {
+          should: [
+            { range: { highBid: { lte: dto.bidMax } } },
+            { bool: { must_not: { exists: { field: 'highBid' } } } },
+          ],
+          minimum_should_match: 1,
+        },
+      });
+    }
+
     // Sale date range
     if (dto.saleDateFrom || dto.saleDateTo) {
       const rangeQuery: any = {};

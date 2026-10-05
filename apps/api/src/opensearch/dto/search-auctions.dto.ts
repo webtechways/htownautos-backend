@@ -324,6 +324,11 @@ export class SearchAuctionsDto {
   @Type(() => Number)
   priceMax?: number;
 
+  @ApiPropertyOptional({ description: 'Maximum current bid (lots with no bid yet count as $0)' })
+  @IsOptional()
+  @Type(() => Number)
+  bidMax?: number;
+
   @ApiPropertyOptional({ description: 'Sale date from (YYYYMMDD)' })
   @IsOptional()
   @Type(() => Number)

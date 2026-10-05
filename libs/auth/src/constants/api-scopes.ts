@@ -62,6 +62,7 @@ export const API_SCOPE_RESOURCES: ApiScopeResource[] = [
   { slug: 'nomenclators', label: 'Reference Data', description: 'Enums, makes/models, lookups (read-only)' },
   { slug: 'marketcheck', label: 'Market Data', description: 'MarketCheck vehicle market pricing (read-only)' },
   { slug: 'vehicle-history', label: 'Vehicle History Reports', description: 'Carfax / AutoCheck through the provider fallback chain (write = order a report, read = status and stored reports)' },
+  { slug: 'alert-sms', label: 'Alert Texts (SMS)', description: 'Send alert / verification texts from the dedicated alerts sender (partner sites)' },
   { slug: 'audit-log', label: 'Audit Logs', description: 'Activity and audit history (read-only)' },
 ];
 
