@@ -25,6 +25,24 @@ const DEFAULT_HEADERS: Record<string, string> = {
   'Accept-Language': 'en-US,en;q=0.9',
 };
 
+/**
+ * Las del que llama sustituyen a las de por defecto SIN distinguir mayusculas.
+ *
+ * Un spread normal deja `User-Agent` (defecto) y `user-agent` (llamador) a la
+ * vez; undici las junta en una sola cabecera con DOS navegadores distintos, e
+ * Imperva (iaai.com) lo toma por un bot y devuelve su pagina de desafio.
+ */
+export function mergeHeaders(
+  defaults: Record<string, string>,
+  overrides?: Record<string, string>,
+): Record<string, string> {
+  const out = new Map<string, [string, string]>();
+  for (const src of [defaults, overrides ?? {}]) {
+    for (const [k, v] of Object.entries(src)) out.set(k.toLowerCase(), [k, v]);
+  }
+  return Object.fromEntries([...out.values()]);
+}
+
 const DEFAULT_MAX_ATTEMPTS = 5;
 const CREDS_CACHE_MS = 5 * 60_000;
 // Hard cap per attempt so a slow/dead proxy can never hang the crawler loop.
@@ -80,7 +98,7 @@ export class ProxyService {
     const body = opts?.body;
     const timeoutMs = opts?.timeoutMs ?? REQUEST_TIMEOUT_MS;
     const maxAttempts = opts?.maxAttempts ?? DEFAULT_MAX_ATTEMPTS;
-    const headers = { ...DEFAULT_HEADERS, ...(opts?.headers ?? {}) };
+    const headers = mergeHeaders(DEFAULT_HEADERS, opts?.headers);
     let lastStatus: number | undefined;
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {

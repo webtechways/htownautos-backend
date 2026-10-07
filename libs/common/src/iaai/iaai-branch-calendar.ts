@@ -55,8 +55,14 @@ export function houstonYmd(at: Date): number {
 
 /** Saca el JSON embebido. Lanza si la pagina cambio y ya no esta. */
 export function extractIaaiLocationsJson(html: string): Array<Record<string, any>> {
+  // Imperva (Incapsula) responde 200 con una pagina de ~1 KB que solo trae su
+  // desafio. No se intenta resolver: se informa para verlo en la pantalla.
+  if (/_Incapsula_Resource|Incapsula incident ID/i.test(html)) {
+    const id = /incident(?:_| )ID:?\s*([\d-]+)/i.exec(html)?.[1];
+    throw new Error(`branchlocations: bloqueado por Imperva (Incapsula)${id ? `, incident ${id}` : ''}`);
+  }
   const m = /<script[^>]*id="locationsListVM"[^>]*>([\s\S]*?)<\/script>/.exec(html);
-  if (!m) throw new Error('branchlocations: no se encontro <script id="locationsListVM"> (la pagina cambio o es un bloqueo)');
+  if (!m) throw new Error('branchlocations: no se encontro <script id="locationsListVM"> (la pagina cambio)');
   const json = JSON.parse(m[1]);
   const values = Array.isArray(json) ? json : json?.$values;
   if (!Array.isArray(values)) throw new Error('branchlocations: locationsListVM sin $values');

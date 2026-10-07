@@ -28,8 +28,17 @@ describe('parseIaaiBranchCalendar', () => {
     expect(filas[0].raw).not.toHaveProperty('branchImages');
   });
 
-  it('pagina sin el JSON → error claro (bloqueo o cambio de pagina)', () => {
+  it('pagina sin el JSON → error claro (cambio de pagina)', () => {
     expect(() => parseIaaiBranchCalendar('<html>Access denied</html>')).toThrow(/locationsListVM/);
+  });
+
+  it('pagina de desafio de Imperva → error que lo dice', () => {
+    // Recorte real (2026-10-07) de lo que devuelve a una IP bloqueada.
+    const bloqueo =
+      '<html><head><script src="/aignor-best-not-he-Crace" async></script></head><body>' +
+      '<iframe id="main-iframe" src="/_Incapsula_Resource?SWUDNSAI=31&amp;edet=12">' +
+      'Request unsuccessful. Incapsula incident ID: 1663000830014489978-7573217157780726</iframe></body></html>';
+    expect(() => parseIaaiBranchCalendar(bloqueo)).toThrow(/Imperva.*1663000830014489978-7573217157780726/);
   });
 });
 

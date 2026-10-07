@@ -2436,8 +2436,9 @@ model IaaiCalendarConfig {
   refreshHours   Int       @default(6)
   /// Lanes candidatas por sede: a, b, c… (la fuente no las trae)
   lanesPerBranch Int       @default(8)
-  /// Pasar por el pool de Webshare (recomendado) o directo
-  useProxy       Boolean   @default(true)
+  /// Directo por defecto: la IP del servidor no la bloquea Imperva y parte de
+  /// las de Webshare si (pagina de desafio de Incapsula).
+  useProxy       Boolean   @default(false)
   lastFetchedAt  DateTime?
   lastCount      Int       @default(0)
   lastError      String?
