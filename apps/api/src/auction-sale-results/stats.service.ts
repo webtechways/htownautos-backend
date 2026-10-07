@@ -73,13 +73,25 @@ export class StatsService {
    * Copart (auction_sale_results) o IAAI (iaai_sale_results): mismas columnas,
    * asi que filtros, facetas y percentiles son el mismo codigo.
    */
-  private repo(source?: string): any {
-    return source === 'iaai' ? this.prisma.iaaiSaleResult : this.prisma.auctionSaleResult;
+  private repo(source?: string[] | string): any {
+    const a = this.auctionsOf(source);
+    if (a === 'both') return this.prisma.saleResultAll;
+    return a === 'iaai' ? this.prisma.iaaiSaleResult : this.prisma.auctionSaleResult;
   }
 
   /** Nombre de tabla para SQL crudo; nunca sale de los datos del usuario. */
-  private table(source?: string): string {
-    return source === 'iaai' ? 'iaai_sale_results' : 'auction_sale_results';
+  private table(source?: string[] | string): string {
+    const a = this.auctionsOf(source);
+    return a === 'both' ? 'sale_results_all' : a === 'iaai' ? 'iaai_sale_results' : 'auction_sale_results';
+  }
+
+  /** copart (por defecto), iaai, o las dos (vista sale_results_all). */
+  private auctionsOf(source?: string[] | string): 'copart' | 'iaai' | 'both' {
+    const list = Array.isArray(source) ? source : source ? [source] : [];
+    const c = list.includes('copart');
+    const i = list.includes('iaai');
+    if (c && i) return 'both';
+    return i ? 'iaai' : 'copart';
   }
 
   /**
@@ -127,7 +139,7 @@ export class StatsService {
 
     const totalPages = Math.ceil(total / limit) || 1;
     const result: any = {
-      data: rows.map((r) => this.serialize(r)),
+      data: rows.map((r: any) => this.serialize(r, dto.source)),
       meta: {
         page,
         limit,
@@ -163,7 +175,7 @@ export class StatsService {
       orderBy: [{ saleDate: 'desc' }, { createdAt: 'desc' }],
     });
     if (!row) throw new NotFoundException(`No sale result for lot ${lot}`);
-    return this.serialize(row);
+    return this.serialize(row, source);
   }
 
   /**
@@ -418,7 +430,7 @@ export class StatsService {
     const [
       makes, models, trims, years, states, bodyTypes, transmissions, fuelTypes,
       damageTypes, titleTypes, colors, cylinders, drivetrains, sellerCategories,
-      yards, sellers, runsDrivesOptions, soldBuckets,
+      yards, sellers, runsDrivesOptions, soldBuckets, auctionBuckets,
     ] = await Promise.all([
       scoped('make'),
       scoped('model'),
@@ -438,6 +450,9 @@ export class StatsService {
       scoped('sellerName'),
       scoped('runsDrives'),
       scoped('sold'),
+      // Las dos subastas siempre, con lo demas filtrado: es lo que pinta el
+      // filtro "Auctions" aunque solo una este seleccionada.
+      this.facetAuctions(dto),
     ]);
 
     // Derive title categories from raw saleTitleType buckets (same util as search)
@@ -457,7 +472,7 @@ export class StatsService {
     }));
 
     return {
-      sources: [],
+      sources: auctionBuckets,
       makes, models, trims, years, states, bodyTypes, transmissions, fuelTypes,
       damageTypes, saleStatuses, titleTypes, titleCategories, colors, cylinders,
       drivetrains, sellerCategories, yards, sellers,
@@ -582,7 +597,7 @@ export class StatsService {
   private async facet(
     field: string,
     where: Where,
-    source?: string,
+    source?: string[] | string,
   ): Promise<Array<{ key: string | number; count: number }>> {
     const rows: any[] = await this.repo(source).groupBy({
       by: [field],
@@ -595,9 +610,22 @@ export class StatsService {
       .sort((a, b) => b.count - a.count);
   }
 
-  private serialize(r: any) {
+  /** Ventas por subasta con el resto de filtros aplicados. */
+  private async facetAuctions(dto: QueryStatsDto): Promise<Array<{ key: string; count: number }>> {
+    const rows: any[] = await (this.prisma.saleResultAll.groupBy as any)({
+      by: ['auction'],
+      where: (await this.buildWhere(dto)) as any,
+      _count: { _all: true },
+    });
+    return rows.map((r) => ({ key: r.auction, count: r._count._all })).sort((a, b) => b.count - a.count);
+  }
+
+  private serialize(r: any, source?: string[] | string) {
+    const a = this.auctionsOf(source);
     return {
       id: r.id,
+      /** copart | iaai: con las dos mezcladas, de que subasta es cada fila. */
+      auction: r.auction ?? (a === 'iaai' ? 'iaai' : 'copart'),
       lot: r.lot.toString(),
       sourceId: r.lot.toString(),
       saleDate: r.saleDate,

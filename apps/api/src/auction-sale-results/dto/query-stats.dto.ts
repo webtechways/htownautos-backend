@@ -28,9 +28,12 @@ const bool = () =>
  * search filters (same promoted vehicle columns) and adds the Final Bid range.
  */
 export class QueryStatsDto {
-  @ApiPropertyOptional({ enum: ['copart', 'iaai'], default: 'copart', description: 'Which auction: copart → auction_sale_results, iaai → iaai_sale_results' })
-  @IsOptional() @IsIn(['copart', 'iaai'])
-  source?: 'copart' | 'iaai';
+  @ApiPropertyOptional({
+    description: 'Auctions, CSV: copart, iaai or copart,iaai (both). Default copart.',
+    example: 'copart,iaai',
+  })
+  @IsOptional() @csv() @IsArray() @IsIn(['copart', 'iaai'], { each: true })
+  source?: ('copart' | 'iaai')[];
 
   @ApiPropertyOptional({ default: 1 })
   @IsOptional() @Type(() => Number) @IsInt() @Min(1)

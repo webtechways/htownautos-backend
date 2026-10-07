@@ -1,5 +1,6 @@
 generator client {
-  provider = "prisma-client-js"
+  provider        = "prisma-client-js"
+  previewFeatures = ["views"]
 }
 
 datasource db {
@@ -2573,6 +2574,92 @@ model IaaiSaleResult {
   @@index([sellerCategory])
   @@map("iaai_sale_results")
 }
+
+/// Copart + IAAI sale results together (UNION ALL view, created by hand in
+/// migration 20261008000000_sale_results_all). Read-only. Used by Stats when
+/// both auctions are selected; `auction` = 'copart' | 'iaai'.
+view SaleResultAll {
+  auction           String
+  id  String
+  lot BigInt
+
+  // ── Incoming sale/auction data ──
+  saleDate         Int?
+  auctionSession   String?
+  saleLocationSlug String?
+  finalBid         Decimal?  @db.Decimal(12, 2)
+  askingPrice      Decimal?  @db.Decimal(12, 2)
+  reserve          Boolean?
+  sold             Boolean?
+  ticks            Int?
+  round            Int?
+  saleOrder        Int?
+  event            String?
+  pageUrl          String?
+  receivedAt       DateTime?
+
+  // ── Datos que solo trae el frame de Solace ──
+  /// Sala tal cual la nombra Copart, p.ej. `COPART024A`.
+  saleRoom        String?
+  /// `MINMET`: si la reserva quedo cubierta.
+  reserveMet      Boolean?
+  /// `APRFLG`: venta aprobada.
+  approved        Boolean?
+  buyerNo         String?
+  /// `BUYERST` no es del mismo tipo siempre: "NJ" en EE.UU., "19" en
+  /// internacionales. Se guarda como texto y ya.
+  buyerState      String?
+  buyerCountry    String?
+  itemNo          Int?
+  /// Instante en que Copart emitio el evento, distinto de cuando nos llego.
+  emittedAt       DateTime?
+  /// SOLDPEND: adjudicada pero a la espera de que el vendedor acepte la puja.
+  /// Un SOLD posterior del mismo lote la confirma y esto pasa a false.
+  pendingApproval Boolean?
+
+  // ── Vehicle snapshot promoted from auction_listings (for fast stats) ──
+  matched           Boolean
+  vin               String?
+  year              Int?
+  make              String?
+  model             String?
+  modelDetail       String?
+  trim              String?
+  bodyStyle         String?
+  color             String?
+  damageDescription String?
+  secondaryDamage   String?
+  saleTitleType     String?
+  saleTitleState    String?
+  odometer          Decimal? @db.Decimal(12, 1)
+  runsDrives        String?
+  engine            String?
+  transmission      String?
+  drive             String?
+  fuelType          String?
+  cylinders         String?
+  estRetailValue    Decimal? @db.Decimal(12, 2)
+  repairCost        Decimal? @db.Decimal(12, 2)
+  highBidAtSync     Decimal? @db.Decimal(12, 2)
+  yardNumber        Int?
+  yardName          String?
+  locationCity      String?
+  locationState     String?
+  locationZip       String?
+  sellerName        String?
+  sellerCategory    String?
+
+  // ── Full payloads (future-proofing / audit) ──
+  vehicleSnapshot Json?
+  raw             Json?
+
+  createdAt DateTime
+  updatedAt DateTime
+
+
+  @@map("sale_results_all")
+}
+
 
 /// Puja de IAAI CON importe (fuente con sesion). Las que llegan sin importe van
 /// a bid_no_price_iaai. Mismo id (`{order}-{sala}-{lote}-{MMDDYYYY}`) y misma
