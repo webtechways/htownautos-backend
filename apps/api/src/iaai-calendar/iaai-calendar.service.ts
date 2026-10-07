@@ -2,7 +2,13 @@ import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '@htownautos/prisma';
-import { ProxyService, iaaiLaneCodes, parseIaaiBranchCalendar } from '@htownautos/common';
+import {
+  ProxyService,
+  effectiveCalendarStatus,
+  iaaiLaneCodes,
+  parseIaaiBranchCalendar,
+  type CalendarStatus,
+} from '@htownautos/common';
 import { UpdateIaaiCalendarConfigDto } from './dto/update-iaai-calendar-config.dto';
 
 const CONFIG_ID = 'singleton';
@@ -30,10 +36,30 @@ const LIVE_HOURS = 8;
 
 export type IaaiCalendarStatus = 'upcoming' | 'live' | 'ended';
 
-export function iaaiStatusOf(startedAt: Date, now = Date.now()): IaaiCalendarStatus {
-  const t = startedAt.getTime();
-  if (now < t) return 'upcoming';
-  return now < t + LIVE_HOURS * 3_600_000 ? 'live' : 'ended';
+/** Filtro por estado EFECTIVO: manual > fin por ENDAUC > hora. */
+function whenWhere(when: string | undefined, now = Date.now()): Prisma.IaaiCalendarEntryWhereInput {
+  const ahora = new Date(now);
+  const desdeVivo = new Date(now - LIVE_HOURS * 3_600_000);
+  const auto = { manualStatus: null, endedAt: null };
+  switch (when) {
+    case 'live':
+      return { OR: [{ manualStatus: 'live' }, { ...auto, startedAt: { lte: ahora, gt: desdeVivo } }] };
+    case 'upcoming':
+      return { OR: [{ manualStatus: 'upcoming' }, { ...auto, startedAt: { gt: ahora } }] };
+    case 'past':
+      return {
+        OR: [
+          { manualStatus: 'ended' },
+          { manualStatus: null, OR: [{ endedAt: { not: null } }, { startedAt: { lte: desdeVivo } }] },
+        ],
+      };
+    case 'today': {
+      const hoy = Number(new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Chicago' }).format(ahora).replace(/-/g, ''));
+      return { saleDate: hoy };
+    }
+    default:
+      return {};
+  }
 }
 
 /**
@@ -176,14 +202,19 @@ export class IaaiCalendarService implements OnModuleInit {
   async status() {
     const cfg = await this.config();
     const ahora = new Date();
-    const [total, proximas, enVivo] = await Promise.all([
+    const n = ahora.getTime();
+    const [total, proximas, enVivo, terminadas, hoy] = await Promise.all([
       this.prisma.iaaiCalendarEntry.count(),
-      this.prisma.iaaiCalendarEntry.count({ where: { startedAt: { gt: ahora } } }),
-      this.prisma.iaaiCalendarEntry.count({
-        where: { startedAt: { lte: ahora, gt: new Date(ahora.getTime() - LIVE_HOURS * 3_600_000) } },
-      }),
+      this.prisma.iaaiCalendarEntry.count({ where: whenWhere('upcoming', n) }),
+      this.prisma.iaaiCalendarEntry.count({ where: whenWhere('live', n) }),
+      this.prisma.iaaiCalendarEntry.count({ where: whenWhere('past', n) }),
+      this.prisma.iaaiCalendarEntry.count({ where: whenWhere('today', n) }),
     ]);
-    return { config: cfg, fetching: this.fetching, counts: { total, upcoming: proximas, live: enVivo } };
+    return {
+      config: cfg,
+      fetching: this.fetching,
+      counts: { total, upcoming: proximas, live: enVivo, ended: terminadas, today: hoy },
+    };
   }
 
   /**
@@ -192,24 +223,17 @@ export class IaaiCalendarService implements OnModuleInit {
    */
   async list(opts: { when?: string; q?: string; page?: number; pageSize?: number }) {
     const ahora = Date.now();
-    const desdeVivo = new Date(ahora - LIVE_HOURS * 3_600_000);
-    const where: Prisma.IaaiCalendarEntryWhereInput = {};
-    if (opts.when === 'live') where.startedAt = { lte: new Date(ahora), gt: desdeVivo };
-    else if (opts.when === 'upcoming') where.startedAt = { gt: new Date(ahora) };
-    else if (opts.when === 'past') where.startedAt = { lte: desdeVivo };
-    else if (opts.when === 'today') {
-      const hoy = Number(new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Chicago' }).format(new Date()).replace(/-/g, ''));
-      where.saleDate = hoy;
-    }
+    const and: Prisma.IaaiCalendarEntryWhereInput[] = [whenWhere(opts.when, ahora)];
     if (opts.q?.trim()) {
       const q = opts.q.trim();
-      where.OR = [
+      and.push({ OR: [
         { branchName: { contains: q, mode: 'insensitive' } },
         { city: { contains: q, mode: 'insensitive' } },
         { state: { equals: q.toUpperCase() } },
         ...(/^\d+$/.test(q) ? [{ branchNumber: Number(q) }] : []),
-      ];
+      ] });
     }
+    const where: Prisma.IaaiCalendarEntryWhereInput = { AND: and };
     const pageSize = Math.min(Math.max(opts.pageSize ?? 50, 1), 200);
     const page = Math.max(opts.page ?? 1, 1);
     // Lo pasado, de mas reciente a mas viejo; lo demas, por orden de comienzo.
@@ -225,13 +249,29 @@ export class IaaiCalendarService implements OnModuleInit {
           id: true, auctionId: true, branchNumber: true, branchName: true, city: true, state: true,
           startedAt: true, saleDate: true, numberOfVehicles: true, auctionSchedule: true,
           publicAuction: true, isBranchVirtual: true, laneCodes: true, fetchedAt: true,
+          endedLanes: true, endedAt: true, manualStatus: true, manualStatusAt: true, manualStatusBy: true,
         },
       }),
       this.prisma.iaaiCalendarEntry.count({ where }),
     ]);
     return {
-      data: rows.map((r) => ({ ...r, status: iaaiStatusOf(r.startedAt, ahora) })),
+      data: rows.map((r) => ({ ...r, status: effectiveCalendarStatus(r, ahora) })),
       meta: { total, page, pageSize, pages: Math.max(1, Math.ceil(total / pageSize)) },
     };
+  }
+
+  /** Estado a mano; `auto` lo quita. live/upcoming reabren (borran los ENDAUC). */
+  async setStatus(ids: string[], status: CalendarStatus | 'auto', by: string | null) {
+    const data: Prisma.IaaiCalendarEntryUpdateManyMutationInput =
+      status === 'auto'
+        ? { manualStatus: null, manualStatusAt: null, manualStatusBy: null }
+        : {
+            manualStatus: status,
+            manualStatusAt: new Date(),
+            manualStatusBy: by,
+            ...(status !== 'ended' ? { endedLanes: [], endedAt: null } : {}),
+          };
+    const r = await this.prisma.iaaiCalendarEntry.updateMany({ where: { id: { in: ids } }, data });
+    return { updated: r.count };
   }
 }

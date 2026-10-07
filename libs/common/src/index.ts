@@ -107,6 +107,16 @@ export type { S3Profile } from './s3/s3.service';
 // Public bucket (gallery images). Separate bucket because B2 has no per-object ACL.
 export { PublicS3Service } from './s3/public-s3.service';
 // Reparte las subastas del calendario entre agentes (cron en data-sync, botón en la api).
+export {
+  CALENDAR_LIVE_HOURS,
+  CALENDAR_STATUSES,
+  copartLaneCodes,
+  effectiveCalendarStatus,
+  markRoomEnded,
+  roomCodeOf,
+  timeStatus,
+} from './auction/calendar-status';
+export type { CalendarStatus, RoomEndResult } from './auction/calendar-status';
 export { AgentAssignmentService } from './auction/agent-assignment.service';
 export type { AssignmentResult } from './auction/agent-assignment.service';
 export {

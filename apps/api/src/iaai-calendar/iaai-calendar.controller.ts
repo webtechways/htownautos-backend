@@ -1,8 +1,9 @@
 import { Body, Controller, Get, Patch, Post, Query, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
-import { ClerkJwtGuard } from '@htownautos/auth';
+import { ClerkJwtGuard, CurrentUser } from '@htownautos/auth';
 import { IaaiCalendarService } from './iaai-calendar.service';
 import { UpdateIaaiCalendarConfigDto } from './dto/update-iaai-calendar-config.dto';
+import { SetCalendarStatusDto } from '../auction-calendar/dto/set-calendar-status.dto';
 
 @ApiTags('IAAI calendar')
 @Controller('iaai-calendar')
@@ -26,6 +27,12 @@ export class IaaiCalendarController {
     @Query('pageSize') pageSize?: string,
   ) {
     return this.service.list({ when, q, page: Number(page) || 1, pageSize: Number(pageSize) || 50 });
+  }
+
+  @Patch('status')
+  @ApiOperation({ summary: 'Set the status by hand for one or many auctions (auto = clear)' })
+  setStatus(@Body() dto: SetCalendarStatusDto, @CurrentUser() user: { email?: string; id?: string } | undefined) {
+    return this.service.setStatus(dto.ids, dto.status, user?.email ?? user?.id ?? null);
   }
 
   @Patch('config')

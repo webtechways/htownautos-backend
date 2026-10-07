@@ -2398,31 +2398,41 @@ model BidNoPrice {
 /// difusion de SalvageBid (`iaa-{branchNumber}-{a…}`); suscribirse a una lane
 /// que no existe no cuesta nada (no responde `runlist`).
 model IaaiCalendarEntry {
-  id               String   @id @default(uuid())
+  id               String    @id @default(uuid())
   /// "180132~US"
-  auctionId        String   @unique
+  auctionId        String    @unique
   /// IAAI branchNumber = yards.yardNumber (source IAAI); 643 = Manchester
   branchNumber     Int
   branchName       String
   city             String?
   state            String?
   zip              String?
-  latitude         Decimal? @db.Decimal(10, 7)
-  longitude        Decimal? @db.Decimal(10, 7)
+  latitude         Decimal?  @db.Decimal(10, 7)
+  longitude        Decimal?  @db.Decimal(10, 7)
   /// Instante de comienzo (UTC)
   startedAt        DateTime
   /// YYYYMMDD en hora de Houston, como el calendario de Copart
   saleDate         Int
-  numberOfVehicles Int      @default(0)
+  numberOfVehicles Int       @default(0)
   /// "Every Wednesday at 9:30 a.m. ET"
   auctionSchedule  String?
-  publicAuction    Boolean  @default(false)
-  isBranchVirtual  Boolean  @default(false)
+  publicAuction    Boolean   @default(false)
+  isBranchVirtual  Boolean   @default(false)
   /// Salas candidatas del socket: iaa-643-a, iaa-643-b…
   laneCodes        String[]
+  /// Salas que mandaron ENDAUC (`copart-159-e`, `iaa-643-c`): la extension ya
+  /// no las recibe en /broadcast/live-rooms.
+  endedLanes       String[]  @default([])
+  /// Cuando terminaron todas sus lanes (por ENDAUC).
+  endedAt          DateTime?
+  /// Estado puesto a mano (live | upcoming | ended); null = automatico. Gana a
+  /// todo lo demas y sobrevive a los refrescos del calendario.
+  manualStatus     String?
+  manualStatusAt   DateTime?
+  manualStatusBy   String?
   raw              Json?
-  firstSeenAt      DateTime @default(now())
-  fetchedAt        DateTime @default(now())
+  firstSeenAt      DateTime  @default(now())
+  fetchedAt        DateTime  @default(now())
 
   @@index([startedAt])
   @@index([saleDate])
@@ -2579,9 +2589,9 @@ model IaaiSaleResult {
 /// migration 20261008000000_sale_results_all). Read-only. Used by Stats when
 /// both auctions are selected; `auction` = 'copart' | 'iaai'.
 view SaleResultAll {
-  auction           String
-  id  String
-  lot BigInt
+  auction String
+  id      String
+  lot     BigInt
 
   // ── Incoming sale/auction data ──
   saleDate         Int?
@@ -2656,10 +2666,8 @@ view SaleResultAll {
   createdAt DateTime
   updatedAt DateTime
 
-
   @@map("sale_results_all")
 }
-
 
 /// Puja de IAAI CON importe (fuente con sesion). Las que llegan sin importe van
 /// a bid_no_price_iaai. Mismo id (`{order}-{sala}-{lote}-{MMDDYYYY}`) y misma
@@ -2691,22 +2699,21 @@ model IaaiBidEvent {
   @@map("iaai_bid_events")
 }
 
-
 /// Log remoto de la extension de las VM (planificador, pasadas de auto-join,
 /// relogin, errores del worker). Es lo que permite ver por que una pasada no
 /// salio sin tener a nadie delante de la maquina. Se purga a los 14 dias.
 model AuctionExtensionLog {
-  id      BigInt  @id @default(autoincrement())
+  id         BigInt   @id @default(autoincrement())
   /// Que VM: el nombre de Ajustes o, si esta vacio, un id estable generado.
-  worker  String
+  worker     String
   /// Version del manifest de la extension.
-  version String?
+  version    String?
   /// debug | info | warn | error
-  level   String
+  level      String
   /// Tipo corto y filtrable: tick, alarm, task-start, task-end, step, sw-start…
-  event   String
-  message String  @db.Text
-  data    Json?
+  event      String
+  message    String   @db.Text
+  data       Json?
   /// Hora de la VM al ocurrir (puede estar desfasada: comparar con receivedAt).
   at         DateTime
   receivedAt DateTime @default(now())
@@ -2727,15 +2734,15 @@ model AuctionRawFrame {
 
   /// El frame tal cual lo capturo la extension: base64 de Solace en `room`,
   /// el texto Socket.IO (`42["event",{...}]`) en `broadcast`.
-  frame  String  @db.Text
+  frame      String    @db.Text
   /// room = socket de sala (Solace, hay que decodificar) · broadcast = socket
   /// de difusion de AutoBidMaster (ya viene estructurado).
-  source String  @default("room")
+  source     String    @default("room")
   /// Cuando lo vio la extension. El de difusion no trae instante de emision,
   /// asi que es lo mas cercano que hay; en `room` manda el de Copart.
   capturedAt DateTime?
   /// De que VM vino, para poder aislar una maquina que mande basura.
-  worker String?
+  worker     String?
 
   /// pending | processed | failed | ignored
   status  String  @default("pending")
@@ -3657,6 +3664,16 @@ model AuctionCalendarEntry {
   // deduplicacion del aviso, y se preserva en el refresco igual que los tres
   // campos de arriba: si se perdiera, cada refresco reavisaria de lo mismo.
   alertedAt           DateTime?
+  /// Salas que mandaron ENDAUC (`copart-159-e`, `iaa-643-c`): la extension ya
+  /// no las recibe en /broadcast/live-rooms.
+  endedLanes          String[]       @default([])
+  /// Cuando terminaron todas sus lanes (por ENDAUC).
+  endedAt             DateTime?
+  /// Estado puesto a mano (live | upcoming | ended); null = automatico. Gana a
+  /// todo lo demas y sobrevive a los refrescos del calendario.
+  manualStatus        String?
+  manualStatusAt      DateTime?
+  manualStatusBy      String?
   raw                 Json?
   fetchedAt           DateTime       @default(now())
 
@@ -3942,8 +3959,8 @@ model AuctionListingGroup {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  tenant Tenant                    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  items  AuctionListingGroupItem[]
+  tenant    Tenant                        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  items     AuctionListingGroupItem[]
   /// IAAI lots in the group (own table: items has a FK to the Copart listings).
   iaaiItems AuctionListingGroupIaaiItem[]
 
@@ -6194,11 +6211,11 @@ model IaaiListing {
   raw             Json
   favorites       IaaiFavorite[]
   groupItems      AuctionListingGroupIaaiItem[]
-  isActive        Boolean   @default(true)
+  isActive        Boolean                       @default(true)
   sourceCreatedAt DateTime?
-  firstSeenAt     DateTime  @default(now())
-  lastSeenAt      DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
+  firstSeenAt     DateTime                      @default(now())
+  lastSeenAt      DateTime                      @default(now())
+  updatedAt       DateTime                      @updatedAt
 
   @@index([isActive, auctionAt])
   @@index([imagesStatus, auctionAt])

@@ -2,7 +2,14 @@ import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '@htownautos/prisma';
-import { ProxyService } from '@htownautos/common';
+import {
+  CALENDAR_LIVE_HOURS,
+  ProxyService,
+  copartLaneCodes,
+  effectiveCalendarStatus,
+  timeStatus,
+  type CalendarStatus,
+} from '@htownautos/common';
 import { UpdateCalendarConfigDto } from './dto/update-calendar-config.dto';
 import { UpdateCalendarAlertsDto } from './dto/update-calendar-alerts.dto';
 
@@ -102,6 +109,9 @@ export class AuctionCalendarService implements OnModuleInit {
             { scraperAgentId: { not: null } },
             { scraperWorkerId: { not: null } },
             { alertedAt: { not: null } },
+            { manualStatus: { not: null } },
+            { endedAt: { not: null } },
+            { endedLanes: { isEmpty: false } },
           ],
         },
         select: {
@@ -111,6 +121,11 @@ export class AuctionCalendarService implements OnModuleInit {
           scraperAgentId: true,
           scraperWorkerId: true,
           alertedAt: true,
+          endedLanes: true,
+          endedAt: true,
+          manualStatus: true,
+          manualStatusAt: true,
+          manualStatusBy: true,
         },
       });
       const keyOf = (m: { locationSourceId: number; startedAt: Date }) =>
@@ -128,6 +143,13 @@ export class AuctionCalendarService implements OnModuleInit {
       // avisar de las mismas subastas.
       const alerted = new Map(
         previous.filter((m) => m.alertedAt).map((m) => [keyOf(m), m.alertedAt as Date]),
+      );
+      // Lo que dijo el socket (ENDAUC) y lo que decidio una persona tampoco se
+      // pierde: el calendario de AutoBidMaster no sabe nada de eso.
+      const fin = new Map(
+        previous
+          .filter((m) => m.manualStatus || m.endedAt || m.endedLanes.length)
+          .map((m) => [keyOf(m), m]),
       );
 
       const now = new Date();
@@ -153,8 +175,14 @@ export class AuctionCalendarService implements OnModuleInit {
             seen.add(key);
 
             const saleDate = this.centralDate(startedAt);
+            const f = fin.get(key);
             rows.push({
-              status,
+              status: f?.manualStatus ?? (f?.endedAt ? 'ended' : status),
+              endedLanes: f?.endedLanes ?? [],
+              endedAt: f?.endedAt ?? null,
+              manualStatus: f?.manualStatus ?? null,
+              manualStatusAt: f?.manualStatusAt ?? null,
+              manualStatusBy: f?.manualStatusBy ?? null,
               auctionGroup: group,
               locationSourceId: sourceId,
               catalogSourceId: loc.catalogSourceId ?? null,
@@ -303,42 +331,99 @@ export class AuctionCalendarService implements OnModuleInit {
     return this.getAlerts();
   }
 
-  async getStatus() {
-    const [grouped, config] = await Promise.all([
-      this.prisma.auctionCalendarEntry.groupBy({ by: ['status'], _count: { _all: true } }),
-      this.getConfig(),
-    ]);
-    const counts: Record<string, number> = { live: 0, later: 0, upcoming: 0, ended: 0 };
-    for (const g of grouped) counts[g.status] = g._count._all;
-    const total = Object.values(counts).reduce((a, b) => a + b, 0);
-    return { counts, total, config };
+  /**
+   * Filtro por estado EFECTIVO (ver effectiveCalendarStatus): manual primero,
+   * luego fin por ENDAUC / status del calendario, luego la hora.
+   */
+  private whenWhere(when: string | undefined, now = Date.now()): Prisma.AuctionCalendarEntryWhereInput {
+    const ahora = new Date(now);
+    const desdeVivo = new Date(now - CALENDAR_LIVE_HOURS * 3_600_000);
+    const auto = { manualStatus: null, endedAt: null, status: { not: 'ended' } };
+    switch (when) {
+      case 'live':
+        return { OR: [{ manualStatus: 'live' }, { ...auto, startedAt: { lte: ahora, gt: desdeVivo } }] };
+      case 'upcoming':
+        return { OR: [{ manualStatus: 'upcoming' }, { ...auto, startedAt: { gt: ahora } }] };
+      case 'past':
+      case 'ended':
+        return {
+          OR: [
+            { manualStatus: 'ended' },
+            { manualStatus: null, OR: [{ endedAt: { not: null } }, { status: 'ended' }, { startedAt: { lte: desdeVivo } }] },
+          ],
+        };
+      case 'today':
+        return { saleDate: this.centralDate(ahora) };
+      default:
+        return {};
+    }
   }
 
-  async list(params: { status?: string; group?: string; page?: number; limit?: number }) {
+  async getStatus() {
+    const [live, upcoming, ended, today, total, config] = await Promise.all([
+      this.prisma.auctionCalendarEntry.count({ where: this.whenWhere('live') }),
+      this.prisma.auctionCalendarEntry.count({ where: this.whenWhere('upcoming') }),
+      this.prisma.auctionCalendarEntry.count({ where: this.whenWhere('past') }),
+      this.prisma.auctionCalendarEntry.count({ where: this.whenWhere('today') }),
+      this.prisma.auctionCalendarEntry.count(),
+      this.getConfig(),
+    ]);
+    return { counts: { live, upcoming, ended, today, total }, total, config };
+  }
+
+  /**
+   * `when`: live | today | upcoming | past | all (como el IAAI Calendar). Se
+   * acepta todavia `status` (live/later/upcoming/ended del calendario) por
+   * compatibilidad.
+   */
+  async list(params: { when?: string; status?: string; group?: string; q?: string; page?: number; limit?: number }) {
     const p = Math.max(1, Math.floor(Number(params.page) || 1));
     const l = Math.min(200, Math.max(1, Math.floor(Number(params.limit) || 50)));
-    const where: Prisma.AuctionCalendarEntryWhereInput = {
-      ...(params.status ? { status: params.status } : {}),
-      ...(params.group ? { auctionGroup: params.group } : {}),
-    };
+    const and: Prisma.AuctionCalendarEntryWhereInput[] = [];
+    if (params.when) and.push(this.whenWhere(params.when));
+    else if (params.status) and.push({ status: params.status });
+    if (params.group) and.push({ auctionGroup: params.group });
+    const q = params.q?.trim();
+    if (q) {
+      and.push({
+        OR: [
+          { locationName: { contains: q, mode: 'insensitive' } },
+          { locationSlug: { contains: q, mode: 'insensitive' } },
+          { region: { equals: q.toUpperCase() } },
+          ...(/^\d+$/.test(q) ? [{ locationSourceId: Number(q) }] : []),
+        ],
+      });
+    }
+    const where: Prisma.AuctionCalendarEntryWhereInput = and.length ? { AND: and } : {};
+    const orderBy: Prisma.AuctionCalendarEntryOrderByWithRelationInput[] =
+      params.when === 'past' ? [{ startedAt: 'desc' }, { locationName: 'asc' }] : [{ startedAt: 'asc' }, { locationName: 'asc' }];
+    const now = Date.now();
     const [rows, total] = await Promise.all([
       this.prisma.auctionCalendarEntry.findMany({
         where,
-        orderBy: [{ startedAt: 'asc' }, { locationName: 'asc' }],
+        orderBy,
         skip: (p - 1) * l,
         take: l,
         select: {
           id: true,
           status: true,
           auctionGroup: true,
+          locationSourceId: true,
           locationName: true,
           locationSlug: true,
           countryCode: true,
+          region: true,
           startedAt: true,
           saleDate: true,
           totalAvailableItems: true,
           url: true,
           monitor: true,
+          raw: true,
+          endedLanes: true,
+          endedAt: true,
+          manualStatus: true,
+          manualStatusAt: true,
+          manualStatusBy: true,
           scraperAgentId: true,
           scraperAgent: {
             select: { id: true, firstName: true, lastName: true, email: true, auction: true },
@@ -349,7 +434,52 @@ export class AuctionCalendarService implements OnModuleInit {
       }),
       this.prisma.auctionCalendarEntry.count({ where }),
     ]);
-    return { data: rows, total, page: p, limit: l };
+    const data = rows.map(({ raw, status, ...r }) => ({
+      ...r,
+      /** Estado efectivo (manual > ENDAUC/calendario > hora). */
+      status: effectiveCalendarStatus({ ...r, status }, now),
+      /** Lo que dijo AutoBidMaster en el ultimo refresco (live/later/upcoming/ended). */
+      sourceStatus: status,
+      laneCodes: copartLaneCodes(r.locationSourceId, raw),
+    }));
+    return { data, total, page: p, limit: l, pages: Math.max(1, Math.ceil(total / l)) };
+  }
+
+  /**
+   * Estado a mano para una o varias subastas. `auto` lo quita. live/upcoming
+   * reabren la subasta (borran las lanes con ENDAUC) para que la extension
+   * vuelva a recibirla; la columna `status` se escribe tambien porque es la que
+   * leen agentes, VMs y avisos.
+   */
+  async setStatus(ids: string[], status: CalendarStatus | 'auto', by: string | null) {
+    const filas = await this.prisma.auctionCalendarEntry.findMany({
+      where: { id: { in: ids } },
+      select: { id: true, startedAt: true, endedAt: true },
+    });
+    const ahora = new Date();
+    await this.prisma.$transaction(
+      filas.map((f) =>
+        this.prisma.auctionCalendarEntry.update({
+          where: { id: f.id },
+          data:
+            status === 'auto'
+              ? {
+                  manualStatus: null,
+                  manualStatusAt: null,
+                  manualStatusBy: null,
+                  status: f.endedAt ? 'ended' : timeStatus(f.startedAt),
+                }
+              : {
+                  manualStatus: status,
+                  manualStatusAt: ahora,
+                  manualStatusBy: by,
+                  status,
+                  ...(status !== 'ended' ? { endedLanes: [], endedAt: null } : {}),
+                },
+        }),
+      ),
+    );
+    return { updated: filas.length };
   }
 
   /** Toggle the staff "monitor" flag on one entry. */

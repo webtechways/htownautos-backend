@@ -1,10 +1,11 @@
 import { Body, Controller, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
-import { ClerkJwtGuard } from '@htownautos/auth';
+import { ClerkJwtGuard, CurrentUser } from '@htownautos/auth';
 import { AgentAssignmentService } from '@htownautos/common';
 import { AuctionCalendarService } from './auction-calendar.service';
 import { UpdateCalendarConfigDto } from './dto/update-calendar-config.dto';
 import { UpdateCalendarAlertsDto } from './dto/update-calendar-alerts.dto';
+import { SetCalendarStatusDto } from './dto/set-calendar-status.dto';
 import { AuctionCalendarAlertsService } from './auction-calendar-alerts.service';
 
 /**
@@ -28,14 +29,22 @@ export class AuctionCalendarController {
   }
 
   @Get()
-  @ApiOperation({ summary: 'List calendar entries (with pre-built links)' })
+  @ApiOperation({ summary: 'List calendar entries (when=live|today|upcoming|past|all, q, group, page, limit)' })
   list(
+    @Query('when') when?: string,
     @Query('status') status?: string,
     @Query('group') group?: string,
+    @Query('q') q?: string,
     @Query('page') page?: string,
     @Query('limit') limit?: string,
   ) {
-    return this.service.list({ status, group, page: Number(page), limit: Number(limit) });
+    return this.service.list({ when, status, group, q, page: Number(page), limit: Number(limit) });
+  }
+
+  @Patch('status')
+  @ApiOperation({ summary: 'Set the status by hand for one or many auctions (auto = clear)' })
+  setStatus(@Body() dto: SetCalendarStatusDto, @CurrentUser() user: { email?: string; id?: string } | undefined) {
+    return this.service.setStatus(dto.ids, dto.status, user?.email ?? user?.id ?? null);
   }
 
   @Patch('config')

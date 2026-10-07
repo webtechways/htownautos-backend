@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '@htownautos/prisma';
+import { copartLaneCodes } from '@htownautos/common';
 
 /** Cuanto antes del comienzo se considera "en vivo" una subasta, por defecto. */
 export const BROADCAST_LEAD_MINUTES = 15;
@@ -46,42 +47,46 @@ export class BroadcastRoomsService {
   }
 
   /**
+   * Que subastas del calendario se dan ahora, con prioridad al estado manual:
+   *   manual live  → si (una persona la abrio, aunque este fuera de hora);
+   *   manual ended / upcoming → no;
+   *   automatico   → dentro de la ventana de hora, sin `endedAt` (todas sus
+   *                  lanes mandaron ENDAUC) ni status ended.
+   * Ademas cada lane con ENDAUC se quita una a una (`endedLanes`).
+   */
+  private ventana(lead: number, ahora: number) {
+    return {
+      OR: [
+        { manualStatus: 'live', startedAt: { gte: new Date(ahora - 24 * 3_600_000) } },
+        {
+          manualStatus: null,
+          endedAt: null,
+          startedAt: {
+            lte: new Date(ahora + lead * 60_000),
+            gte: new Date(ahora - MAX_HORAS_DESDE_COMIENZO * 3_600_000),
+          },
+        },
+      ],
+    };
+  }
+
+  /**
    * IAAI: el calendario sale de iaai.com/branchlocations y las lanes son
    * candidatas (`iaa-643-a…`), porque la fuente no las trae.
    */
   private async iaai(lead: number, ahora: number): Promise<string[]> {
     const entradas = await this.prisma.iaaiCalendarEntry.findMany({
-      where: {
-        startedAt: {
-          lte: new Date(ahora + lead * 60_000),
-          gte: new Date(ahora - MAX_HORAS_DESDE_COMIENZO * 3_600_000),
-        },
-      },
-      select: { laneCodes: true },
+      where: this.ventana(lead, ahora),
+      select: { laneCodes: true, endedLanes: true },
     });
-    return entradas.flatMap((e) => e.laneCodes);
+    return entradas.flatMap((e) => e.laneCodes.filter((c) => !e.endedLanes.includes(c)));
   }
 
   private async copart(lead: number, ahora: number): Promise<string[]> {
     const entradas = await this.prisma.auctionCalendarEntry.findMany({
-      where: {
-        startedAt: {
-          lte: new Date(ahora + lead * 60_000),
-          gte: new Date(ahora - MAX_HORAS_DESDE_COMIENZO * 3_600_000),
-        },
-        status: { not: 'ended' },
-      },
-      select: { locationSourceId: true, raw: true },
+      where: { AND: [this.ventana(lead, ahora), { OR: [{ manualStatus: 'live' }, { status: { not: 'ended' } }] }] },
+      select: { locationSourceId: true, raw: true, endedLanes: true },
     });
-
-    const rooms: string[] = [];
-    for (const e of entradas) {
-      const lanes = (e.raw as { lanes?: Array<{ lane?: string }> } | null)?.lanes ?? [];
-      for (const l of lanes) {
-        const lane = String(l?.lane ?? '').trim().toLowerCase();
-        if (/^[a-z]$/.test(lane)) rooms.push(`copart-${e.locationSourceId}-${lane}`);
-      }
-    }
-    return rooms;
+    return entradas.flatMap((e) => copartLaneCodes(e.locationSourceId, e.raw).filter((c) => !e.endedLanes.includes(c)));
   }
 }

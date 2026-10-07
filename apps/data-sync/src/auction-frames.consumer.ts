@@ -8,6 +8,8 @@ import {
   decodeSolaceFrame,
   isBidEvent,
   isSaleEvent,
+  markRoomEnded,
+  roomCodeOf,
   saleDayMMDDYYYY,
   type DecodedFrame,
 } from '@htownautos/common';
@@ -64,6 +66,10 @@ export class AuctionFramesConsumer implements OnModuleInit {
     void this.recuperarIaaiPendientes().catch((err) =>
       this.logger.warn(`[Frames] recuperacion IAAI fallo: ${err?.message ?? err}`),
     );
+    // ENDAUC de hoy que llegaron antes de que se trataran: cierran sus salas.
+    void this.recuperarEndauc().catch((err) =>
+      this.logger.warn(`[Frames] recuperacion ENDAUC fallo: ${err?.message ?? err}`),
+    );
   }
 
   private async handle(msg: AuctionFrameMessage): Promise<void> {
@@ -82,6 +88,13 @@ export class AuctionFramesConsumer implements OnModuleInit {
     // de Copart — sus lotes son stock numbers de IAAI y podrian chocar.
     const subasta = broadcast ? broadcastAuctionOf((decoded?.payload as any)?.auction) : 'copart';
     const sinImporte = !!decoded && decoded.amount == null && decoded.askBid == null;
+
+    // Fin de una sala (lane): la subasta del calendario lo apunta y deja de
+    // darsela a la extension.
+    if (decoded && decoded.rawEvent === 'ENDAUC') {
+      await this.procesarFinDeSala(row.id, decoded, row.capturedAt ?? row.receivedAt);
+      return;
+    }
 
     if (broadcast && subasta === 'iaai' && decoded && !sinImporte) {
       // IAAI con importe (fuente con sesion) → iaai_bid_events, y la venta a
@@ -280,6 +293,49 @@ export class AuctionFramesConsumer implements OnModuleInit {
         "firstSeenAt" = LEAST(b."firstSeenAt", EXCLUDED."firstSeenAt"),
         "lastSeenAt"  = GREATEST(b."lastSeenAt", EXCLUDED."lastSeenAt")`);
     return id;
+  }
+
+  /** ENDAUC → lane terminada en el calendario (y la subasta, si era la ultima). */
+  private async procesarFinDeSala(frameId: string, d: DecodedFrame, at: Date): Promise<void> {
+    const p = (d.payload ?? {}) as Record<string, any>;
+    const room = roomCodeOf(p.auction, p.room, d.sale);
+    try {
+      const r = room ? await markRoomEnded(this.prisma, room, at) : null;
+      await this.prisma.auctionRawFrame.update({
+        where: { id: frameId },
+        data: {
+          status: r ? 'processed' : 'ignored',
+          event: 'ENDAUC',
+          summary: { ...(this.summarize(d) as object), room, calendar: r } as any,
+          frame: '',
+          error: r ? null : room ? 'ENDAUC: ninguna subasta del calendario para esa sala' : 'ENDAUC sin sala',
+          processedAt: new Date(),
+        },
+      });
+      if (r) this.logger.log(`[Frames] ENDAUC ${room} → ${r.auction} ${r.entryId}${r.auctionEnded ? ' (subasta terminada)' : ''}`);
+    } catch (err: any) {
+      await this.prisma.auctionRawFrame.update({
+        where: { id: frameId },
+        data: { status: 'failed', event: 'ENDAUC', error: String(err?.message ?? err).slice(0, 500), processedAt: new Date() },
+      });
+      this.logger.warn(`[Frames] ENDAUC ${frameId} fallo: ${err?.message}`);
+    }
+  }
+
+  /** Los ENDAUC de las ultimas 14 h que se quedaron `ignored` antes de tratarse. */
+  private async recuperarEndauc(): Promise<void> {
+    const rows = await this.prisma.auctionRawFrame.findMany({
+      where: { event: 'ENDAUC', status: 'ignored', error: null, receivedAt: { gte: new Date(Date.now() - 14 * 3_600_000) } },
+      orderBy: { receivedAt: 'asc' },
+      select: { id: true, summary: true, capturedAt: true, receivedAt: true },
+      take: 2000,
+    });
+    for (const r of rows) {
+      const sm = (r.summary ?? {}) as Record<string, any>;
+      const d = { sale: sm.sale ?? null, rawEvent: 'ENDAUC', payload: sm.fields ?? {} } as unknown as DecodedFrame;
+      await this.procesarFinDeSala(r.id, d, r.capturedAt ?? r.receivedAt);
+    }
+    if (rows.length) this.logger.log(`[Frames] ENDAUC recuperados: ${rows.length}`);
   }
 
   /** Puja (y venta si lo es) de IAAI con importe; marca el frame. */
