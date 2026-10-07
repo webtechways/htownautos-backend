@@ -60,6 +60,7 @@ import { CallFlowModule } from './call-flow/call-flow.module';
 import { OpenSearchModule } from './opensearch/opensearch.module';
 import { TitleMappingModule } from './title-mapping/title-mapping.module';
 import { BidIncrementsModule } from './bid-increments/bid-increments.module';
+import { IaaiCalendarModule } from './iaai-calendar/iaai-calendar.module';
 import { SellerClassificationModule } from './seller-classification/seller-classification.module';
 import { AuctionAliasModule } from './auction-alias/auction-alias.module';
 import { StripeModule } from './stripe/stripe.module';
@@ -176,6 +177,7 @@ import { PublicStartModule } from './public-start/public-start.module';
     OpenSearchModule,
     TitleMappingModule,
     BidIncrementsModule,
+    IaaiCalendarModule,
     SellerClassificationModule,
     AuctionAliasModule,
     StripeModule,

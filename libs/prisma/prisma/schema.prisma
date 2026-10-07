@@ -2389,6 +2389,64 @@ model BidNoPrice {
   @@map("bid_no_price")
 }
 
+/// Calendario de subastas de IAAI, scrapeado de https://www.iaai.com/branchlocations
+/// (JSON `locationsListVM` embebido): cada sede trae su PROXIMA subasta.
+/// Upsert por `auctionId`, asi que las pasadas se quedan como historial.
+///
+/// La fuente no trae las lanes. `laneCodes` son los candidatos del socket de
+/// difusion de SalvageBid (`iaa-{branchNumber}-{a…}`); suscribirse a una lane
+/// que no existe no cuesta nada (no responde `runlist`).
+model IaaiCalendarEntry {
+  id               String   @id @default(uuid())
+  /// "180132~US"
+  auctionId        String   @unique
+  /// IAAI branchNumber = yards.yardNumber (source IAAI); 643 = Manchester
+  branchNumber     Int
+  branchName       String
+  city             String?
+  state            String?
+  zip              String?
+  latitude         Decimal? @db.Decimal(10, 7)
+  longitude        Decimal? @db.Decimal(10, 7)
+  /// Instante de comienzo (UTC)
+  startedAt        DateTime
+  /// YYYYMMDD en hora de Houston, como el calendario de Copart
+  saleDate         Int
+  numberOfVehicles Int      @default(0)
+  /// "Every Wednesday at 9:30 a.m. ET"
+  auctionSchedule  String?
+  publicAuction    Boolean  @default(false)
+  isBranchVirtual  Boolean  @default(false)
+  /// Salas candidatas del socket: iaa-643-a, iaa-643-b…
+  laneCodes        String[]
+  raw              Json?
+  firstSeenAt      DateTime @default(now())
+  fetchedAt        DateTime @default(now())
+
+  @@index([startedAt])
+  @@index([saleDate])
+  @@index([branchNumber])
+  @@map("iaai_calendar_entries")
+}
+
+/// Control del scraper del calendario de IAAI (fila unica).
+model IaaiCalendarConfig {
+  id             String    @id @default("singleton")
+  /// Cada cuantas horas se refresca (0 = solo a mano)
+  refreshHours   Int       @default(6)
+  /// Lanes candidatas por sede: a, b, c… (la fuente no las trae)
+  lanesPerBranch Int       @default(8)
+  /// Pasar por el pool de Webshare (recomendado) o directo
+  useProxy       Boolean   @default(true)
+  lastFetchedAt  DateTime?
+  lastCount      Int       @default(0)
+  lastError      String?
+  lastDurationMs Int?
+  updatedAt      DateTime  @updatedAt
+
+  @@map("iaai_calendar_config")
+}
+
 /// Igual que bid_no_price pero de IAAI (salas `iaa-643-c`, socket de difusion
 /// de SalvageBid). Tabla aparte porque el `lot` de IAAI es su stock number:
 /// mismo formato que un lote de Copart y podrian chocar. Mismo id

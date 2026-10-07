@@ -11,9 +11,12 @@ export const BROADCAST_LEAD_MINUTES = 15;
  */
 const MAX_HORAS_DESDE_COMIENZO = 8;
 
+export type BroadcastAuction = 'copart' | 'iaai' | 'all';
+
 export interface LiveRooms {
-  /** Codigos del socket de difusion: `copart-194-d`. */
+  /** Codigos del socket de difusion: `copart-194-d`, `iaa-643-c`. */
   rooms: string[];
+  auction: BroadcastAuction;
   leadMinutes: number;
   generatedAt: string;
 }
@@ -33,9 +36,33 @@ export interface LiveRooms {
 export class BroadcastRoomsService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async live(leadMinutes = BROADCAST_LEAD_MINUTES): Promise<LiveRooms> {
+  async live(leadMinutes = BROADCAST_LEAD_MINUTES, auction: BroadcastAuction = 'copart'): Promise<LiveRooms> {
     const lead = Math.min(Math.max(Math.round(leadMinutes), 0), 180);
     const ahora = Date.now();
+    const rooms = new Set<string>();
+    if (auction !== 'iaai') for (const r of await this.copart(lead, ahora)) rooms.add(r);
+    if (auction !== 'copart') for (const r of await this.iaai(lead, ahora)) rooms.add(r);
+    return { rooms: [...rooms].sort(), auction, leadMinutes: lead, generatedAt: new Date(ahora).toISOString() };
+  }
+
+  /**
+   * IAAI: el calendario sale de iaai.com/branchlocations y las lanes son
+   * candidatas (`iaa-643-a…`), porque la fuente no las trae.
+   */
+  private async iaai(lead: number, ahora: number): Promise<string[]> {
+    const entradas = await this.prisma.iaaiCalendarEntry.findMany({
+      where: {
+        startedAt: {
+          lte: new Date(ahora + lead * 60_000),
+          gte: new Date(ahora - MAX_HORAS_DESDE_COMIENZO * 3_600_000),
+        },
+      },
+      select: { laneCodes: true },
+    });
+    return entradas.flatMap((e) => e.laneCodes);
+  }
+
+  private async copart(lead: number, ahora: number): Promise<string[]> {
     const entradas = await this.prisma.auctionCalendarEntry.findMany({
       where: {
         startedAt: {
@@ -47,14 +74,14 @@ export class BroadcastRoomsService {
       select: { locationSourceId: true, raw: true },
     });
 
-    const rooms = new Set<string>();
+    const rooms: string[] = [];
     for (const e of entradas) {
       const lanes = (e.raw as { lanes?: Array<{ lane?: string }> } | null)?.lanes ?? [];
       for (const l of lanes) {
         const lane = String(l?.lane ?? '').trim().toLowerCase();
-        if (/^[a-z]$/.test(lane)) rooms.add(`copart-${e.locationSourceId}-${lane}`);
+        if (/^[a-z]$/.test(lane)) rooms.push(`copart-${e.locationSourceId}-${lane}`);
       }
     }
-    return { rooms: [...rooms].sort(), leadMinutes: lead, generatedAt: new Date(ahora).toISOString() };
+    return rooms;
   }
 }

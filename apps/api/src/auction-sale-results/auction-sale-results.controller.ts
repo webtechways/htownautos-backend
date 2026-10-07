@@ -107,9 +107,16 @@ export class AuctionSaleResultsController {
    * extension la pide cada pocos minutos y se suscribe a las nuevas.
    */
   @Get('broadcast/live-rooms')
-  @ApiOperation({ summary: 'Broadcast-socket room codes (copart-194-d) that are live or start within leadMinutes' })
-  liveRooms(@Query('leadMinutes') leadMinutes?: string) {
+  @ApiOperation({
+    summary: 'Broadcast-socket room codes that are live or start within leadMinutes (auction=copart|iaai|all; default copart)',
+  })
+  liveRooms(@Query('leadMinutes') leadMinutes?: string, @Query('auction') auction?: string) {
     const n = Number(leadMinutes);
-    return this.broadcastRooms.live(Number.isFinite(n) && leadMinutes !== undefined && leadMinutes !== '' ? n : undefined);
+    // Sin `auction` = copart: la extension actual no lo manda y debe seguir igual.
+    const a = auction === 'iaai' || auction === 'all' ? auction : 'copart';
+    return this.broadcastRooms.live(
+      Number.isFinite(n) && leadMinutes !== undefined && leadMinutes !== '' ? n : undefined,
+      a,
+    );
   }
 }
