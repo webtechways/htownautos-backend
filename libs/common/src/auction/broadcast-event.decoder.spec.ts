@@ -1,4 +1,5 @@
 import {
+  broadcastAuctionOf,
   bidNoPriceId,
   saleDayMMDDYYYY,
   decodeBroadcastMessage,
@@ -95,5 +96,30 @@ describe('bidNoPriceId', () => {
     expect(bidNoPriceId('', 1, 1, at)).toBeNull();
     expect(bidNoPriceId('copart-1-a', null, 1, at)).toBeNull();
     expect(bidNoPriceId('copart-1-a', 5, null, at)).toBeNull();
+  });
+});
+
+describe('IAAI (SalvageBid)', () => {
+  // Real, 2026-10-07: sala iaa-643-c, order desde 0, sin pais en las de sala.
+  const IAAI = '42["event",{"auction":"iaa-643-c","lot":45958357,"bid":null,"order":2,"asking":null,"reserve":false,"sold":false,"ticks":6,"round":1}]';
+  const at = new Date('2026-10-07T14:40:00Z');
+
+  it('distingue la subasta por la sala', () => {
+    expect(broadcastAuctionOf('iaa-643-c')).toBe('iaai');
+    expect(broadcastAuctionOf('copart-194-d')).toBe('copart');
+    expect(broadcastAuctionOf('otra-1-a')).toBeNull();
+  });
+
+  it('se decodifica igual y sin importe', () => {
+    const d = decodeBroadcastMessage(IAAI, at)!;
+    expect(d.lot).toBe('45958357');
+    expect(d.sale).toBe('IAA643C');
+    expect(d.amount).toBeNull();
+    expect(d.askBid).toBeNull();
+    expect(d.buyerCountry).toBeNull();
+  });
+
+  it('order 0 tambien hace id', () => {
+    expect(bidNoPriceId('iaa-643-c', 45958357, 0, at)).toBe('0-iaa-643-c-45958357-10072026');
   });
 });

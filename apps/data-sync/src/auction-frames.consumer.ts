@@ -1,7 +1,9 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '@htownautos/prisma';
 import {
   bidNoPriceId,
+  broadcastAuctionOf,
   decodeBroadcastMessage,
   decodeSolaceFrame,
   isBidEvent,
@@ -70,10 +72,38 @@ export class AuctionFramesConsumer implements OnModuleInit {
       ? decodeBroadcastMessage(row.frame, row.capturedAt ?? row.receivedAt)
       : decodeSolaceFrame(row.frame);
 
-    // Puja de difusion sin importe (fuente sin sesion): a bid_no_price.
-    if (broadcast && decoded && decoded.event !== 'OTHER' && decoded.lot && decoded.amount == null && decoded.askBid == null) {
+    // De que subasta es: las salas `iaa-*` (SalvageBid) nunca van a las tablas
+    // de Copart — sus lotes son stock numbers de IAAI y podrian chocar.
+    const subasta = broadcast ? broadcastAuctionOf((decoded?.payload as any)?.auction) : 'copart';
+    const sinImporte = !!decoded && decoded.amount == null && decoded.askBid == null;
+
+    if (broadcast && subasta === 'iaai' && decoded && !sinImporte) {
+      // IAAI con importe (fuente con token): aun no hay tabla. Se conserva el
+      // evento entero en `summary` para no perderlo.
+      await this.prisma.auctionRawFrame.update({
+        where: { id: row.id },
+        data: {
+          status: 'ignored',
+          event: decoded.rawEvent,
+          lot: decoded.lot ? BigInt(decoded.lot) : null,
+          summary: this.summarize(decoded) as any,
+          frame: '',
+          error: 'IAAI con importe: pendiente de tabla',
+          processedAt: new Date(),
+        },
+      });
+      return;
+    }
+
+    // Puja de difusion sin importe (fuente sin sesion): a bid_no_price o
+    // bid_no_price_iaai segun la sala.
+    if (broadcast && subasta && decoded && decoded.event !== 'OTHER' && decoded.lot && sinImporte) {
       try {
-        const id = await this.saveBidNoPrice(decoded, row.capturedAt ?? row.receivedAt);
+        const id = await this.saveBidNoPrice(
+          subasta === 'iaai' ? 'bid_no_price_iaai' : 'bid_no_price',
+          decoded,
+          row.capturedAt ?? row.receivedAt,
+        );
         await this.prisma.auctionRawFrame.update({
           where: { id: row.id },
           data: {
@@ -216,7 +246,11 @@ export class AuctionFramesConsumer implements OnModuleInit {
    *   - firstSeenAt / lastSeenAt: el primero y el ultimo; seenCount: +1.
    * Devuelve el id, o null si falta el order.
    */
-  private async saveBidNoPrice(d: DecodedFrame, at: Date): Promise<string | null> {
+  private async saveBidNoPrice(
+    tabla: 'bid_no_price' | 'bid_no_price_iaai',
+    d: DecodedFrame,
+    at: Date,
+  ): Promise<string | null> {
     const p = d.payload as Record<string, any>;
     const id = bidNoPriceId(p.auction, d.lot, p.order, at);
     if (!id) return null;
@@ -227,23 +261,25 @@ export class AuctionFramesConsumer implements OnModuleInit {
     const reserve = typeof p.reserve === 'boolean' ? p.reserve : null;
     const saleDay = id.slice(id.lastIndexOf('-') + 1);
 
-    await this.prisma.$executeRaw`
-      INSERT INTO bid_no_price
+    // El nombre de la tabla viene de la union de arriba, nunca de los datos.
+    const t = Prisma.raw(tabla === 'bid_no_price_iaai' ? 'bid_no_price_iaai' : 'bid_no_price');
+    await this.prisma.$executeRaw(Prisma.sql`
+      INSERT INTO ${t} AS b
         (id, room, "saleRoom", lot, "order", "saleDay", country, sold, round, ticks, reserve,
          "seenCount", "firstSeenAt", "lastSeenAt", raw)
       VALUES
         (${id}, ${room}, ${d.sale}, ${BigInt(d.lot!)}, ${Number(p.order)}, ${saleDay}, ${d.buyerCountry},
          ${sold}, ${round}, ${ticks}, ${reserve}, 1, ${at}, ${at}, ${JSON.stringify(p)}::jsonb)
       ON CONFLICT (id) DO UPDATE SET
-        sold          = bid_no_price.sold OR EXCLUDED.sold,
-        round         = GREATEST(bid_no_price.round, EXCLUDED.round),
-        ticks         = CASE WHEN EXCLUDED.sold THEN EXCLUDED.ticks ELSE bid_no_price.ticks END,
-        country       = COALESCE(bid_no_price.country, EXCLUDED.country),
-        reserve       = COALESCE(EXCLUDED.reserve, bid_no_price.reserve),
-        raw           = CASE WHEN EXCLUDED.sold AND NOT bid_no_price.sold THEN EXCLUDED.raw ELSE bid_no_price.raw END,
-        "seenCount"   = bid_no_price."seenCount" + 1,
-        "firstSeenAt" = LEAST(bid_no_price."firstSeenAt", EXCLUDED."firstSeenAt"),
-        "lastSeenAt"  = GREATEST(bid_no_price."lastSeenAt", EXCLUDED."lastSeenAt")`;
+        sold          = b.sold OR EXCLUDED.sold,
+        round         = GREATEST(b.round, EXCLUDED.round),
+        ticks         = CASE WHEN EXCLUDED.sold THEN EXCLUDED.ticks ELSE b.ticks END,
+        country       = COALESCE(b.country, EXCLUDED.country),
+        reserve       = COALESCE(EXCLUDED.reserve, b.reserve),
+        raw           = CASE WHEN EXCLUDED.sold AND NOT b.sold THEN EXCLUDED.raw ELSE b.raw END,
+        "seenCount"   = b."seenCount" + 1,
+        "firstSeenAt" = LEAST(b."firstSeenAt", EXCLUDED."firstSeenAt"),
+        "lastSeenAt"  = GREATEST(b."lastSeenAt", EXCLUDED."lastSeenAt")`);
     return id;
   }
 

@@ -2389,6 +2389,36 @@ model BidNoPrice {
   @@map("bid_no_price")
 }
 
+/// Igual que bid_no_price pero de IAAI (salas `iaa-643-c`, socket de difusion
+/// de SalvageBid). Tabla aparte porque el `lot` de IAAI es su stock number:
+/// mismo formato que un lote de Copart y podrian chocar. Mismo id
+/// (`{order}-{sala}-{lote}-{MMDDYYYY}`) y misma fusion por ON CONFLICT.
+/// Diferencias vistas: `order` empieza en 0 (la peticion de apertura) y la
+/// mitad de las pujas no traen pais (probablemente sala fisica).
+model BidNoPriceIaai {
+  id          String   @id
+  room        String
+  saleRoom    String?
+  /// Stock number de IAAI
+  lot         BigInt
+  order       Int
+  saleDay     String
+  country     String?
+  sold        Boolean  @default(false)
+  round       Int?
+  ticks       Int?
+  reserve     Boolean?
+  seenCount   Int      @default(1)
+  firstSeenAt DateTime
+  lastSeenAt  DateTime
+  raw         Json?
+
+  @@index([lot])
+  @@index([saleRoom, firstSeenAt])
+  @@index([firstSeenAt])
+  @@map("bid_no_price_iaai")
+}
+
 /// Log remoto de la extension de las VM (planificador, pasadas de auto-join,
 /// relogin, errores del worker). Es lo que permite ver por que una pasada no
 /// salio sin tener a nadie delante de la maquina. Se purga a los 14 dias.

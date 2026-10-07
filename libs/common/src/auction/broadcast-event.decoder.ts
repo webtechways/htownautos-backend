@@ -136,3 +136,15 @@ export function bidNoPriceId(room: unknown, lot: unknown, order: unknown, at: Da
   if (!/^[a-z]+-\d+-[a-z0-9]+$/.test(sala) || !lote || n == null || n < 0) return null;
   return `${n}-${sala}-${lote}-${saleDayMMDDYYYY(at)}`;
 }
+
+/**
+ * De que subasta es una sala de difusion. Copart (AutoBidMaster) usa
+ * `copart-194-d` e IAAI (SalvageBid) `iaa-643-c`: mismo protocolo, mismo
+ * formato de evento, pero lotes de espacios distintos.
+ */
+export function broadcastAuctionOf(room: unknown): 'copart' | 'iaai' | null {
+  const r = typeof room === 'string' ? room.trim().toLowerCase() : '';
+  if (r.startsWith('copart-')) return 'copart';
+  if (r.startsWith('iaa-')) return 'iaai';
+  return null;
+}

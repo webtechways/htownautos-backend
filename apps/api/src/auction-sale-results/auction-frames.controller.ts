@@ -21,6 +21,14 @@ export class AuctionFramesController {
     return this.frames.status();
   }
 
+  @Get('broadcast-status')
+  @ApiOperation({
+    summary: 'Broadcast panel: sources and VMs sending, and bid_no_price / bid_no_price_iaai pulse',
+  })
+  broadcastStatus() {
+    return this.frames.broadcastStatus();
+  }
+
   @Post('requeue')
   @ApiOperation({
     summary: 'Re-queue frames stuck in pending, or every failed one',

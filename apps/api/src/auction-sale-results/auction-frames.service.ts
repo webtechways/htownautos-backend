@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '@htownautos/prisma';
 import {
   RabbitMQService,
@@ -128,6 +129,81 @@ export class AuctionFramesService {
     }
 
     return { received: frames.length, queued };
+  }
+
+  /** Ultimo calculo del panel de difusion: la pantalla pregunta cada 2 s. */
+  private bcast: { at: number; data: unknown } | null = null;
+
+  /**
+   * Panel "Broadcast" del Live Feed: que fuentes estan mandando, que VM, y como
+   * se llenan bid_no_price (Copart) y bid_no_price_iaai (IAAI).
+   *
+   * Todas las ventanas filtran por columnas con indice (`receivedAt`,
+   * `firstSeenAt`); los timestamps se guardan en UTC sin zona, asi que se
+   * compara con la hora UTC de la base.
+   */
+  async broadcastStatus() {
+    const ahora = Date.now();
+    if (this.bcast && ahora - this.bcast.at < 5_000) return this.bcast.data;
+
+    const [fuentes, workers, copart, iaai, recientes] = await Promise.all([
+      this.prisma.$queryRaw<Array<{ source: string; m1: bigint; m5: bigint; last: Date | null }>>`
+        SELECT source,
+               count(*) FILTER (WHERE "receivedAt" > (now() AT TIME ZONE 'utc') - interval '1 minute') AS m1,
+               count(*) AS m5, max("receivedAt") AS last
+        FROM auction_raw_frames
+        WHERE "receivedAt" > (now() AT TIME ZONE 'utc') - interval '5 minutes'
+        GROUP BY source`,
+      this.prisma.$queryRaw<Array<{ worker: string | null; source: string; frames: bigint; last: Date }>>`
+        SELECT worker, source, count(*) AS frames, max("receivedAt") AS last
+        FROM auction_raw_frames
+        WHERE "receivedAt" > (now() AT TIME ZONE 'utc') - interval '10 minutes'
+        GROUP BY worker, source ORDER BY max("receivedAt") DESC LIMIT 50`,
+      this.noPriceStats('bid_no_price'),
+      this.noPriceStats('bid_no_price_iaai'),
+      this.prisma.$queryRaw<Array<Record<string, unknown>>>`
+        (SELECT 'copart' AS auction, id, room, lot::text AS lot, "order", country, sold, round, "seenCount", "lastSeenAt"
+           FROM bid_no_price ORDER BY "firstSeenAt" DESC LIMIT 25)
+        UNION ALL
+        (SELECT 'iaai' AS auction, id, room, lot::text AS lot, "order", country, sold, round, "seenCount", "lastSeenAt"
+           FROM bid_no_price_iaai ORDER BY "firstSeenAt" DESC LIMIT 25)
+        ORDER BY "lastSeenAt" DESC LIMIT 30`,
+    ]);
+
+    const data = {
+      sources: fuentes.map((f) => ({ source: f.source, lastMinute: Number(f.m1), last5m: Number(f.m5), lastAt: f.last })),
+      workers: workers.map((w) => ({ worker: w.worker, source: w.source, frames10m: Number(w.frames), lastAt: w.last })),
+      noPrice: { copart, iaai },
+      recentNoPrice: recientes,
+    };
+    this.bcast = { at: ahora, data };
+    return data;
+  }
+
+  /** Pulso de una tabla de pujas sin importe. */
+  private async noPriceStats(tabla: 'bid_no_price' | 'bid_no_price_iaai') {
+    const t = Prisma.raw(tabla === 'bid_no_price_iaai' ? 'bid_no_price_iaai' : 'bid_no_price');
+    type Fila = { m1: bigint; m5: bigint; rooms5: bigint; hoy: bigint; vendidos: bigint; fuentes: number | null; last: Date | null };
+    const [r] = (await this.prisma.$queryRaw(Prisma.sql`
+      SELECT count(*) FILTER (WHERE "firstSeenAt" > (now() AT TIME ZONE 'utc') - interval '1 minute') AS m1,
+             count(*) FILTER (WHERE "firstSeenAt" > (now() AT TIME ZONE 'utc') - interval '5 minutes') AS m5,
+             count(DISTINCT room) FILTER (WHERE "firstSeenAt" > (now() AT TIME ZONE 'utc') - interval '5 minutes') AS rooms5,
+             count(*) AS hoy,
+             count(*) FILTER (WHERE sold) AS vendidos,
+             avg("seenCount") FILTER (WHERE "firstSeenAt" > (now() AT TIME ZONE 'utc') - interval '5 minutes')::float AS fuentes,
+             max("lastSeenAt") AS last
+      FROM ${t}
+      WHERE "firstSeenAt" > (now() AT TIME ZONE 'utc') - interval '24 hours'`)) as Fila[];
+    return {
+      lastMinute: Number(r?.m1 ?? 0),
+      last5m: Number(r?.m5 ?? 0),
+      rooms5m: Number(r?.rooms5 ?? 0),
+      last24h: Number(r?.hoy ?? 0),
+      sold24h: Number(r?.vendidos ?? 0),
+      /** Cuantas veces llega cada puja de media: ~ cuantas fuentes la estan viendo. */
+      avgSeen5m: r?.fuentes ?? null,
+      lastAt: r?.last ?? null,
+    };
   }
 
   /** Contadores en vivo para la pantalla de la cola. */
