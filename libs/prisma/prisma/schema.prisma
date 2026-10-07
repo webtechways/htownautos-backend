@@ -1978,6 +1978,25 @@ model AuctionTitleTypeMapping {
   @@map("auction_title_type_mappings")
 }
 
+/// Jumping Table: cuanto sube cada puja en sala segun el tramo de precio.
+/// Global (los saltos los pone la subasta, no el tenant). Una fila por tramo;
+/// `increment` se aplica desde `fromPrice` hasta el siguiente tramo. Editable
+/// en Ajustes → Jumping Table Copart. Semilla en la migracion, deducida de 330k
+/// pujas reales; sin filas se usa DEFAULT_COPART_BID_INCREMENTS.
+model AuctionBidIncrement {
+  id          String   @id @default(uuid())
+  /// copart (y en el futuro iaai)
+  auction     String   @default("copart")
+  fromPrice   Decimal  @db.Decimal(12, 2)
+  increment   Decimal  @db.Decimal(12, 2)
+  updatedById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([auction, fromPrice])
+  @@map("auction_bid_increments")
+}
+
 /// Staff-curated alias → canonical value for auction filter fields (make / model
 /// / trim / color), managed from Settings → Vehicle Data. `aliasKey` is a
 /// normalizeToken() variant seen in the feed; `canonical` is the UPPERCASE value
@@ -2342,8 +2361,15 @@ model AuctionBidEvent {
 model AuctionRawFrame {
   id String @id @default(uuid())
 
-  /// El frame en base64, tal cual lo capturo la extension.
+  /// El frame tal cual lo capturo la extension: base64 de Solace en `room`,
+  /// el texto Socket.IO (`42["event",{...}]`) en `broadcast`.
   frame  String  @db.Text
+  /// room = socket de sala (Solace, hay que decodificar) · broadcast = socket
+  /// de difusion de AutoBidMaster (ya viene estructurado).
+  source String  @default("room")
+  /// Cuando lo vio la extension. El de difusion no trae instante de emision,
+  /// asi que es lo mas cercano que hay; en `room` manda el de Copart.
+  capturedAt DateTime?
   /// De que VM vino, para poder aislar una maquina que mande basura.
   worker String?
 

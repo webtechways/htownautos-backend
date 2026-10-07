@@ -64,6 +64,19 @@ export {
   isBidEvent,
 } from './auction/solace-frame.decoder';
 export type { DecodedFrame, AuctionEventType } from './auction/solace-frame.decoder';
+export {
+  DEFAULT_COPART_BID_INCREMENTS,
+  normalizeBidIncrements,
+  validateBidIncrements,
+  incrementFor,
+  simulateFinalPrice,
+} from './auction/bid-increments';
+export type { BidIncrementRow } from './auction/bid-increments';
+export {
+  decodeBroadcastMessage,
+  normalizeBroadcastRoom,
+  parseSocketIoEvent,
+} from './auction/broadcast-event.decoder';
 export type { SellerRisk } from './utils/seller-risk.utils';
 export {
   CANONICAL_FIELDS,

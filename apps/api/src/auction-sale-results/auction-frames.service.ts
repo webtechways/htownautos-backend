@@ -90,13 +90,26 @@ export class AuctionFramesService {
   }
 
   async ingest(dto: IngestFramesDto): Promise<FrameIngestSummary> {
-    const frames = (dto.frames ?? []).filter((f) => typeof f === 'string' && f.length);
+    const source = dto.source ?? 'room';
+    // Se filtra con su instante al lado: filtrar primero descuadraria
+    // `capturedAt`, que va por posicion.
+    const frames = (dto.frames ?? [])
+      .map((frame, i) => ({ frame, at: dto.capturedAt?.[i] }))
+      .filter(({ frame }) => typeof frame === 'string' && frame.length);
     if (!frames.length) return { received: 0, queued: 0 };
 
+    const ahora = Date.now();
     const rows = await this.prisma.$transaction(
-      frames.map((frame) =>
+      frames.map(({ frame, at }) =>
         this.prisma.auctionRawFrame.create({
-          data: { frame, worker: dto.worker ?? null },
+          data: {
+            frame,
+            source,
+            // Un reloj de VM desajustado no puede fechar eventos en el futuro
+            // ni con dias de retraso: fuera de ±1 h se usa el del servidor.
+            capturedAt: new Date(at && Math.abs(ahora - at) < 3_600_000 ? at : ahora),
+            worker: dto.worker ?? null,
+          },
           select: { id: true },
         }),
       ),

@@ -150,12 +150,15 @@ export function decodeSolaceFrame(base64Frame: string): DecodedFrame | null {
     lot: normalizeLot(payload.LOTNO),
     itemNo: num(payload.ITEMNO),
     // El campo del importe cambia de nombre segun el evento: `BID` a secas en
-    // las ventas, `CURBID` en las pujas. Buscar siempre `CURBID` se come todas
-    // las ventas.
+    // las ventas, `CURBID` en las pujas en sala y `PREBID` en las previas.
+    // Buscar siempre `CURBID` se come todas las ventas, y sin `PREBID` las
+    // 878k previas guardadas hasta el 2026-10-07 quedaron con el importe nulo.
     amount:
       event === 'SOLD' || event === 'SOLDPEND'
         ? (num(payload.BID) ?? num(payload.CURBID))
-        : (num(payload.CURBID) ?? num(payload.BID)),
+        : event === 'PREBID'
+          ? (num(payload.PREBID) ?? num(payload.CURBID) ?? num(payload.BID))
+          : (num(payload.CURBID) ?? num(payload.BID)),
     askBid: num(payload.ASKBID ?? payload.ASK),
     nextBid: num(payload.NEXT),
     increment: num(payload.INCREMENT),

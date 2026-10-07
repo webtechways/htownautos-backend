@@ -1,6 +1,12 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { PrismaService } from '@htownautos/prisma';
-import { decodeSolaceFrame, isBidEvent, isSaleEvent, type DecodedFrame } from '@htownautos/common';
+import {
+  decodeBroadcastMessage,
+  decodeSolaceFrame,
+  isBidEvent,
+  isSaleEvent,
+  type DecodedFrame,
+} from '@htownautos/common';
 import {
   RabbitMQService,
   AUCTION_FRAMES_QUEUE,
@@ -9,6 +15,12 @@ import {
 
 /**
  * Decodifica los frames de la subasta en vivo y los guarda.
+ *
+ * Llegan de dos sockets distintos (`source` en la fila):
+ *   room      → Solace binario en base64, tres capas que hay que abrir.
+ *   broadcast → Socket.IO en texto de AutoBidMaster, ya estructurado.
+ * Los dos decodificadores devuelven la misma forma y a partir de ahi el
+ * camino es uno solo.
  *
  * Cada frame acaba en uno de tres sitios segun su tipo:
  *   BIDREC → auction_bid_events  (muchas por lote)
@@ -52,7 +64,10 @@ export class AuctionFramesConsumer implements OnModuleInit {
     // Ya procesado: un reintento de la cola no lo vuelve a escribir.
     if (!row || row.status === 'processed' || row.status === 'ignored') return;
 
-    const decoded = decodeSolaceFrame(row.frame);
+    const broadcast = row.source === 'broadcast';
+    const decoded = broadcast
+      ? decodeBroadcastMessage(row.frame, row.capturedAt ?? row.receivedAt)
+      : decodeSolaceFrame(row.frame);
 
     if (!decoded || decoded.event === 'OTHER' || !decoded.lot) {
       await this.prisma.auctionRawFrame.update({
@@ -75,8 +90,11 @@ export class AuctionFramesConsumer implements OnModuleInit {
     }
 
     try {
-      if (isBidEvent(decoded.event)) await this.saveBid(decoded);
-      else await this.saveSale(decoded);
+      if (isBidEvent(decoded.event)) {
+        await (broadcast ? this.saveBroadcastBid(decoded) : this.saveBid(decoded));
+      } else {
+        await this.saveSale(decoded);
+      }
 
       await this.prisma.auctionRawFrame.update({
         where: { id: row.id },
@@ -157,6 +175,54 @@ export class AuctionFramesConsumer implements OnModuleInit {
         // P2002 = la misma puja reenviada por dos VM. Es exito, no error.
         if (e?.code !== 'P2002') throw e;
       });
+  }
+
+  /** Cuanto atras se busca una puja igual de difusion para no duplicarla. */
+  private static readonly VENTANA_DEDUP_MS = 12 * 3_600_000;
+
+  /**
+   * Una puja del socket de difusion, sin duplicados.
+   *
+   * La clave unica de `auction_bid_events` incluye `emittedAt`, y aqui no hay
+   * instante de Copart sino el de captura de cada VM: dos VM —o la misma puja
+   * repetida en otra `round` ("a la de dos")— darian filas distintas. Una
+   * puja de un lote se identifica por su tipo e importe (las pujas suben), asi
+   * que se busca una igual en las ultimas horas antes de crear.
+   *
+   * El cerrojo por lote hace que dos mensajes del mismo lote procesados a la
+   * vez (prefetch 20) no pasen los dos la comprobacion.
+   */
+  private async saveBroadcastBid(d: DecodedFrame): Promise<void> {
+    const lot = BigInt(d.lot!);
+    const when = d.emittedAt ?? new Date();
+    await this.prisma.$transaction(async (tx) => {
+      // `::text`: Prisma no sabe deserializar la columna `void` que devuelve.
+      await tx.$queryRaw`SELECT pg_advisory_xact_lock(${lot})::text`;
+      const existe = await tx.auctionBidEvent.findFirst({
+        where: {
+          lot,
+          eventType: d.event,
+          bid: d.amount,
+          emittedAt: { gte: new Date(when.getTime() - AuctionFramesConsumer.VENTANA_DEDUP_MS) },
+        },
+        select: { id: true },
+      });
+      if (existe) return;
+      await tx.auctionBidEvent.create({
+        data: {
+          lot,
+          eventType: d.event,
+          saleRoom: d.sale,
+          bid: d.amount,
+          askBid: d.askBid,
+          nextBid: d.nextBid,
+          increment: d.increment,
+          buyerCountry: d.buyerCountry,
+          emittedAt: when,
+          raw: d.payload as any,
+        },
+      });
+    });
   }
 
   /**

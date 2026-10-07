@@ -71,10 +71,13 @@ export class AuctionSaleResultsController {
    *
    * Aqui no se decodifica: se guarda el crudo y se encola. La respuesta es
    * inmediata pase lo que pase con el parser.
+   *
+   * Las dos fuentes de la extension (`source`: sala o difusion) entran por
+   * aqui; el consumidor elige el decodificador segun la fila.
    */
   @Post('ingest/frames')
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Queue raw live-auction frames (Solace) for decoding' })
+  @ApiOperation({ summary: 'Queue live-auction frames for decoding: Solace room frames (source=room, default) or AutoBidMaster broadcast messages (source=broadcast)' })
   @ApiResponse({ status: 200, description: 'How many arrived and how many were queued' })
   ingestFrames(@Body() dto: IngestFramesDto) {
     return this.frames.ingest(dto);
