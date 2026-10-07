@@ -371,7 +371,9 @@ export class AuctionFramesConsumer implements OnModuleInit {
       finalBid: d.amount,
       askingPrice: d.askBid,
       reserve: typeof p.reserve === 'boolean' ? p.reserve : null,
-      sold: true,
+      // IAAI marca `sold` al cerrar la tercera ronda aunque nadie haya pujado
+      // (bid 0, order 0): eso es un lote sin venta, no una venta a $0.
+      sold: !(d.amount === 0 && (order ?? 0) === 0),
       ticks: Number.isFinite(Number(p.ticks)) ? Number(p.ticks) : null,
       round: Number.isFinite(Number(p.round)) ? Number(p.round) : null,
       saleOrder: order,
