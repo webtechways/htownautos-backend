@@ -206,11 +206,41 @@ export class AuctionFramesService {
     };
   }
 
+  /**
+   * Totales pesados (GROUP BY de toda la cola y COUNT de millones de pujas):
+   * la pantalla los pide cada pocos segundos por pestaña, y contarlos en
+   * exacto cada vez saturaba el disco. Se cachean 30 s y los grandes son
+   * estimaciones del planner (pg_class.reltuples), suficientes para un panel.
+   */
+  private heavyCache: { at: number; value: Promise<{ porEstado: { status: string; n: number }[]; bids: number; sales: number }> } | null = null;
+
+  private heavyTotals() {
+    if (this.heavyCache && Date.now() - this.heavyCache.at < 30_000) return this.heavyCache.value;
+    const value = (async () => {
+      const [porEstado, est] = await Promise.all([
+        this.prisma.$queryRaw<{ status: string; n: bigint }[]>`
+          SELECT status, count(*) AS n FROM auction_raw_frames GROUP BY status`,
+        this.prisma.$queryRaw<{ relname: string; n: number }[]>`
+          SELECT relname, GREATEST(reltuples, 0)::float8 AS n FROM pg_class
+          WHERE relname IN ('auction_bid_events', 'auction_sale_results') AND relkind = 'r'`,
+      ]);
+      const of = (t: string) => Math.round(Number(est.find((e) => e.relname === t)?.n ?? 0));
+      return {
+        porEstado: porEstado.map((r) => ({ status: r.status, n: Number(r.n) })),
+        bids: of('auction_bid_events'),
+        sales: of('auction_sale_results'),
+      };
+    })();
+    value.catch(() => { this.heavyCache = null; });
+    this.heavyCache = { at: Date.now(), value };
+    return value;
+  }
+
   /** Contadores en vivo para la pantalla de la cola. */
   async status() {
     const desde = new Date(Date.now() - 60_000);
-    const [porEstado, ultimoMinuto, pendientes, ultimos] = await Promise.all([
-      this.prisma.auctionRawFrame.groupBy({ by: ['status'], _count: { _all: true } }),
+    const [heavy, ultimoMinuto, pendientes, ultimos, salas] = await Promise.all([
+      this.heavyTotals(),
       this.prisma.auctionRawFrame.count({ where: { receivedAt: { gte: desde } } }),
       this.prisma.auctionRawFrame.count({ where: { status: 'pending' } }),
       this.prisma.auctionRawFrame.findMany({
@@ -221,16 +251,13 @@ export class AuctionFramesService {
           error: true, receivedAt: true, processedAt: true, summary: true,
         },
       }),
+      this.salasActivas(),
     ]);
 
     const counts: Record<string, number> = { pending: 0, processed: 0, failed: 0, ignored: 0 };
-    for (const g of porEstado) counts[g.status] = g._count._all;
-
-    const [bids, sales, salas] = await Promise.all([
-      this.prisma.auctionBidEvent.count(),
-      this.prisma.auctionSaleResult.count(),
-      this.salasActivas(),
-    ]);
+    for (const g of heavy.porEstado) counts[g.status] = g.n;
+    counts.pending = pendientes;
+    const { bids, sales } = heavy;
 
     return {
       counts,
