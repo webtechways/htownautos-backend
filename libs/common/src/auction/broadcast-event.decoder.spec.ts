@@ -61,6 +61,9 @@ describe('decodeBroadcastMessage', () => {
 describe('helpers', () => {
   it('normaliza la sala al formato de Solace', () => {
     expect(normalizeBroadcastRoom('copart-880-a')).toBe('COPART880A');
+    // La difusion no rellena la sede; Solace si.
+    expect(normalizeBroadcastRoom('copart-25-a')).toBe('COPART025A');
+    expect(normalizeBroadcastRoom('copart-9-b')).toBe('COPART009B');
     expect(normalizeBroadcastRoom('')).toBeNull();
   });
 

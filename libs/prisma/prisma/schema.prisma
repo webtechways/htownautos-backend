@@ -2352,6 +2352,30 @@ model AuctionBidEvent {
   @@map("auction_bid_events")
 }
 
+/// Log remoto de la extension de las VM (planificador, pasadas de auto-join,
+/// relogin, errores del worker). Es lo que permite ver por que una pasada no
+/// salio sin tener a nadie delante de la maquina. Se purga a los 14 dias.
+model AuctionExtensionLog {
+  id      BigInt  @id @default(autoincrement())
+  /// Que VM: el nombre de Ajustes o, si esta vacio, un id estable generado.
+  worker  String
+  /// Version del manifest de la extension.
+  version String?
+  /// debug | info | warn | error
+  level   String
+  /// Tipo corto y filtrable: tick, alarm, task-start, task-end, step, sw-start…
+  event   String
+  message String  @db.Text
+  data    Json?
+  /// Hora de la VM al ocurrir (puede estar desfasada: comparar con receivedAt).
+  at         DateTime
+  receivedAt DateTime @default(now())
+
+  @@index([worker, at])
+  @@index([at])
+  @@map("auction_extension_logs")
+}
+
 // Frame crudo tal como llego, antes de decodificar.
 //
 // Es lo que permite reprocesar el pasado: si dentro de un mes resulta que un

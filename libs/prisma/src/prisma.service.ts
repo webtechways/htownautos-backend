@@ -154,6 +154,10 @@ export class PrismaService implements OnModuleInit, OnModuleDestroy {
     return this.prisma.auctionTitleTypeMapping;
   }
 
+  get auctionExtensionLog() {
+    return this.prisma.auctionExtensionLog;
+  }
+
   get auctionBidIncrement() {
     return this.prisma.auctionBidIncrement;
   }

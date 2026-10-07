@@ -2,6 +2,7 @@ import { Controller, Get, Post, Query, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { ClerkJwtGuard } from '@htownautos/auth';
 import { AuctionFramesService } from './auction-frames.service';
+import { ExtensionLogsService } from './extension-logs.service';
 
 /** Auction Data → Live Feed: qué está llegando y en qué estado está la cola. */
 @ApiTags('Auction Sale Results')
@@ -9,7 +10,10 @@ import { AuctionFramesService } from './auction-frames.service';
 @UseGuards(ClerkJwtGuard)
 @ApiBearerAuth()
 export class AuctionFramesController {
-  constructor(private readonly frames: AuctionFramesService) {}
+  constructor(
+    private readonly frames: AuctionFramesService,
+    private readonly extLogs: ExtensionLogsService,
+  ) {}
 
   @Get('status')
   @ApiOperation({ summary: 'Live counters + the last frames that arrived' })
@@ -27,5 +31,24 @@ export class AuctionFramesController {
   requeue(@Query('status') status?: string, @Query('olderThanMinutes') mins?: string) {
     const s = status === 'failed' ? 'failed' : 'pending';
     return this.frames.requeue(s, Number(mins) || 0);
+  }
+
+  @Get('extension-logs')
+  @ApiOperation({ summary: 'Recent log entries sent by the VM browser extensions, plus last signal per VM' })
+  extensionLogs(
+    @Query('worker') worker?: string,
+    @Query('level') level?: string,
+    @Query('event') event?: string,
+    @Query('sinceMinutes') sinceMinutes?: string,
+    @Query('limit') limit?: string,
+  ) {
+    const mins = Number(sinceMinutes);
+    return this.extLogs.list({
+      worker: worker || undefined,
+      level: level || undefined,
+      event: event || undefined,
+      since: mins > 0 ? new Date(Date.now() - mins * 60_000) : undefined,
+      limit: Number(limit) || undefined,
+    });
   }
 }

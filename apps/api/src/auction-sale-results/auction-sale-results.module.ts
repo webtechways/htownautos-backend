@@ -9,13 +9,15 @@ import { StatsService } from './stats.service';
 import { VocabularyService } from './vocabulary.service';
 import { AuctionFramesService } from './auction-frames.service';
 import { AuctionFramesController } from './auction-frames.controller';
+import { ExtensionLogsService } from './extension-logs.service';
+import { BroadcastRoomsService } from './broadcast-rooms.service';
 
 @Module({
   imports: [RabbitMQModule, PrismaModule, TitleMappingModule],
   controllers: [
     AuctionFramesController,AuctionSaleResultsController, StatsController],
   providers: [
-    AuctionFramesService,AuctionSaleResultsService, StatsService, VocabularyService],
+    AuctionFramesService,AuctionSaleResultsService, StatsService, VocabularyService, ExtensionLogsService, BroadcastRoomsService],
   exports: [AuctionSaleResultsService, StatsService, VocabularyService],
 })
 export class AuctionSaleResultsModule {}

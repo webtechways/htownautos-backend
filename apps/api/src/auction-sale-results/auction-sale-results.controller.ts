@@ -1,9 +1,11 @@
 import {
   Body,
   Controller,
+  Get,
   HttpCode,
   HttpStatus,
   Post,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import { ApiOperation, ApiResponse, ApiSecurity, ApiTags } from '@nestjs/swagger';
@@ -12,6 +14,9 @@ import { AuctionIngestGuard } from './auction-ingest.guard';
 import { AuctionSaleResultsService } from './auction-sale-results.service';
 import { AuctionFramesService } from './auction-frames.service';
 import { IngestFramesDto } from './dto/ingest-frames.dto';
+import { IngestLogsDto } from './dto/ingest-logs.dto';
+import { ExtensionLogsService } from './extension-logs.service';
+import { BroadcastRoomsService } from './broadcast-rooms.service';
 import type { SaleResultItemDto } from './dto/ingest-sale-results.dto';
 
 /**
@@ -31,6 +36,8 @@ export class AuctionSaleResultsController {
   constructor(
     private readonly service: AuctionSaleResultsService,
     private readonly frames: AuctionFramesService,
+    private readonly extLogs: ExtensionLogsService,
+    private readonly broadcastRooms: BroadcastRoomsService,
   ) {}
 
   @Post('ingest')
@@ -81,5 +88,28 @@ export class AuctionSaleResultsController {
   @ApiResponse({ status: 200, description: 'How many arrived and how many were queued' })
   ingestFrames(@Body() dto: IngestFramesDto) {
     return this.frames.ingest(dto);
+  }
+
+  /**
+   * Log de lo que hace la extension por detras (planificador, pasadas,
+   * errores del worker). Llega en lotes, uno por VM y minuto.
+   */
+  @Post('ingest/logs')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Store a batch of log entries from the VM browser extension' })
+  ingestLogs(@Body() dto: IngestLogsDto) {
+    return this.extLogs.ingest(dto);
+  }
+
+  /**
+   * Salas en vivo para el modo Broadcast de la extension: las que empiezan en
+   * los proximos `leadMinutes` (15 por defecto) o ya empezaron hoy. La
+   * extension la pide cada pocos minutos y se suscribe a las nuevas.
+   */
+  @Get('broadcast/live-rooms')
+  @ApiOperation({ summary: 'Broadcast-socket room codes (copart-194-d) that are live or start within leadMinutes' })
+  liveRooms(@Query('leadMinutes') leadMinutes?: string) {
+    const n = Number(leadMinutes);
+    return this.broadcastRooms.live(Number.isFinite(n) && leadMinutes !== undefined && leadMinutes !== '' ? n : undefined);
   }
 }

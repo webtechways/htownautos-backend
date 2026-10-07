@@ -34,9 +34,14 @@ function num(v: unknown): number | null {
  * `copart-880-a` → `COPART880A`, que es como llama a la sala el socket de
  * Solace. Con el mismo nombre las dos fuentes cuentan como la misma sala en el
  * Live Feed y en las estadisticas.
+ *
+ * La difusion NO rellena la sede (`copart-25-a`) y Solace si (`COPART025A`):
+ * se rellena a 3 cifras para que casen.
  */
 export function normalizeBroadcastRoom(v: unknown): string | null {
   if (typeof v !== 'string' || !v.trim()) return null;
+  const m = /^([a-z]+)-(\d+)-([a-z0-9]+)$/i.exec(v.trim());
+  if (m) return `${m[1]}${m[2].padStart(3, '0')}${m[3]}`.toUpperCase();
   return v.replace(/[^a-z0-9]/gi, '').toUpperCase() || null;
 }
 
