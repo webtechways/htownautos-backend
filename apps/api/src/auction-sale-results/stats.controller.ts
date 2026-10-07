@@ -72,8 +72,9 @@ export class StatsController {
   @RequireApiScopes(STATS_READ_SCOPE)
   @ApiOperation({ summary: 'One stored sale result by lot number' })
   @ApiResponse({ status: 200, description: 'The sale result, or 404' })
-  async findByLot(@Param('lot') lot: string, @Req() req: any) {
-    const row = await this.stats.findByLot(lot);
+  @ApiQuery({ name: 'source', required: false, enum: ['copart', 'iaai'] })
+  async findByLot(@Param('lot') lot: string, @Query('source') source: string | undefined, @Req() req: any) {
+    const row = await this.stats.findByLot(lot, source === 'iaai' ? 'iaai' : undefined);
     return canSeePrices(req) ? row : maskFinalBid(row);
   }
 

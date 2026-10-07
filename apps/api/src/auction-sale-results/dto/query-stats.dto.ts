@@ -1,6 +1,6 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Type, Transform } from 'class-transformer';
-import { IsArray, IsBoolean, IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
+import { IsArray, IsBoolean, IsIn, IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
 
 /** CSV string ("a,b,c") or array → string[]. */
 const csv = () =>
@@ -28,6 +28,10 @@ const bool = () =>
  * search filters (same promoted vehicle columns) and adds the Final Bid range.
  */
 export class QueryStatsDto {
+  @ApiPropertyOptional({ enum: ['copart', 'iaai'], default: 'copart', description: 'Which auction: copart → auction_sale_results, iaai → iaai_sale_results' })
+  @IsOptional() @IsIn(['copart', 'iaai'])
+  source?: 'copart' | 'iaai';
+
   @ApiPropertyOptional({ default: 1 })
   @IsOptional() @Type(() => Number) @IsInt() @Min(1)
   page?: number = 1;

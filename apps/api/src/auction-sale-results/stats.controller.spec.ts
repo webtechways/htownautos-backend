@@ -39,12 +39,12 @@ describe('StatsController — price masking (auction-stats:read)', () => {
   });
 
   it('findByLot: anonymous gets finalBid masked', async () => {
-    const result = await controller.findByLot('123', { user: undefined } as any);
+    const result = await controller.findByLot('123', undefined, { user: undefined } as any);
     expect(result).toMatchObject({ finalBid: null, priceHidden: true });
   });
 
   it('findByLot: logged-in caller gets the real price', async () => {
-    const result = await controller.findByLot('123', { user: { id: 'u1' } } as any);
+    const result = await controller.findByLot('123', undefined, { user: { id: 'u1' } } as any);
     expect(result).toMatchObject({ finalBid: 5000 });
   });
 

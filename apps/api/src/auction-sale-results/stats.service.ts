@@ -70,6 +70,19 @@ export class StatsService {
   ) {}
 
   /**
+   * Copart (auction_sale_results) o IAAI (iaai_sale_results): mismas columnas,
+   * asi que filtros, facetas y percentiles son el mismo codigo.
+   */
+  private repo(source?: string): any {
+    return source === 'iaai' ? this.prisma.iaaiSaleResult : this.prisma.auctionSaleResult;
+  }
+
+  /** Nombre de tabla para SQL crudo; nunca sale de los datos del usuario. */
+  private table(source?: string): string {
+    return source === 'iaai' ? 'iaai_sale_results' : 'auction_sale_results';
+  }
+
+  /**
    * One page of distinct sold lots for search-engine sitemaps: lot number +
    * its latest sale date (YYYYMMDD), ordered by lot so pages are stable.
    * Index-only scan over (lot, saleDate); cached for an hour per page.
@@ -103,13 +116,13 @@ export class StatsService {
     const orderBy = this.buildOrderBy(dto);
 
     const [rows, total] = await Promise.all([
-      this.prisma.auctionSaleResult.findMany({
+      this.repo(dto.source).findMany({
         where,
         orderBy,
         skip: (page - 1) * limit,
         take: limit,
       }),
-      this.prisma.auctionSaleResult.count({ where }),
+      this.repo(dto.source).count({ where }),
     ]);
 
     const totalPages = Math.ceil(total / limit) || 1;
@@ -138,14 +151,14 @@ export class StatsService {
    * tarjeta. Si hubiera mas de una fila para el mismo lote —el mismo coche
    * subastado dos veces— se devuelve la venta mas reciente.
    */
-  async findByLot(lot: string) {
+  async findByLot(lot: string, source?: string) {
     let value: bigint;
     try {
       value = BigInt(lot);
     } catch {
       throw new NotFoundException(`Lot ${lot} is not a number`);
     }
-    const row = await this.prisma.auctionSaleResult.findFirst({
+    const row = await this.repo(source).findFirst({
       where: { lot: value },
       orderBy: [{ saleDate: 'desc' }, { createdAt: 'desc' }],
     });
@@ -260,7 +273,7 @@ export class StatsService {
 
     // Se resuelven los ids con Prisma y se agrega sobre ellos: asi el filtro
     // sigue siendo el mismo codigo, sin duplicar su logica en SQL.
-    const ids = await this.prisma.auctionSaleResult.findMany({
+    const ids: { id: string }[] = await this.repo(dto.source).findMany({
       where: { ...where, finalBid: { not: null } },
       select: { id: true },
       take: 50_000, // techo de seguridad; con mas, la mediana ya no cambia
@@ -272,7 +285,7 @@ export class StatsService {
 
     // El getter de PrismaService devuelve la funcion ya enlazada y pierde la
     // firma generica, asi que el tipo se pone con un cast en el resultado.
-    const filas = (await this.prisma.$queryRaw`
+    const filas = (await this.prisma.$queryRawUnsafe(`
       SELECT count(*)                                                        AS n,
              percentile_cont(0.25) WITHIN GROUP (ORDER BY "finalBid")::float AS p25,
              percentile_cont(0.50) WITHIN GROUP (ORDER BY "finalBid")::float AS mediana,
@@ -281,9 +294,9 @@ export class StatsService {
              max("finalBid")::float                                          AS maximo,
              avg("finalBid")::float                                          AS media,
              percentile_cont(0.50) WITHIN GROUP (ORDER BY odometer)::float   AS odo
-        FROM auction_sale_results
-       WHERE id = ANY(${ids.map((r) => r.id)}::text[])
-    `) as {
+        FROM ${this.table(dto.source)}
+       WHERE id = ANY($1::text[])
+    `, ids.map((r) => r.id))) as {
       n: bigint;
       p25: number | null;
       mediana: number | null;
@@ -320,7 +333,7 @@ export class StatsService {
     const columna = BREAKDOWN_COLUMNS[por];
     const where = await this.buildWhere(dto);
 
-    const ids = await this.prisma.auctionSaleResult.findMany({
+    const ids: { id: string }[] = await this.repo(dto.source).findMany({
       where: { ...where, finalBid: { not: null } },
       select: { id: true },
       take: 50_000,
@@ -333,7 +346,7 @@ export class StatsService {
       `SELECT "${columna}"::text AS grupo,
               count(*) AS n,
               percentile_cont(0.50) WITHIN GROUP (ORDER BY "finalBid")::float AS mediana
-         FROM auction_sale_results
+         FROM ${this.table(dto.source)}
         WHERE id = ANY($1::text[]) AND "${columna}" IS NOT NULL
         GROUP BY "${columna}"
         ORDER BY count(*) DESC
@@ -400,7 +413,7 @@ export class StatsService {
     const titleOverrides = await this.titleMapping.getOverrides();
     // Un `where` por faceta, cada uno sin su propio filtro. Se construyen en
     // paralelo porque buildWhere puede pedir los overrides de titulo.
-    const scoped = async (field: string) => this.facet(field, await this.buildWhere(dto, field));
+    const scoped = async (field: string) => this.facet(field, await this.buildWhere(dto, field), dto.source);
 
     const [
       makes, models, trims, years, states, bodyTypes, transmissions, fuelTypes,
@@ -569,8 +582,9 @@ export class StatsService {
   private async facet(
     field: string,
     where: Where,
+    source?: string,
   ): Promise<Array<{ key: string | number; count: number }>> {
-    const rows: any[] = await (this.prisma.auctionSaleResult.groupBy as any)({
+    const rows: any[] = await this.repo(source).groupBy({
       by: [field],
       where,
       _count: { _all: true },

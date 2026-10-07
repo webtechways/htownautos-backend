@@ -8,6 +8,7 @@ import {
   decodeSolaceFrame,
   isBidEvent,
   isSaleEvent,
+  saleDayMMDDYYYY,
   type DecodedFrame,
 } from '@htownautos/common';
 import {
@@ -58,6 +59,11 @@ export class AuctionFramesConsumer implements OnModuleInit {
       { prefetch: 20 },
     );
     this.logger.log('[Frames] Consumidor activo');
+    // Los frames IAAI con importe que llegaron antes de existir sus tablas se
+    // quedaron `ignored`; se recuperan una vez, en segundo plano.
+    void this.recuperarIaaiPendientes().catch((err) =>
+      this.logger.warn(`[Frames] recuperacion IAAI fallo: ${err?.message ?? err}`),
+    );
   }
 
   private async handle(msg: AuctionFrameMessage): Promise<void> {
@@ -78,20 +84,9 @@ export class AuctionFramesConsumer implements OnModuleInit {
     const sinImporte = !!decoded && decoded.amount == null && decoded.askBid == null;
 
     if (broadcast && subasta === 'iaai' && decoded && !sinImporte) {
-      // IAAI con importe (fuente con token): aun no hay tabla. Se conserva el
-      // evento entero en `summary` para no perderlo.
-      await this.prisma.auctionRawFrame.update({
-        where: { id: row.id },
-        data: {
-          status: 'ignored',
-          event: decoded.rawEvent,
-          lot: decoded.lot ? BigInt(decoded.lot) : null,
-          summary: this.summarize(decoded) as any,
-          frame: '',
-          error: 'IAAI con importe: pendiente de tabla',
-          processedAt: new Date(),
-        },
-      });
+      // IAAI con importe (fuente con sesion) → iaai_bid_events, y la venta a
+      // iaai_sale_results.
+      await this.procesarIaaiConImporte(row.id, decoded, row.capturedAt ?? row.receivedAt);
       return;
     }
 
@@ -99,11 +94,15 @@ export class AuctionFramesConsumer implements OnModuleInit {
     // bid_no_price_iaai segun la sala.
     if (broadcast && subasta && decoded && decoded.event !== 'OTHER' && decoded.lot && sinImporte) {
       try {
+        const at = row.capturedAt ?? row.receivedAt;
         const id = await this.saveBidNoPrice(
           subasta === 'iaai' ? 'bid_no_price_iaai' : 'bid_no_price',
           decoded,
-          row.capturedAt ?? row.receivedAt,
+          at,
         );
+        // IAAI vendido sin importe: la venta se registra igual (sin precio); si
+        // otra fuente trae el importe, lo completa.
+        if (id && subasta === 'iaai' && isSaleEvent(decoded.event)) await this.saveIaaiSale(decoded, at);
         await this.prisma.auctionRawFrame.update({
           where: { id: row.id },
           data: {
@@ -281,6 +280,191 @@ export class AuctionFramesConsumer implements OnModuleInit {
         "firstSeenAt" = LEAST(b."firstSeenAt", EXCLUDED."firstSeenAt"),
         "lastSeenAt"  = GREATEST(b."lastSeenAt", EXCLUDED."lastSeenAt")`);
     return id;
+  }
+
+  /** Puja (y venta si lo es) de IAAI con importe; marca el frame. */
+  private async procesarIaaiConImporte(frameId: string, d: DecodedFrame, at: Date): Promise<void> {
+    const where = { id: frameId };
+    try {
+      const id = await this.saveIaaiBid(d, at);
+      if (isSaleEvent(d.event)) await this.saveIaaiSale(d, at);
+      await this.prisma.auctionRawFrame.update({
+        where,
+        data: {
+          status: id ? 'processed' : 'ignored',
+          event: d.rawEvent,
+          lot: d.lot ? BigInt(d.lot) : null,
+          summary: { ...(this.summarize(d) as object), iaaiBidId: id } as any,
+          frame: '',
+          error: id ? null : 'sin order: no se puede identificar la puja',
+          processedAt: new Date(),
+        },
+      });
+    } catch (err: any) {
+      await this.prisma.auctionRawFrame.update({
+        where,
+        data: { status: 'failed', event: d.rawEvent, error: String(err?.message ?? err).slice(0, 500), processedAt: new Date() },
+      });
+      this.logger.warn(`[Frames] ${frameId} (IAAI) fallo: ${err?.message}`);
+    }
+  }
+
+  /**
+   * Una puja IAAI con importe, idempotente: mismo id que bid_no_price_iaai
+   * (`{order}-{sala}-{lote}-{MMDDYYYY}`). La venta reusa el order de la ultima
+   * puja, asi que llega como esa puja con `sold: true` y la marca vendida.
+   * Devuelve el id, o null si falta el order o el lote.
+   */
+  private async saveIaaiBid(d: DecodedFrame, at: Date): Promise<string | null> {
+    const p = d.payload as Record<string, any>;
+    if (!d.lot) return null;
+    const id = bidNoPriceId(p.auction, d.lot, p.order, at);
+    if (!id) return null;
+    const room = String(p.auction).trim().toLowerCase();
+    const sold = p.sold === true || isSaleEvent(d.event);
+    const round = Number.isFinite(Number(p.round)) ? Number(p.round) : null;
+    const ticks = Number.isFinite(Number(p.ticks)) ? Number(p.ticks) : null;
+    const reserve = typeof p.reserve === 'boolean' ? p.reserve : null;
+    const saleDay = id.slice(id.lastIndexOf('-') + 1);
+    await this.prisma.$executeRaw(Prisma.sql`
+      INSERT INTO iaai_bid_events AS b
+        (id, room, "saleRoom", lot, "order", "saleDay", bid, asking, increment, country, sold, round, ticks, reserve,
+         "seenCount", "firstSeenAt", "lastSeenAt", raw)
+      VALUES
+        (${id}, ${room}, ${d.sale}, ${BigInt(d.lot)}, ${Number(p.order)}, ${saleDay}, ${d.amount}, ${d.askBid}, ${d.increment},
+         ${d.buyerCountry}, ${sold}, ${round}, ${ticks}, ${reserve}, 1, ${at}, ${at}, ${JSON.stringify(p)}::jsonb)
+      ON CONFLICT (id) DO UPDATE SET
+        bid           = GREATEST(b.bid, EXCLUDED.bid),
+        asking        = GREATEST(b.asking, EXCLUDED.asking),
+        increment     = COALESCE(EXCLUDED.increment, b.increment),
+        sold          = b.sold OR EXCLUDED.sold,
+        round         = GREATEST(b.round, EXCLUDED.round),
+        ticks         = CASE WHEN EXCLUDED.sold THEN EXCLUDED.ticks ELSE b.ticks END,
+        country       = COALESCE(b.country, EXCLUDED.country),
+        reserve       = COALESCE(EXCLUDED.reserve, b.reserve),
+        raw           = CASE WHEN EXCLUDED.sold AND NOT b.sold THEN EXCLUDED.raw ELSE b.raw END,
+        "seenCount"   = b."seenCount" + 1,
+        "firstSeenAt" = LEAST(b."firstSeenAt", EXCLUDED."firstSeenAt"),
+        "lastSeenAt"  = GREATEST(b."lastSeenAt", EXCLUDED."lastSeenAt")`);
+    return id;
+  }
+
+  /**
+   * La venta de un lote IAAI → iaai_sale_results (una por stock number y dia de
+   * subasta, hora de Chicago). Columnas iguales que auction_sale_results; el
+   * coche se copia de iaai_listings. El mismo SOLD llega de varias fuentes y
+   * durante minutos: el upsert lo deja en una fila y nunca borra un importe
+   * con un null.
+   */
+  private async saveIaaiSale(d: DecodedFrame, at: Date): Promise<void> {
+    if (!d.lot) return;
+    const p = d.payload as Record<string, any>;
+    const lot = BigInt(d.lot);
+    const dia = saleDayMMDDYYYY(at); // MMDDYYYY
+    const saleDate = Number(dia.slice(4) + dia.slice(0, 2) + dia.slice(2, 4));
+    const l = await this.prisma.iaaiListing.findUnique({ where: { stockNumber: d.lot } });
+    const order = Number.isFinite(Number(p.order)) ? Number(p.order) : null;
+
+    const venta = {
+      auctionSession: typeof p.auction === 'string' ? p.auction.trim().toLowerCase() : null,
+      saleRoom: d.sale,
+      finalBid: d.amount,
+      askingPrice: d.askBid,
+      reserve: typeof p.reserve === 'boolean' ? p.reserve : null,
+      sold: true,
+      ticks: Number.isFinite(Number(p.ticks)) ? Number(p.ticks) : null,
+      round: Number.isFinite(Number(p.round)) ? Number(p.round) : null,
+      saleOrder: order,
+      event: d.event,
+      buyerCountry: d.buyerCountry,
+      emittedAt: d.emittedAt ?? at,
+    };
+    const coche = l
+      ? {
+          matched: true,
+          vin: l.vin,
+          year: l.year,
+          make: l.make,
+          model: l.model,
+          modelDetail: l.series,
+          bodyStyle: l.bodyStyle,
+          color: l.color,
+          damageDescription: l.primaryDamage,
+          secondaryDamage: l.secondaryDamage,
+          saleTitleType: l.saleDocument,
+          saleTitleState: l.certState,
+          odometer: l.odometer,
+          runsDrives: l.runAndDrive ? 'Run & Drive' : l.startCode,
+          engine: l.engineSize,
+          transmission: l.transmission,
+          drive: l.drivelineType,
+          fuelType: l.fuelType,
+          cylinders: l.cylinders,
+          estRetailValue: l.acv,
+          repairCost: l.repairCost,
+          highBidAtSync: l.currentBid,
+          yardNumber: l.branchCode,
+          yardName: l.branchName,
+          locationCity: l.locationCity,
+          locationState: l.locationState,
+          locationZip: l.locationZip,
+          sellerName: l.seller,
+        }
+      : { matched: false };
+    // En el update solo lo que trae valor: una copia sin importe no pisa la que si.
+    const update = Object.fromEntries(Object.entries({ ...venta, ...coche }).filter(([, v]) => v !== null && v !== undefined));
+
+    await this.prisma.iaaiSaleResult.upsert({
+      where: { lot_saleDate: { lot, saleDate } },
+      create: { lot, saleDate, ...venta, ...coche, receivedAt: new Date(), raw: p as any },
+      update,
+    });
+  }
+
+  /**
+   * Una sola vez: los frames IAAI con importe que se marcaron `ignored` antes
+   * de que hubiera tabla. Su base64 ya se borro, pero `summary` guarda el
+   * payload entero y lo decodificado, que es lo que hace falta.
+   */
+  private async recuperarIaaiPendientes(): Promise<void> {
+    let total = 0;
+    let lastId = '';
+    for (;;) {
+      const rows = await this.prisma.auctionRawFrame.findMany({
+        where: { error: 'IAAI con importe: pendiente de tabla', id: { gt: lastId } },
+        orderBy: { id: 'asc' },
+        take: 200,
+        select: { id: true, event: true, summary: true, capturedAt: true, receivedAt: true },
+      });
+      if (!rows.length) break;
+      for (const r of rows) {
+        lastId = r.id;
+        const sm = (r.summary ?? {}) as Record<string, any>;
+        const ev = (r.event ?? 'OTHER') as DecodedFrame['event'];
+        const d: DecodedFrame = {
+          sale: sm.sale ?? null,
+          event: ev,
+          rawEvent: r.event,
+          emittedAt: sm.emittedAt ? new Date(sm.emittedAt) : null,
+          lot: sm.lot ?? null,
+          itemNo: null,
+          amount: sm.amount ?? null,
+          askBid: sm.askBid ?? null,
+          nextBid: sm.nextBid ?? null,
+          increment: sm.increment ?? null,
+          reserveMet: null,
+          approved: null,
+          buyerNo: null,
+          buyerState: null,
+          buyerCountry: sm.buyerCountry ?? null,
+          payload: sm.fields ?? {},
+        };
+        if (!d.lot || !(isBidEvent(ev) || isSaleEvent(ev))) continue;
+        await this.procesarIaaiConImporte(r.id, d, r.capturedAt ?? r.receivedAt);
+        total++;
+      }
+    }
+    if (total) this.logger.log(`[Frames] IAAI recuperados: ${total} frames con importe`);
   }
 
   /** Cuanto atras se busca una puja igual de difusion para no duplicarla. */

@@ -2478,6 +2478,133 @@ model BidNoPriceIaai {
   @@map("bid_no_price_iaai")
 }
 
+/// Resultado de una venta de IAAI capturado del socket de difusion (SalvageBid,
+/// salas `iaa-643-c`). Mismas columnas que auction_sale_results a proposito: la
+/// pantalla de Stats y StatsService sirven a las dos con `source=iaai`. Tabla
+/// aparte porque el stock number de IAAI tiene el formato de un lote de Copart y
+/// podrian chocar. El coche se copia de iaai_listings (matched = encontrado):
+/// saleTitleType = saleDocument, yard = branch, estRetailValue = ACV.
+model IaaiSaleResult {
+  id  String @id @default(uuid())
+  lot BigInt // IAAI stock number (no FK — decoupled from iaai_listings)
+
+  // ── Incoming sale/auction data ──
+  saleDate         Int? // YYYYMMDD (parsed from pageUrl, fallback to receivedAt)
+  auctionSession   String? // e.g. "copart-882-a"
+  saleLocationSlug String? // e.g. "ncs-mountain_region"
+  finalBid         Decimal?  @db.Decimal(12, 2)
+  askingPrice      Decimal?  @db.Decimal(12, 2)
+  reserve          Boolean?
+  sold             Boolean?
+  ticks            Int?
+  round            Int?
+  saleOrder        Int? // the "order" field
+  event            String?
+  pageUrl          String?
+  receivedAt       DateTime?
+
+  // ── Datos que solo trae el frame de Solace ──
+  /// Sala tal cual la nombra Copart, p.ej. `COPART024A`.
+  saleRoom        String?
+  /// `MINMET`: si la reserva quedo cubierta.
+  reserveMet      Boolean?
+  /// `APRFLG`: venta aprobada.
+  approved        Boolean?
+  buyerNo         String?
+  /// `BUYERST` no es del mismo tipo siempre: "NJ" en EE.UU., "19" en
+  /// internacionales. Se guarda como texto y ya.
+  buyerState      String?
+  buyerCountry    String?
+  itemNo          Int?
+  /// Instante en que Copart emitio el evento, distinto de cuando nos llego.
+  emittedAt       DateTime?
+  /// SOLDPEND: adjudicada pero a la espera de que el vendedor acepte la puja.
+  /// Un SOLD posterior del mismo lote la confirma y esto pasa a false.
+  pendingApproval Boolean?
+
+  // ── Vehicle snapshot promoted from auction_listings (for fast stats) ──
+  matched           Boolean  @default(false) // was the lot found in auction_listings?
+  vin               String?
+  year              Int?
+  make              String?
+  model             String? // modelGroup
+  modelDetail       String?
+  trim              String?
+  bodyStyle         String?
+  color             String?
+  damageDescription String?
+  secondaryDamage   String?
+  saleTitleType     String?
+  saleTitleState    String?
+  odometer          Decimal? @db.Decimal(12, 1)
+  runsDrives        String?
+  engine            String?
+  transmission      String?
+  drive             String?
+  fuelType          String?
+  cylinders         String?
+  estRetailValue    Decimal? @db.Decimal(12, 2)
+  repairCost        Decimal? @db.Decimal(12, 2)
+  highBidAtSync     Decimal? @db.Decimal(12, 2) // AuctionListing.highBid at ingest
+  yardNumber        Int?
+  yardName          String?
+  locationCity      String?
+  locationState     String?
+  locationZip       String?
+  sellerName        String?
+  sellerCategory    String?
+
+  // ── Full payloads (future-proofing / audit) ──
+  vehicleSnapshot Json? // complete auction_listings row, JSON-safe serialized
+  raw             Json? // original incoming item
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([lot, saleDate])
+  @@index([lot])
+  @@index([saleDate])
+  @@index([saleRoom])
+  @@index([sold])
+  @@index([make])
+  @@index([year])
+  @@index([yardNumber])
+  @@index([saleTitleType])
+  @@index([sellerCategory])
+  @@map("iaai_sale_results")
+}
+
+/// Puja de IAAI CON importe (fuente con sesion). Las que llegan sin importe van
+/// a bid_no_price_iaai. Mismo id (`{order}-{sala}-{lote}-{MMDDYYYY}`) y misma
+/// fusion por ON CONFLICT: la misma puja llega de varias VM y en varias rondas.
+model IaaiBidEvent {
+  id          String   @id
+  room        String
+  saleRoom    String?
+  /// Stock number de IAAI
+  lot         BigInt
+  order       Int
+  saleDay     String
+  bid         Decimal? @db.Decimal(12, 2)
+  asking      Decimal? @db.Decimal(12, 2)
+  increment   Decimal? @db.Decimal(12, 2)
+  country     String?
+  sold        Boolean  @default(false)
+  round       Int?
+  ticks       Int?
+  reserve     Boolean?
+  seenCount   Int      @default(1)
+  firstSeenAt DateTime
+  lastSeenAt  DateTime
+  raw         Json?
+
+  @@index([lot])
+  @@index([saleRoom, firstSeenAt])
+  @@index([firstSeenAt])
+  @@map("iaai_bid_events")
+}
+
+
 /// Log remoto de la extension de las VM (planificador, pasadas de auto-join,
 /// relogin, errores del worker). Es lo que permite ver por que una pasada no
 /// salio sin tener a nadie delante de la maquina. Se purga a los 14 dias.
