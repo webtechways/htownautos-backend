@@ -73,6 +73,8 @@ export {
 } from './auction/bid-increments';
 export type { BidIncrementRow } from './auction/bid-increments';
 export {
+  bidNoPriceId,
+  saleDayMMDDYYYY,
   decodeBroadcastMessage,
   normalizeBroadcastRoom,
   parseSocketIoEvent,

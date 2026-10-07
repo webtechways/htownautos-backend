@@ -1,6 +1,7 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { PrismaService } from '@htownautos/prisma';
 import {
+  bidNoPriceId,
   decodeBroadcastMessage,
   decodeSolaceFrame,
   isBidEvent,
@@ -68,6 +69,32 @@ export class AuctionFramesConsumer implements OnModuleInit {
     const decoded = broadcast
       ? decodeBroadcastMessage(row.frame, row.capturedAt ?? row.receivedAt)
       : decodeSolaceFrame(row.frame);
+
+    // Puja de difusion sin importe (fuente sin sesion): a bid_no_price.
+    if (broadcast && decoded && decoded.event !== 'OTHER' && decoded.lot && decoded.amount == null && decoded.askBid == null) {
+      try {
+        const id = await this.saveBidNoPrice(decoded, row.capturedAt ?? row.receivedAt);
+        await this.prisma.auctionRawFrame.update({
+          where: { id: row.id },
+          data: {
+            status: id ? 'processed' : 'ignored',
+            event: decoded.rawEvent,
+            lot: BigInt(decoded.lot),
+            summary: { ...(this.summarize(decoded) as object), bidNoPriceId: id } as any,
+            frame: '',
+            error: id ? null : 'sin order: no se puede identificar la puja',
+            processedAt: new Date(),
+          },
+        });
+      } catch (err: any) {
+        await this.prisma.auctionRawFrame.update({
+          where: { id: row.id },
+          data: { status: 'failed', event: decoded.rawEvent, error: String(err?.message ?? err).slice(0, 500), processedAt: new Date() },
+        });
+        this.logger.warn(`[Frames] ${row.id} (sin importe) fallo: ${err?.message}`);
+      }
+      return;
+    }
 
     if (!decoded || decoded.event === 'OTHER' || !decoded.lot) {
       await this.prisma.auctionRawFrame.update({
@@ -175,6 +202,49 @@ export class AuctionFramesConsumer implements OnModuleInit {
         // P2002 = la misma puja reenviada por dos VM. Es exito, no error.
         if (e?.code !== 'P2002') throw e;
       });
+  }
+
+  /**
+   * Una puja de difusion sin importe, en una sola sentencia atomica.
+   *
+   * Pueden llegar a la vez la misma puja desde diez fuentes (prefetch 20 y
+   * varias VM): la clave primaria `{order}-{sala}-{lote}-{MMDDYYYY}` hace que
+   * Postgres deje una sola fila, y ON CONFLICT fusiona en vez de fallar:
+   *   - sold: true si cualquier copia lo trae (la venta reusa el order de la
+   *     ultima puja, asi que llega como "duplicado" de esa puja);
+   *   - round: el mayor visto; ticks: el de la venta si la hay;
+   *   - firstSeenAt / lastSeenAt: el primero y el ultimo; seenCount: +1.
+   * Devuelve el id, o null si falta el order.
+   */
+  private async saveBidNoPrice(d: DecodedFrame, at: Date): Promise<string | null> {
+    const p = d.payload as Record<string, any>;
+    const id = bidNoPriceId(p.auction, d.lot, p.order, at);
+    if (!id) return null;
+    const room = String(p.auction).trim().toLowerCase();
+    const sold = p.sold === true;
+    const round = Number.isFinite(Number(p.round)) ? Number(p.round) : null;
+    const ticks = Number.isFinite(Number(p.ticks)) ? Number(p.ticks) : null;
+    const reserve = typeof p.reserve === 'boolean' ? p.reserve : null;
+    const saleDay = id.slice(id.lastIndexOf('-') + 1);
+
+    await this.prisma.$executeRaw`
+      INSERT INTO bid_no_price
+        (id, room, "saleRoom", lot, "order", "saleDay", country, sold, round, ticks, reserve,
+         "seenCount", "firstSeenAt", "lastSeenAt", raw)
+      VALUES
+        (${id}, ${room}, ${d.sale}, ${BigInt(d.lot!)}, ${Number(p.order)}, ${saleDay}, ${d.buyerCountry},
+         ${sold}, ${round}, ${ticks}, ${reserve}, 1, ${at}, ${at}, ${JSON.stringify(p)}::jsonb)
+      ON CONFLICT (id) DO UPDATE SET
+        sold          = bid_no_price.sold OR EXCLUDED.sold,
+        round         = GREATEST(bid_no_price.round, EXCLUDED.round),
+        ticks         = CASE WHEN EXCLUDED.sold THEN EXCLUDED.ticks ELSE bid_no_price.ticks END,
+        country       = COALESCE(bid_no_price.country, EXCLUDED.country),
+        reserve       = COALESCE(EXCLUDED.reserve, bid_no_price.reserve),
+        raw           = CASE WHEN EXCLUDED.sold AND NOT bid_no_price.sold THEN EXCLUDED.raw ELSE bid_no_price.raw END,
+        "seenCount"   = bid_no_price."seenCount" + 1,
+        "firstSeenAt" = LEAST(bid_no_price."firstSeenAt", EXCLUDED."firstSeenAt"),
+        "lastSeenAt"  = GREATEST(bid_no_price."lastSeenAt", EXCLUDED."lastSeenAt")`;
+    return id;
   }
 
   /** Cuanto atras se busca una puja igual de difusion para no duplicarla. */

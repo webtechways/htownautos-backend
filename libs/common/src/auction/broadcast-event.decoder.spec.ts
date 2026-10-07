@@ -1,4 +1,6 @@
 import {
+  bidNoPriceId,
+  saleDayMMDDYYYY,
   decodeBroadcastMessage,
   normalizeBroadcastRoom,
   parseSocketIoEvent,
@@ -69,5 +71,29 @@ describe('helpers', () => {
 
   it('parseSocketIoEvent saca nombre y datos', () => {
     expect(parseSocketIoEvent('42["event",{"a":1}]')).toEqual({ name: 'event', data: { a: 1 } });
+  });
+});
+
+describe('bidNoPriceId', () => {
+  const at = new Date('2026-10-07T14:10:00Z');
+
+  it('es {order}-{sala}-{lote}-{MMDDYYYY}', () => {
+    expect(bidNoPriceId('copart-154-b', 65900036, 16, at)).toBe('16-copart-154-b-65900036-10072026');
+  });
+
+  it('la misma puja da el mismo id venga como venga', () => {
+    // foto inicial, round 2 y la venta comparten order
+    expect(bidNoPriceId('COPART-361-A', '0064772516', 10, at)).toBe(bidNoPriceId('copart-361-a', 64772516, '10', at));
+  });
+
+  it('la fecha es la de Houston, no la UTC', () => {
+    // 02:30 UTC del 8 = 21:30 del 7 en Houston
+    expect(saleDayMMDDYYYY(new Date('2026-10-08T02:30:00Z'))).toBe('10072026');
+  });
+
+  it('sin sala, lote u order no hay id', () => {
+    expect(bidNoPriceId('', 1, 1, at)).toBeNull();
+    expect(bidNoPriceId('copart-1-a', null, 1, at)).toBeNull();
+    expect(bidNoPriceId('copart-1-a', 5, null, at)).toBeNull();
   });
 });

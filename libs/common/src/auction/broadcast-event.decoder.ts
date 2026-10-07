@@ -107,3 +107,32 @@ export function decodeBroadcastMessage(message: string, capturedAt: Date | null)
     payload: { ...d, _event: pkt.name },
   };
 }
+
+/** Dia de subasta MMDDYYYY en hora de Houston, como el Auction Calendar. */
+export function saleDayMMDDYYYY(at: Date): string {
+  const p = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/Chicago',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(at);
+  const v = (t: string) => p.find((x) => x.type === t)?.value ?? '';
+  return `${v('month')}${v('day')}${v('year')}`;
+}
+
+/**
+ * Identidad de una puja de difusion SIN importe (cliente sin sesion):
+ * `{order}-{sala}-{lote}-{MMDDYYYY}`, p. ej. `16-copart-154-b-65900036-10072026`.
+ *
+ * `order` es el numero de puja dentro del lote, asi que la misma puja vista por
+ * diez fuentes, repetida en otra `round` o en la foto inicial al suscribirse,
+ * da siempre el mismo id. La fecha separa un lote que vuelve a salir otro dia.
+ * `null` si falta algo de lo que hace la identidad.
+ */
+export function bidNoPriceId(room: unknown, lot: unknown, order: unknown, at: Date): string | null {
+  const sala = typeof room === 'string' ? room.trim().toLowerCase() : '';
+  const lote = normalizeLot(lot);
+  const n = num(order);
+  if (!/^[a-z]+-\d+-[a-z0-9]+$/.test(sala) || !lote || n == null || n < 0) return null;
+  return `${n}-${sala}-${lote}-${saleDayMMDDYYYY(at)}`;
+}

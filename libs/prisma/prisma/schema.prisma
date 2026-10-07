@@ -2352,6 +2352,43 @@ model AuctionBidEvent {
   @@map("auction_bid_events")
 }
 
+/// Pujas del socket de difusion que llegaron SIN importe (`bid` y `asking`
+/// null): pasa cuando la fuente no tiene sesion de AutoBidMaster. Sin importe
+/// no van a auction_bid_events, pero el numero de puja (`order`), el pais y
+/// la venta siguen valiendo: con la Jumping Table se reconstruye el precio.
+///
+/// Una fila por puja. El id es `{order}-{sala}-{lote}-{MMDDYYYY}` (dia de
+/// Houston): la misma puja repetida por varias fuentes, en otra `round` o en
+/// la foto inicial al suscribirse cae en la misma fila (INSERT … ON CONFLICT).
+/// La venta llega con el mismo `order` que la ultima puja, asi que el
+/// conflicto FUSIONA (sold se queda en true) en vez de ignorar.
+model BidNoPrice {
+  id          String   @id
+  /// Tal como llega: copart-154-b
+  room        String
+  /// Normalizada como Solace: COPART154B
+  saleRoom    String?
+  lot         BigInt
+  order       Int
+  /// MMDDYYYY en hora de Houston
+  saleDay     String
+  country     String?
+  sold        Boolean  @default(false)
+  round       Int?
+  ticks       Int?
+  reserve     Boolean?
+  /// Cuantas veces llego (fuentes x repeticiones)
+  seenCount   Int      @default(1)
+  firstSeenAt DateTime
+  lastSeenAt  DateTime
+  raw         Json?
+
+  @@index([lot])
+  @@index([saleRoom, firstSeenAt])
+  @@index([firstSeenAt])
+  @@map("bid_no_price")
+}
+
 /// Log remoto de la extension de las VM (planificador, pasadas de auto-join,
 /// relogin, errores del worker). Es lo que permite ver por que una pasada no
 /// salio sin tener a nadie delante de la maquina. Se purga a los 14 dias.
