@@ -288,6 +288,11 @@ export class StatsService {
     const ids: { id: string }[] = await this.repo(dto.source).findMany({
       where: { ...where, finalBid: { not: null } },
       select: { id: true },
+      // Las vistas (sale_results_all, para "both" sources) no tienen llave primaria,
+      // asi que Prisma no les aplica un orden implicito: sin este orderBy explicito,
+      // `take` por si solo lanza "Argument `orderBy` is missing" SOLO para ese caso
+      // (auction_sale_results/iaai_sale_results, tablas normales, no lo necesitan).
+      orderBy: { id: 'asc' },
       take: 50_000, // techo de seguridad; con mas, la mediana ya no cambia
     });
 
@@ -348,6 +353,9 @@ export class StatsService {
     const ids: { id: string }[] = await this.repo(dto.source).findMany({
       where: { ...where, finalBid: { not: null } },
       select: { id: true },
+      // Ver nota en priceStats(): sin orderBy explicito, `take` sobre la vista
+      // sale_results_all ("both" sources) lanza un error de validacion.
+      orderBy: { id: 'asc' },
       take: 50_000,
     });
     if (ids.length === 0) return [];
