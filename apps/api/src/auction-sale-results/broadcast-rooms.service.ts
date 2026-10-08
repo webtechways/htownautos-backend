@@ -1,6 +1,5 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '@htownautos/prisma';
-import { copartLaneCodes } from '@htownautos/common';
 
 /** Cuanto antes del comienzo se considera "en vivo" una subasta, por defecto. */
 export const BROADCAST_LEAD_MINUTES = 15;
@@ -87,6 +86,30 @@ export class BroadcastRoomsService {
       where: { AND: [this.ventana(lead, ahora), { OR: [{ manualStatus: 'live' }, { status: { not: 'ended' } }] }] },
       select: { locationSourceId: true, raw: true, endedLanes: true },
     });
-    return entradas.flatMap((e) => copartLaneCodes(e.locationSourceId, e.raw).filter((c) => !e.endedLanes.includes(c)));
+    return entradas.flatMap((e) => copartBroadcastRooms(e.locationSourceId, e.raw).filter((c) => !e.endedLanes.includes(c)));
   }
+}
+
+/** Lanes que se suscriben si el calendario aun no las trae: A–E (la E es la mayor vista). */
+export const COPART_CANDIDATE_LANES = ['a', 'b', 'c', 'd', 'e'];
+
+/**
+ * Salas a las que suscribirse para una sede de Copart.
+ *
+ * El calendario solo rellena `lanes` cuando la subasta ya esta en vivo, y se
+ * refresca cada pocas horas: una venta de las 20:00 sigue con `lanes: []`
+ * cuando empieza. Entonces se suscriben las candidatas A–E; suscribirse a una
+ * sala que no existe no cuesta nada (no llega ningun evento).
+ *
+ * No es `copartLaneCodes`: esa decide cuando una subasta termino (todas sus
+ * lanes con ENDAUC), y ahi las candidatas no deben contar.
+ */
+export function copartBroadcastRooms(locationSourceId: number, raw: unknown): string[] {
+  const r = (raw ?? {}) as Record<string, Array<{ lane?: string }> | undefined>;
+  const conocidas = ['lanes', 'liveLanes', 'laterLanes']
+    .flatMap((k) => (Array.isArray(r[k]) ? r[k]! : []))
+    .map((l) => String(l?.lane ?? '').trim().toLowerCase())
+    .filter((l) => /^[a-z]$/.test(l));
+  const lanes = conocidas.length ? [...new Set(conocidas)] : COPART_CANDIDATE_LANES;
+  return lanes.map((l) => `copart-${locationSourceId}-${l}`);
 }
