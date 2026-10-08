@@ -117,6 +117,8 @@ export {
   markRoomEnded,
   roomCodeOf,
   timeStatus,
+  promoteCalendarByTime,
+  CALENDAR_LIVE_LEAD_MINUTES,
 } from './auction/calendar-status';
 export type { CalendarStatus, RoomEndResult } from './auction/calendar-status';
 export { AgentAssignmentService } from './auction/agent-assignment.service';

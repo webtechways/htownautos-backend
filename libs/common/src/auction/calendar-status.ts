@@ -5,7 +5,8 @@
  *   1. `manualStatus` — lo puso una persona; gana siempre.
  *   2. `endedAt` (todas las lanes mandaron ENDAUC) o el calendario la da por
  *      terminada → ended.
- *   3. Por hora: antes del comienzo upcoming, hasta 8 h despues live, luego ended.
+ *   3. Por hora: upcoming hasta 15 min antes del comienzo, live hasta 8 h
+ *      despues, luego ended.
  */
 
 export type CalendarStatus = 'live' | 'upcoming' | 'ended';
@@ -14,9 +15,16 @@ export const CALENDAR_STATUSES: CalendarStatus[] = ['live', 'upcoming', 'ended']
 /** Sin hora de fin: la lane mas larga vista dura 2-3 h, 8 h cubre de sobra. */
 export const CALENDAR_LIVE_HOURS = 8;
 
+/**
+ * Una subasta cuenta como en vivo desde estos minutos antes de su comienzo:
+ * es cuando las VMs tienen que estar ya suscritas (lo mismo que `leadMinutes`
+ * de /broadcast/live-rooms).
+ */
+export const CALENDAR_LIVE_LEAD_MINUTES = 15;
+
 export function timeStatus(startedAt: Date, now = Date.now()): CalendarStatus {
   const t = startedAt.getTime();
-  if (now < t) return 'upcoming';
+  if (now < t - CALENDAR_LIVE_LEAD_MINUTES * 60_000) return 'upcoming';
   return now < t + CALENDAR_LIVE_HOURS * 3_600_000 ? 'live' : 'ended';
 }
 
@@ -264,4 +272,24 @@ export async function autoEndIdleAuctions(prisma: Db, now = Date.now()): Promise
     });
   }
   return { lanes, auctions };
+}
+
+/**
+ * Pone en `live` la columna `status` de las subastas de Copart que empiezan
+ * en los proximos 15 min (o ya empezaron), sin esperar al siguiente scrape del
+ * calendario: la hora ya la sabemos. Respeta lo manual y lo ya terminado.
+ * Las de mas de 8 h pasan a ended por el mismo motivo.
+ */
+export async function promoteCalendarByTime(prisma: Db, now = Date.now()): Promise<{ live: number; ended: number }> {
+  const hasta = new Date(now + CALENDAR_LIVE_LEAD_MINUTES * 60_000);
+  const caduca = new Date(now - CALENDAR_LIVE_HOURS * 3_600_000);
+  const live = await prisma.auctionCalendarEntry.updateMany({
+    where: { manualStatus: null, endedAt: null, status: { notIn: ['live', 'ended'] }, startedAt: { lte: hasta, gt: caduca } },
+    data: { status: 'live' },
+  });
+  const ended = await prisma.auctionCalendarEntry.updateMany({
+    where: { manualStatus: null, status: { not: 'ended' }, startedAt: { lte: caduca } },
+    data: { status: 'ended' },
+  });
+  return { live: live.count, ended: ended.count };
 }

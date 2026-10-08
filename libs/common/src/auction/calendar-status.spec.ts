@@ -1,4 +1,4 @@
-import { copartLaneCodes, effectiveCalendarStatus, idleLanes, roomCodeOf, timeStatus } from './calendar-status';
+import { copartLaneCodes, effectiveCalendarStatus, idleLanes, promoteCalendarByTime, roomCodeOf, timeStatus } from './calendar-status';
 
 describe('roomCodeOf', () => {
   it('maps Solace and IAAI sale rooms to broadcast room codes', () => {
@@ -30,6 +30,9 @@ describe('effectiveCalendarStatus', () => {
   });
   it('falls back to time', () => {
     expect(timeStatus(at(1), now)).toBe('upcoming');
+    // 15 min antes del comienzo ya cuenta como en vivo
+    expect(timeStatus(new Date(now - 0 + 14 * 60_000), now)).toBe('live');
+    expect(timeStatus(new Date(now + 16 * 60_000), now)).toBe('upcoming');
     expect(timeStatus(at(-2), now)).toBe('live');
     expect(timeStatus(at(-9), now)).toBe('ended');
   });
@@ -75,5 +78,20 @@ describe('idleLanes', () => {
   });
   it('no known lanes never ends the auction', () => {
     expect(idleLanes({ lanes: [], alreadyEnded: [], lastActivity: new Map(), startedAt, now, captureHealthy: true }).allEnded).toBe(false);
+  });
+});
+
+describe('promoteCalendarByTime', () => {
+  it('pasa a live lo que empieza en 15 min y a ended lo de mas de 8 h, sin tocar lo manual', async () => {
+    const updateMany = jest.fn().mockResolvedValueOnce({ count: 3 }).mockResolvedValueOnce({ count: 1 });
+    const now = Date.UTC(2026, 9, 8, 0, 50);
+    const out = await promoteCalendarByTime({ auctionCalendarEntry: { updateMany } }, now);
+    expect(out).toEqual({ live: 3, ended: 1 });
+    const [live, ended] = updateMany.mock.calls.map((c) => c[0]);
+    expect(live.data).toEqual({ status: 'live' });
+    expect(live.where.manualStatus).toBeNull();
+    expect(live.where.endedAt).toBeNull();
+    expect(live.where.startedAt.lte).toEqual(new Date(now + 15 * 60_000));
+    expect(ended.where.startedAt.lte).toEqual(new Date(now - 8 * 3_600_000));
   });
 });
