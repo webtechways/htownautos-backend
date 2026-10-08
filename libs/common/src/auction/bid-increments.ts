@@ -7,7 +7,7 @@
  * Por eso, con el precio inicial y el NUMERO de pujas, se reconstruye el
  * precio final sin conocer ningun importe (94,9% exacto en 18k lotes).
  *
- * La tabla es editable en Ajustes → Jumping Table Copart; esta es la semilla
+ * Las tablas son editables en Ajustes → Jumping Tables; estas son la semilla
  * y el valor de reserva si la base no tiene filas.
  */
 
@@ -29,6 +29,31 @@ export const DEFAULT_COPART_BID_INCREMENTS: BidIncrementRow[] = [
   { fromPrice: 50000, increment: 500 },
   { fromPrice: 100000, increment: 1000 },
 ];
+
+/**
+ * IAAI (salas iaa-*, SalvageBid), deducida de 95k pujas reales (asking - bid,
+ * 2026-10-07 → 08). Cada tramo empieza justo donde aparece su salto por
+ * primera vez ($500, $1.000, $10.000, $50.000). El 74,2% de las pujas sigue
+ * esta tabla exacta; el 25,8% restante es un salto reducido del subastador (la
+ * mitad, o 100 en el tramo de 250) y ninguna otra cosa. Por eso, en IAAI, el
+ * precio reconstruido por numero de pujas es un maximo, no un exacto.
+ * Por encima de $121.000 se vieron 8 pujas de +$1.000: pocas para fijar tramo.
+ */
+export const DEFAULT_IAAI_BID_INCREMENTS: BidIncrementRow[] = [
+  { fromPrice: 0, increment: 25 },
+  { fromPrice: 500, increment: 50 },
+  { fromPrice: 1000, increment: 100 },
+  { fromPrice: 10000, increment: 250 },
+  { fromPrice: 50000, increment: 500 },
+];
+
+export const BID_INCREMENT_AUCTIONS = ['copart', 'iaai'] as const;
+export type BidIncrementAuction = (typeof BID_INCREMENT_AUCTIONS)[number];
+
+/** La semilla de cada subasta. */
+export function defaultBidIncrements(auction: string): BidIncrementRow[] {
+  return auction === 'iaai' ? DEFAULT_IAAI_BID_INCREMENTS : DEFAULT_COPART_BID_INCREMENTS;
+}
 
 /** Ordena por `fromPrice` y descarta filas sin sentido. */
 export function normalizeBidIncrements(rows: BidIncrementRow[]): BidIncrementRow[] {

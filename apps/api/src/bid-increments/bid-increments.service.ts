@@ -1,7 +1,7 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { PrismaService } from '@htownautos/prisma';
 import {
-  DEFAULT_COPART_BID_INCREMENTS,
+  defaultBidIncrements,
   normalizeBidIncrements,
   validateBidIncrements,
   type BidIncrementRow,
@@ -40,7 +40,7 @@ export class BidIncrementsService {
           isDefault: false,
           updatedAt: filas.reduce<Date | null>((m, f) => (!m || f.updatedAt > m ? f.updatedAt : m), null),
         }
-      : { auction, rows: DEFAULT_COPART_BID_INCREMENTS, isDefault: true, updatedAt: null };
+      : { auction, rows: defaultBidIncrements(auction), isDefault: true, updatedAt: null };
     this.cache.set(auction, tabla);
     return tabla;
   }

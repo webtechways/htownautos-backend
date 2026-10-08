@@ -66,6 +66,9 @@ export {
 export type { DecodedFrame, AuctionEventType } from './auction/solace-frame.decoder';
 export {
   DEFAULT_COPART_BID_INCREMENTS,
+  DEFAULT_IAAI_BID_INCREMENTS,
+  BID_INCREMENT_AUCTIONS,
+  defaultBidIncrements,
   normalizeBidIncrements,
   validateBidIncrements,
   incrementFor,

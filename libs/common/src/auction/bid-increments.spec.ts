@@ -30,3 +30,19 @@ describe('Jumping Table', () => {
     expect(validateBidIncrements([{ fromPrice: 0, increment: 1 }, { fromPrice: 0, increment: 2 }])).toMatch(/repetido/);
   });
 });
+
+describe('IAAI defaults', () => {
+  it('uses the IAAI table for iaai and Copart otherwise', () => {
+    const { defaultBidIncrements, DEFAULT_IAAI_BID_INCREMENTS, DEFAULT_COPART_BID_INCREMENTS, incrementFor, validateBidIncrements } =
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      require('./bid-increments');
+    expect(defaultBidIncrements('iaai')).toBe(DEFAULT_IAAI_BID_INCREMENTS);
+    expect(defaultBidIncrements('copart')).toBe(DEFAULT_COPART_BID_INCREMENTS);
+    expect(validateBidIncrements(DEFAULT_IAAI_BID_INCREMENTS)).toBeNull();
+    expect(incrementFor(DEFAULT_IAAI_BID_INCREMENTS, 475)).toBe(25);
+    expect(incrementFor(DEFAULT_IAAI_BID_INCREMENTS, 500)).toBe(50);
+    expect(incrementFor(DEFAULT_IAAI_BID_INCREMENTS, 9975)).toBe(100);
+    expect(incrementFor(DEFAULT_IAAI_BID_INCREMENTS, 10000)).toBe(250);
+    expect(incrementFor(DEFAULT_IAAI_BID_INCREMENTS, 60000)).toBe(500);
+  });
+});
