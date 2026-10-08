@@ -130,3 +130,138 @@ export async function markRoomEnded(prisma: Db, room: string, at: Date = new Dat
   });
   return { auction: 'iaai', entryId: e.id, room, auctionEnded: todas };
 }
+
+// ── Fin automatico por inactividad ─────────────────────────────────────────
+
+/** Una lane con actividad que lleva esto sin eventos, con la captura sana, terminó. */
+export const LANE_IDLE_MINUTES = 20;
+/** Si la captura parece caida (nada en ninguna sala), se espera mucho mas. */
+export const LANE_IDLE_UNHEALTHY_MINUTES = 90;
+/** La captura esta sana si alguna sala tuvo un evento hace menos de esto. */
+export const CAPTURE_HEALTHY_MINUTES = 10;
+/** Lane del calendario sin ningun evento tanto despues del comienzo: no corrio (o no se capto). */
+export const LANE_NO_SHOW_HOURS = 3;
+
+/**
+ * Pura: que lanes de una subasta han terminado ya, dada la ultima actividad de
+ * cada sala. `lanes` = las conocidas (Copart: calendario; IAAI: las que
+ * tuvieron pujas). Devuelve las nuevas terminadas y si ya no queda ninguna viva.
+ */
+export function idleLanes(opts: {
+  lanes: string[];
+  alreadyEnded: string[];
+  lastActivity: Map<string, Date>;
+  startedAt: Date;
+  now: number;
+  captureHealthy: boolean;
+}): { newlyEnded: string[]; allEnded: boolean; lastAt: Date | null } {
+  const idle = (opts.captureHealthy ? LANE_IDLE_MINUTES : LANE_IDLE_UNHEALTHY_MINUTES) * 60_000;
+  const newlyEnded: string[] = [];
+  let lastAt: Date | null = null;
+  for (const lane of opts.lanes) {
+    const last = opts.lastActivity.get(lane);
+    if (last && (!lastAt || last > lastAt)) lastAt = last;
+    if (opts.alreadyEnded.includes(lane)) continue;
+    const done = last
+      ? opts.now - last.getTime() > idle
+      : opts.now - opts.startedAt.getTime() > LANE_NO_SHOW_HOURS * 3_600_000;
+    if (done) newlyEnded.push(lane);
+  }
+  const ended = new Set([...opts.alreadyEnded, ...newlyEnded]);
+  const allEnded = opts.lanes.length > 0 && opts.lanes.every((l) => ended.has(l));
+  return { newlyEnded, allEnded, lastAt };
+}
+
+/**
+ * Pasa a terminadas las lanes y subastas que dejaron de tener actividad (el
+ * socket no avisa del fin). Se ejecuta cada pocos minutos. No toca nada con
+ * estado manual. Devuelve cuantas subastas termino.
+ */
+export async function autoEndIdleAuctions(prisma: Db, now = Date.now()): Promise<{ lanes: number; auctions: number }> {
+  const desde = new Date(now - 14 * 3_600_000);
+  const filas: Array<{ room: string | null; last: Date | null }> = await prisma.$queryRaw`
+    SELECT room, max("lastSeenAt") AS last FROM bid_no_price WHERE "firstSeenAt" >= ${desde} GROUP BY room
+    UNION ALL
+    SELECT "saleRoom" AS room, max("emittedAt") AS last FROM auction_bid_events
+     WHERE "emittedAt" >= ${desde} AND "saleRoom" IS NOT NULL GROUP BY "saleRoom"
+    UNION ALL
+    SELECT room, max("lastSeenAt") AS last FROM iaai_bid_events WHERE "firstSeenAt" >= ${desde} GROUP BY room
+    UNION ALL
+    SELECT room, max("lastSeenAt") AS last FROM bid_no_price_iaai WHERE "firstSeenAt" >= ${desde} GROUP BY room`;
+
+  // Sala normalizada (copart-159-e / iaa-643-c) → ultimo evento.
+  const actividad = new Map<string, Date>();
+  let global = 0;
+  for (const f of filas) {
+    const code = roomCodeOf(f.room);
+    if (!code || !f.last) continue;
+    const t = new Date(f.last);
+    if (!actividad.has(code) || t > actividad.get(code)!) actividad.set(code, t);
+    global = Math.max(global, t.getTime());
+  }
+  const captureHealthy = global > 0 && now - global < CAPTURE_HEALTHY_MINUTES * 60_000;
+  const activasDe = (prefijo: string) => [...actividad.keys()].filter((k) => k.startsWith(prefijo));
+
+  const ventana = {
+    manualStatus: null,
+    endedAt: null,
+    startedAt: { gte: desde, lte: new Date(now - LANE_IDLE_MINUTES * 60_000) },
+  };
+  let lanes = 0;
+  let auctions = 0;
+
+  const copart: Array<{ id: string; locationSourceId: number; raw: unknown; endedLanes: string[]; startedAt: Date }> =
+    await prisma.auctionCalendarEntry.findMany({
+      where: { ...ventana, status: { not: 'ended' } },
+      select: { id: true, locationSourceId: true, raw: true, endedLanes: true, startedAt: true },
+    });
+  for (const e of copart) {
+    const conocidas = new Set([...copartLaneCodes(e.locationSourceId, e.raw), ...activasDe(`copart-${e.locationSourceId}-`)]);
+    const r = idleLanes({
+      lanes: [...conocidas],
+      alreadyEnded: e.endedLanes,
+      lastActivity: actividad,
+      startedAt: e.startedAt,
+      now,
+      captureHealthy,
+    });
+    if (!r.newlyEnded.length && !r.allEnded) continue;
+    lanes += r.newlyEnded.length;
+    if (r.allEnded) auctions++;
+    await prisma.auctionCalendarEntry.update({
+      where: { id: e.id },
+      data: {
+        endedLanes: [...new Set([...e.endedLanes, ...r.newlyEnded])],
+        ...(r.allEnded ? { endedAt: r.lastAt ?? new Date(now), status: 'ended' } : {}),
+      },
+    });
+  }
+
+  const iaai: Array<{ id: string; branchNumber: number; endedLanes: string[]; startedAt: Date }> =
+    await prisma.iaaiCalendarEntry.findMany({
+      where: ventana,
+      select: { id: true, branchNumber: true, endedLanes: true, startedAt: true },
+    });
+  for (const e of iaai) {
+    // Las candidatas (iaa-643-a…h) no son reales: cuentan solo las que tuvieron pujas.
+    const r = idleLanes({
+      lanes: activasDe(`iaa-${e.branchNumber}-`),
+      alreadyEnded: e.endedLanes,
+      lastActivity: actividad,
+      startedAt: e.startedAt,
+      now,
+      captureHealthy,
+    });
+    if (!r.newlyEnded.length && !r.allEnded) continue;
+    lanes += r.newlyEnded.length;
+    if (r.allEnded) auctions++;
+    await prisma.iaaiCalendarEntry.update({
+      where: { id: e.id },
+      data: {
+        endedLanes: [...new Set([...e.endedLanes, ...r.newlyEnded])],
+        ...(r.allEnded ? { endedAt: r.lastAt ?? new Date(now) } : {}),
+      },
+    });
+  }
+  return { lanes, auctions };
+}

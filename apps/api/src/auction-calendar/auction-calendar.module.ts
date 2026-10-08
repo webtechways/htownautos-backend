@@ -5,6 +5,7 @@ import { ProxyService, AgentAssignmentService } from '@htownautos/common';
 import { AuctionCalendarService } from './auction-calendar.service';
 import { AuctionCalendarController } from './auction-calendar.controller';
 import { AuctionCalendarAlertsService } from './auction-calendar-alerts.service';
+import { CalendarAutoEndService } from './calendar-auto-end.service';
 
 // PrismaModule required because ClerkJwtGuard injects PrismaService.
 // ProxyService fetches AutoBidMaster through the rotating proxy pool.
@@ -14,6 +15,7 @@ import { AuctionCalendarAlertsService } from './auction-calendar-alerts.service'
   providers: [
     AuctionCalendarService,
     AuctionCalendarAlertsService,
+    CalendarAutoEndService,
     ProxyService,
     AgentAssignmentService,
   ],

@@ -110,6 +110,8 @@ export { PublicS3Service } from './s3/public-s3.service';
 export {
   CALENDAR_LIVE_HOURS,
   CALENDAR_STATUSES,
+  autoEndIdleAuctions,
+  idleLanes,
   copartLaneCodes,
   effectiveCalendarStatus,
   markRoomEnded,

@@ -1,4 +1,4 @@
-import { copartLaneCodes, effectiveCalendarStatus, roomCodeOf, timeStatus } from './calendar-status';
+import { copartLaneCodes, effectiveCalendarStatus, idleLanes, roomCodeOf, timeStatus } from './calendar-status';
 
 describe('roomCodeOf', () => {
   it('maps Solace and IAAI sale rooms to broadcast room codes', () => {
@@ -42,5 +42,38 @@ describe('copartLaneCodes', () => {
       'copart-159-b',
     ]);
     expect(copartLaneCodes(1, null)).toEqual([]);
+  });
+});
+
+describe('idleLanes', () => {
+  const now = Date.UTC(2026, 9, 8, 18);
+  const ago = (min: number) => new Date(now - min * 60_000);
+  const startedAt = ago(120);
+  it('ends a lane idle past the threshold while capture is healthy', () => {
+    const r = idleLanes({
+      lanes: ['copart-1-a', 'copart-1-b'],
+      alreadyEnded: [],
+      lastActivity: new Map([['copart-1-a', ago(25)], ['copart-1-b', ago(1)]]),
+      startedAt, now, captureHealthy: true,
+    });
+    expect(r.newlyEnded).toEqual(['copart-1-a']);
+    expect(r.allEnded).toBe(false);
+  });
+  it('waits much longer when capture looks down', () => {
+    const r = idleLanes({
+      lanes: ['copart-1-a'], alreadyEnded: [], lastActivity: new Map([['copart-1-a', ago(25)]]),
+      startedAt, now, captureHealthy: false,
+    });
+    expect(r.newlyEnded).toEqual([]);
+  });
+  it('ends the auction when every lane is done; silent lanes only after the no-show window', () => {
+    const base = { lastActivity: new Map([['copart-1-a', ago(30)]]), now, captureHealthy: true };
+    expect(idleLanes({ ...base, lanes: ['copart-1-a', 'copart-1-b'], alreadyEnded: [], startedAt }).allEnded).toBe(false);
+    const r = idleLanes({ ...base, lanes: ['copart-1-a', 'copart-1-b'], alreadyEnded: [], startedAt: ago(200) });
+    expect(r.allEnded).toBe(true);
+    expect(r.lastAt?.getTime()).toBe(ago(30).getTime());
+  });
+  it('no known lanes never ends the auction', () => {
+    expect(idleLanes({ lanes: [], alreadyEnded: [], lastActivity: new Map(), startedAt, now, captureHealthy: true }).allEnded).toBe(false);
   });
 });
