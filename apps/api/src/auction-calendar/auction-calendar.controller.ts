@@ -75,10 +75,21 @@ export class AuctionCalendarController {
     return { announced: await this.alerts.run() };
   }
 
+  /**
+   * Con reintentos y esperas una sync puede durar minutos: se lanza en segundo
+   * plano y se contesta ya. El resultado aparece en /sync-logs.
+   */
   @Post('refresh')
-  @ApiOperation({ summary: 'Fetch the calendar from AutoBidMaster now' })
+  @ApiOperation({ summary: 'Start a calendar sync from AutoBidMaster now (result in /sync-logs)' })
   refresh() {
-    return this.service.fetchAndStore();
+    this.service.fetchAndStore('manual').catch(() => undefined);
+    return { started: true };
+  }
+
+  @Get('sync-logs')
+  @ApiOperation({ summary: 'Recent calendar syncs with every attempt (proxy, status, error)' })
+  syncLogs(@Query('limit') limit?: string) {
+    return this.service.syncLogs(Number(limit) || 50);
   }
 
   @Post('assign-agents')

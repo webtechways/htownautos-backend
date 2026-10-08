@@ -32,6 +32,17 @@ const BROWSER_HEADERS: Record<string, string> = {
     'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36',
 };
 
+/** Un intento de la sync del calendario, tal como queda en el log. */
+interface SyncAttempt {
+  n: number;
+  /** ip:puerto del proxy (sin credenciales) o `direct`. */
+  proxy: string;
+  status: number | null;
+  ms: number;
+  error: string | null;
+  at: string;
+}
+
 interface AbmLocation {
   sourceId?: number;
   catalogSourceId?: number;
@@ -63,7 +74,7 @@ export class AuctionCalendarService implements OnModuleInit {
   async onModuleInit() {
     const cfg = await this.prisma.auctionCalendarConfig.findUnique({ where: { id: CONFIG_ID } });
     if (!cfg?.lastFetchedAt) {
-      this.fetchAndStore().catch((e) => this.logger.warn(`[Calendar] Initial fetch failed: ${e.message}`));
+      this.fetchAndStore('boot').catch((e) => this.logger.warn(`[Calendar] Initial fetch failed: ${e.message}`));
     }
   }
 
@@ -76,24 +87,70 @@ export class AuctionCalendarService implements OnModuleInit {
       if (hours <= 0) return;
       const last = cfg?.lastFetchedAt;
       if (last && Date.now() - last.getTime() < hours * 3_600_000) return;
-      await this.fetchAndStore();
+      await this.fetchAndStore('cron');
     } catch (err: any) {
       this.logger.error(`[Calendar] Auto-refresh failed: ${err.message}`);
     }
   }
 
+  /**
+   * Pide el calendario con reintentos: hasta `maxAttempts` intentos, cada uno
+   * por un proxy distinto del pool, esperando `retryDelaySeconds` entre uno y
+   * otro. Cada intento queda en `attempts` para el log.
+   */
+  private async fetchCalendarJson(cfg: { maxAttempts: number; retryDelaySeconds: number }, attempts: SyncAttempt[]): Promise<any> {
+    const max = Math.min(Math.max(cfg.maxAttempts || 1, 1), 10);
+    const espera = Math.min(Math.max(cfg.retryDelaySeconds ?? 30, 0), 600) * 1000;
+    let ultimo = 'sin intentos';
+    for (let n = 1; n <= max; n++) {
+      const r = await this.proxy.fetchOnce(CALENDAR_URL, { headers: BROWSER_HEADERS });
+      const intento: SyncAttempt = { n, proxy: r.proxy, status: r.status, ms: r.ms, error: null, at: new Date().toISOString() };
+      attempts.push(intento);
+      let json: any = null;
+      if (r.error) intento.error = r.error;
+      else if (r.status !== 200) intento.error = `HTTP ${r.status}${r.status === 403 ? ' (bloqueado)' : ''}`;
+      else {
+        try {
+          json = JSON.parse(r.body!.toString('utf8'));
+        } catch {
+          // 200 con HTML: pagina de desafio de Cloudflare
+          intento.error = `200 pero no es JSON (${r.contentType ?? 'sin content-type'}): probable desafio`;
+        }
+      }
+      if (json && !intento.error) {
+        const root = Array.isArray(json) ? json[0] : json;
+        if (root?.auctions && typeof root.auctions === 'object') return json;
+        intento.error = 'JSON sin "auctions"';
+      }
+      ultimo = intento.error!;
+      this.logger.warn(`[Calendar] intento ${n}/${max} por ${r.proxy}: ${ultimo}`);
+      if (n < max && espera) await new Promise((res) => setTimeout(res, espera));
+    }
+    throw new Error(`${max} intento(s) fallidos; ultimo: ${ultimo}`);
+  }
+
   /** Fetch the AutoBidMaster calendar, flatten it, and fully replace the table. */
-  async fetchAndStore(): Promise<{ count: number }> {
-    if (this.fetching) return { count: 0 };
+  async fetchAndStore(trigger: 'cron' | 'manual' | 'boot' = 'manual'): Promise<{ count: number; logId?: string; skipped?: boolean }> {
+    if (this.fetching) return { count: 0, skipped: true };
     this.fetching = true;
+    const t0 = Date.now();
+    const attempts: SyncAttempt[] = [];
+    const log = await this.prisma.auctionCalendarSyncLog
+      .create({ data: { trigger }, select: { id: true } })
+      .catch(() => null);
+    const cerrarLog = (data: { ok: boolean; count?: number; error?: string }) =>
+      log
+        ? this.prisma.auctionCalendarSyncLog
+            .update({
+              where: { id: log.id },
+              data: { ...data, finishedAt: new Date(), durationMs: Date.now() - t0, attempts: attempts as unknown as Prisma.InputJsonValue },
+            })
+            .catch(() => undefined)
+        : Promise.resolve();
     try {
-      this.logger.log('[Calendar] Fetching AutoBidMaster auction calendar…');
-      const res = await this.proxy.fetchViaProxy(CALENDAR_URL, {
-        headers: BROWSER_HEADERS,
-        maxAttempts: 4,
-      });
-      if (!res.ok) throw new Error(`AutoBidMaster returned ${res.status}`);
-      const json = (await res.json()) as any;
+      this.logger.log(`[Calendar] Fetching AutoBidMaster auction calendar (${trigger})…`);
+      const cfg = await this.getConfig();
+      const json = await this.fetchCalendarJson(cfg, attempts);
       const root = Array.isArray(json) ? json[0] : json;
       const auctions = root?.auctions ?? {};
 
@@ -220,8 +277,12 @@ export class AuctionCalendarService implements OnModuleInit {
       });
 
       this.logger.log(`[Calendar] Stored ${rows.length} auction calendar entries`);
-      return { count: rows.length };
+      await cerrarLog({ ok: true, count: rows.length });
+      await this.podarLogs();
+      return { count: rows.length, logId: log?.id };
     } catch (err: any) {
+      await cerrarLog({ ok: false, error: String(err.message).slice(0, 2000) });
+      await this.podarLogs();
       await this.prisma.auctionCalendarConfig
         .upsert({
           where: { id: CONFIG_ID },
@@ -234,6 +295,25 @@ export class AuctionCalendarService implements OnModuleInit {
     } finally {
       this.fetching = false;
     }
+  }
+
+  /** Se guardan las ultimas 300 sincronizaciones (~12 dias a una por hora). */
+  private async podarLogs() {
+    const corte = await this.prisma.auctionCalendarSyncLog
+      .findMany({ orderBy: { startedAt: 'desc' }, skip: 300, take: 1, select: { startedAt: true } })
+      .catch(() => []);
+    if (corte[0]) {
+      await this.prisma.auctionCalendarSyncLog.deleteMany({ where: { startedAt: { lte: corte[0].startedAt } } }).catch(() => undefined);
+    }
+  }
+
+  /** Ultimas sincronizaciones, la mas reciente primero (para la pantalla del calendario). */
+  async syncLogs(limit = 50) {
+    const rows = await this.prisma.auctionCalendarSyncLog.findMany({
+      orderBy: { startedAt: 'desc' },
+      take: Math.min(Math.max(limit, 1), 300),
+    });
+    return { running: this.fetching, data: rows };
   }
 
   /** YYYYMMDD of the instant in Houston Central time. */
@@ -261,6 +341,8 @@ export class AuctionCalendarService implements OnModuleInit {
       cfg ?? {
         id: CONFIG_ID,
         refreshHours: 6,
+        maxAttempts: 4,
+        retryDelaySeconds: 30,
         lastFetchedAt: null,
         lastError: null,
         lastCount: 0,

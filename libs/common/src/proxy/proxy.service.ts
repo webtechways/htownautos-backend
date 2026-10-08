@@ -164,6 +164,40 @@ export class ProxyService {
     throw new ImageFetchBlockedError(url, maxAttempts, lastStatus);
   }
 
+  /**
+   * UN intento, sin reintentos, por un proxy al azar del pool. Para quien
+   * gestiona sus propios reintentos y quiere saber por donde salio cada uno
+   * (el log del calendario). `proxy` es `ip:puerto` (sin credenciales) o
+   * `direct`. Nunca lanza: los errores de red vuelven en `error`.
+   */
+  async fetchOnce(
+    url: string,
+    opts?: { headers?: Record<string, string>; timeoutMs?: number },
+  ): Promise<{ proxy: string; status: number | null; body: Buffer | null; contentType: string | null; error: string | null; ms: number }> {
+    const timeoutMs = opts?.timeoutMs ?? REQUEST_TIMEOUT_MS;
+    const headers = mergeHeaders(DEFAULT_HEADERS, opts?.headers);
+    const t0 = Date.now();
+    let agent: ProxyAgent | undefined;
+    let proxy = 'direct';
+    try {
+      const proxyUrl = await this.pickProxyUrl();
+      if (proxyUrl) {
+        const u = new URL(proxyUrl);
+        proxy = `${u.hostname}:${u.port}`;
+        agent = new ProxyAgent({ uri: proxyUrl, connectTimeout: 10_000, headersTimeout: timeoutMs, bodyTimeout: timeoutMs });
+      }
+      const res = agent
+        ? ((await undiciFetch(url, { dispatcher: agent, headers, signal: AbortSignal.timeout(timeoutMs) })) as unknown as Response)
+        : await fetch(url, { headers, signal: AbortSignal.timeout(timeoutMs) });
+      const body = Buffer.from(await res.arrayBuffer());
+      return { proxy, status: res.status, body, contentType: res.headers.get('content-type'), error: null, ms: Date.now() - t0 };
+    } catch (err) {
+      return { proxy, status: null, body: null, contentType: null, error: (err as Error).message, ms: Date.now() - t0 };
+    } finally {
+      if (agent) await agent.close().catch(() => undefined);
+    }
+  }
+
   private isRetryableStatus(status: number): boolean {
     // 403 (Akamai/Cloudflare block), 429 (rate limit), 5xx (transient/challenge).
     return status === 403 || status === 429 || status >= 500;

@@ -3694,6 +3694,10 @@ model AuctionCalendarEntry {
 model AuctionCalendarConfig {
   id            String    @id @default("singleton")
   refreshHours  Int       @default(6)
+  /// Intentos por sincronizacion; cada uno sale por un proxy distinto del pool.
+  maxAttempts       Int     @default(4)
+  /// Espera entre un intento fallido y el siguiente.
+  retryDelaySeconds Int     @default(30)
   lastFetchedAt DateTime?
   lastError     String?
   lastCount     Int       @default(0)
@@ -6336,4 +6340,24 @@ model AuctionListingGroupIaaiItem {
   @@id([groupId, stockNumber])
   @@index([stockNumber])
   @@map("auction_listing_group_iaai_items")
+}
+
+/// Una sincronizacion del calendario de AutoBidMaster: cuando, por que, cada
+/// intento (proxy, estado, error) y el resultado. Se guardan las ultimas ~300.
+model AuctionCalendarSyncLog {
+  id         String    @id @default(uuid())
+  /// cron | manual | boot
+  trigger    String
+  startedAt  DateTime  @default(now())
+  finishedAt DateTime?
+  ok         Boolean   @default(false)
+  /// Subastas guardadas (si salio bien).
+  count      Int?
+  error      String?
+  durationMs Int?
+  /// [{ n, proxy, status, ms, error, at }]
+  attempts   Json      @default("[]")
+
+  @@index([startedAt])
+  @@map("auction_calendar_sync_logs")
 }
