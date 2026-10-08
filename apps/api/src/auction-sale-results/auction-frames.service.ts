@@ -6,6 +6,7 @@ import {
   AUCTION_FRAMES_QUEUE,
   type AuctionFrameMessage,
 } from '@htownautos/rabbitmq';
+import { broadcastAuctionOf } from '@htownautos/common';
 import { IngestFramesDto } from './dto/ingest-frames.dto';
 
 export interface FrameIngestSummary {
@@ -38,6 +39,7 @@ export class AuctionFramesService {
    * segundos: repetir la consulta treinta veces por minuto seria tirar trabajo.
    */
   private salas: { calculadas: number; datos: SalasActivas } | null = null;
+  private salasIaai: { calculadas: number; datos: SalasActivas } | null = null;
   private static readonly SALAS_TTL_MS = 10_000;
 
   constructor(
@@ -64,30 +66,50 @@ export class AuctionFramesService {
     if (this.salas && ahora - this.salas.calculadas < AuctionFramesService.SALAS_TTL_MS) {
       return this.salas.datos;
     }
-
-    // `emittedAt` es timestamp sin zona, guardado en UTC: se compara con la
-    // hora UTC de la base, no con `now()` a secas.
-    const filas = await this.prisma.$queryRaw<
-      Array<{ m5: bigint; m15: bigint; m60: bigint }>
-    >`
-      SELECT
-        count(DISTINCT "saleRoom") FILTER (
-          WHERE "emittedAt" > (now() AT TIME ZONE 'utc') - interval '5 minutes') AS m5,
-        count(DISTINCT "saleRoom") FILTER (
-          WHERE "emittedAt" > (now() AT TIME ZONE 'utc') - interval '15 minutes') AS m15,
-        count(DISTINCT "saleRoom") AS m60
-      FROM auction_bid_events
-      WHERE "emittedAt" > (now() AT TIME ZONE 'utc') - interval '60 minutes'
-    `;
-
-    const f = filas[0];
-    const datos: SalasActivas = {
-      m5: Number(f?.m5 ?? 0),
-      m15: Number(f?.m15 ?? 0),
-      m60: Number(f?.m60 ?? 0),
-    };
+    // Copart: pujas con importe (Solace y difusion con sesion) y sin importe
+    // (difusion sin sesion). La misma sala se llama COPART194B en unas y
+    // copart-194-b en otras: se normaliza para no contarla dos veces.
+    const filas = await this.prisma.$queryRaw<Array<{ room: string; at: Date }>>`
+      SELECT "saleRoom" AS room, max("emittedAt") AS at FROM auction_bid_events
+       WHERE "emittedAt" > (now() AT TIME ZONE 'utc') - interval '60 minutes' AND "saleRoom" IS NOT NULL
+       GROUP BY "saleRoom"
+      UNION ALL
+      SELECT room, max("lastSeenAt") AS at FROM bid_no_price
+       WHERE "firstSeenAt" > (now() AT TIME ZONE 'utc') - interval '75 minutes'
+       GROUP BY room`;
+    const datos = this.contarSalas(filas, (r) => r.toLowerCase().replace(/^copart0*(\d+)([a-z0-9])$/, 'copart-$1-$2'));
     this.salas = { calculadas: ahora, datos };
     return datos;
+  }
+
+  /** Lo mismo para IAAI: salas `iaa-…` con pujas (con o sin importe). */
+  async salasActivasIaai(): Promise<SalasActivas> {
+    const ahora = Date.now();
+    if (this.salasIaai && ahora - this.salasIaai.calculadas < AuctionFramesService.SALAS_TTL_MS) {
+      return this.salasIaai.datos;
+    }
+    const filas = await this.prisma.$queryRaw<Array<{ room: string; at: Date }>>`
+      SELECT room, max("lastSeenAt") AS at FROM iaai_bid_events
+       WHERE "firstSeenAt" > (now() AT TIME ZONE 'utc') - interval '75 minutes' GROUP BY room
+      UNION ALL
+      SELECT room, max("lastSeenAt") AS at FROM bid_no_price_iaai
+       WHERE "firstSeenAt" > (now() AT TIME ZONE 'utc') - interval '75 minutes' GROUP BY room`;
+    const datos = this.contarSalas(filas, (r) => r.toLowerCase());
+    this.salasIaai = { calculadas: ahora, datos };
+    return datos;
+  }
+
+  /** Salas distintas con algo en los ultimos 5/15/60 min (columnas UTC sin zona). */
+  private contarSalas(filas: Array<{ room: string; at: Date }>, norma: (r: string) => string): SalasActivas {
+    const ultima = new Map<string, number>();
+    for (const f of filas) {
+      if (!f.room || !f.at) continue;
+      const k = norma(f.room);
+      ultima.set(k, Math.max(ultima.get(k) ?? 0, new Date(f.at).getTime()));
+    }
+    const ahora = Date.now();
+    const en = (min: number) => [...ultima.values()].filter((t) => ahora - t < min * 60_000).length;
+    return { m5: en(5), m15: en(15), m60: en(60) };
   }
 
   async ingest(dto: IngestFramesDto): Promise<FrameIngestSummary> {
@@ -239,7 +261,7 @@ export class AuctionFramesService {
   /** Contadores en vivo para la pantalla de la cola. */
   async status() {
     const desde = new Date(Date.now() - 60_000);
-    const [heavy, ultimoMinuto, pendientes, ultimos, salas] = await Promise.all([
+    const [heavy, ultimoMinuto, pendientes, ultimos, salas, salasIaai] = await Promise.all([
       this.heavyTotals(),
       this.prisma.auctionRawFrame.count({ where: { receivedAt: { gte: desde } } }),
       this.prisma.auctionRawFrame.count({ where: { status: 'pending' } }),
@@ -248,10 +270,11 @@ export class AuctionFramesService {
         take: 25,
         select: {
           id: true, status: true, event: true, lot: true, worker: true,
-          error: true, receivedAt: true, processedAt: true, summary: true,
+          error: true, receivedAt: true, processedAt: true, summary: true, source: true, frame: true,
         },
       }),
       this.salasActivas(),
+      this.salasActivasIaai(),
     ]);
 
     const counts: Record<string, number> = { pending: 0, processed: 0, failed: 0, ignored: 0 };
@@ -263,9 +286,17 @@ export class AuctionFramesService {
       counts,
       queueDepth: pendientes,
       lastMinute: ultimoMinuto,
+      /** Salas de Copart enviando (Solace + difusion). */
       rooms: salas,
+      /** Salas de IAAI enviando (difusion de SalvageBid). */
+      roomsIaai: salasIaai,
       stored: { bids, sales },
-      recent: ultimos.map((r) => ({ ...r, lot: r.lot?.toString() ?? null })),
+      recent: ultimos.map(({ frame, source, ...r }) => ({
+        ...r,
+        lot: r.lot?.toString() ?? null,
+        source,
+        auction: this.subastaDe(source, r.summary, frame),
+      })),
     };
   }
 
@@ -299,5 +330,18 @@ export class AuctionFramesService {
     }
     this.logger.log(`[Frames] ${requeued} frame(s) reencolados desde ${status}`);
     return { requeued };
+  }
+
+  /**
+   * De que subasta es un frame: la sala Solace es siempre Copart; en difusion
+   * lo dice la sala (`copart-…` / `iaa-…`), del resumen si ya se decodifico o
+   * del texto crudo si aun esta pendiente.
+   */
+  private subastaDe(source: string | null, summary: unknown, frame: string | null): 'copart' | 'iaai' | null {
+    if (source !== 'broadcast') return 'copart';
+    const deResumen = broadcastAuctionOf((summary as { fields?: { auction?: unknown } } | null)?.fields?.auction);
+    if (deResumen) return deResumen;
+    const m = /"auction"\s*:\s*"((?:copart|iaa)-[^"]*)"/i.exec(frame ?? '');
+    return m ? broadcastAuctionOf(m[1]) : null;
   }
 }
