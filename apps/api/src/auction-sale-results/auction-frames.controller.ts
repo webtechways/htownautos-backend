@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Query, UseGuards } from '@nestjs/common';
+import { Controller, Get, NotFoundException, Param, Post, Query, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { ClerkJwtGuard } from '@htownautos/auth';
 import { AuctionFramesService } from './auction-frames.service';
@@ -19,6 +19,34 @@ export class AuctionFramesController {
   @ApiOperation({ summary: 'Live counters + the last frames that arrived' })
   status() {
     return this.frames.status();
+  }
+
+  @Get('stream')
+  @ApiOperation({
+    summary: 'New frames since a cursor, slim, for the continuous ticker (after, afterId, events, includeIgnored)',
+  })
+  stream(
+    @Query('after') after?: string,
+    @Query('afterId') afterId?: string,
+    @Query('events') events?: string,
+    @Query('includeIgnored') includeIgnored?: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.frames.stream({
+      after: after || undefined,
+      afterId: afterId || undefined,
+      events: events ? events.split(',').map((e) => e.trim().toUpperCase()).filter(Boolean).slice(0, 10) : undefined,
+      includeIgnored: includeIgnored === '1' || includeIgnored === 'true',
+      limit: Number(limit) || undefined,
+    });
+  }
+
+  @Get('frame/:id')
+  @ApiOperation({ summary: 'One frame with its full decoded summary' })
+  async frame(@Param('id') id: string) {
+    const r = await this.frames.frame(id);
+    if (!r) throw new NotFoundException();
+    return r;
   }
 
   @Get('broadcast-status')

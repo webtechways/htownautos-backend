@@ -344,4 +344,82 @@ export class AuctionFramesService {
     const m = /"auction"\s*:\s*"((?:copart|iaa)-[^"]*)"/i.exec(frame ?? '');
     return m ? broadcastAuctionOf(m[1]) : null;
   }
+
+  /**
+   * Lo nuevo para el ticker del Live Feed, desde un cursor (receivedAt, id).
+   *
+   * Barato a proposito, porque cada pestaña lo pide cada segundo: rango por el
+   * indice de `receivedAt` (filas recien escritas, en memoria), sin conteos y
+   * solo con lo que se pinta. Se piden las que llegaron hace mas de 3 s: para
+   * entonces casi todas estan decodificadas y cada fila sale una vez y completa.
+   * Sin cursor devuelve las ultimas 40, para arrancar.
+   */
+  async stream(opts: { after?: string; afterId?: string; events?: string[]; includeIgnored?: boolean; limit?: number }) {
+    const limit = Math.min(Math.max(opts.limit ?? 300, 1), 500);
+    const hasta = new Date(Date.now() - 3_000);
+    const after = opts.after ? new Date(opts.after) : null;
+    const where: Prisma.AuctionRawFrameWhereInput = {
+      receivedAt: { lte: hasta, ...(after && !isNaN(after.getTime()) ? {} : { gte: new Date(Date.now() - 120_000) }) },
+      status: opts.includeIgnored ? { not: 'pending' } : { in: ['processed', 'failed'] },
+      ...(opts.events?.length ? { event: { in: opts.events } } : {}),
+      ...(after && !isNaN(after.getTime())
+        ? {
+            OR: [
+              { receivedAt: { gt: after } },
+              ...(opts.afterId ? [{ receivedAt: after, id: { gt: opts.afterId } }] : []),
+            ],
+          }
+        : {}),
+    };
+    const semilla = !(after && !isNaN(after.getTime()));
+    const filas = await this.prisma.auctionRawFrame.findMany({
+      where,
+      orderBy: semilla ? [{ receivedAt: 'desc' }, { id: 'desc' }] : [{ receivedAt: 'asc' }, { id: 'asc' }],
+      take: semilla ? 40 : limit,
+      select: {
+        id: true, status: true, event: true, lot: true, worker: true, error: true,
+        receivedAt: true, source: true, summary: true,
+      },
+    });
+    if (semilla) filas.reverse();
+    const ultima = filas[filas.length - 1];
+    return {
+      rows: filas.map((r) => {
+        const sm = (r.summary ?? {}) as Record<string, any>;
+        return {
+          id: r.id,
+          at: r.receivedAt,
+          auction: this.subastaDe(r.source, r.summary, null),
+          event: r.event,
+          lot: r.lot?.toString() ?? null,
+          amount: sm.amount ?? null,
+          ask: sm.askBid ?? null,
+          buyer: sm.buyerNo ?? null,
+          buyerWhere: [sm.buyerState, sm.buyerCountry].filter(Boolean).join(' ') || null,
+          status: r.status,
+          worker: r.worker,
+          error: r.error ? String(r.error).slice(0, 120) : null,
+        };
+      }),
+      /** Siguiente cursor; si no llego nada, el mismo de entrada. */
+      cursor: ultima
+        ? { after: ultima.receivedAt.toISOString(), afterId: ultima.id }
+        : { after: after && !isNaN(after.getTime()) ? after.toISOString() : hasta.toISOString(), afterId: opts.afterId ?? null },
+      /** Si se llego al tope hay mas esperando: el cliente puede pedir ya. */
+      more: !semilla && filas.length === limit,
+    };
+  }
+
+  /** Un frame completo (el detalle al pulsar una fila del ticker). */
+  async frame(id: string) {
+    const r = await this.prisma.auctionRawFrame.findUnique({
+      where: { id },
+      select: {
+        id: true, status: true, event: true, lot: true, worker: true, error: true,
+        receivedAt: true, processedAt: true, summary: true, source: true,
+      },
+    });
+    if (!r) return null;
+    return { ...r, lot: r.lot?.toString() ?? null, auction: this.subastaDe(r.source, r.summary, null) };
+  }
 }
