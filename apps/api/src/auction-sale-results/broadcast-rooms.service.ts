@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '@htownautos/prisma';
+import { roomCodeOf } from '@htownautos/common';
 
 /** Cuanto antes del comienzo se considera "en vivo" una subasta, por defecto. */
 export const BROADCAST_LEAD_MINUTES = 15;
@@ -10,6 +11,24 @@ export const BROADCAST_LEAD_MINUTES = 15;
  * nada: simplemente no llega ningun evento.
  */
 const MAX_HORAS_DESDE_COMIENZO = 8;
+
+/**
+ * Lanes candidatas (las que se suscriben "por si acaso": IAAI siempre, Copart
+ * cuando el calendario aun no trae lanes): pasado esto desde el comienzo, una
+ * que no tuvo NINGUN evento —con precio o sin el— se deja de dar. Una lane real
+ * empieza a pujar a los pocos minutos.
+ */
+export const CANDIDATE_NO_SHOW_MINUTES = 30;
+/**
+ * Solo se descartan candidatas si la captura de esa subasta esta viva (algun
+ * evento de Copart, o de IAAI, en estos minutos). Si no, el silencio puede ser
+ * que nadie escuchaba, y quitarlas impediria volver a escucharlas.
+ */
+const CAPTURA_SANA_MINUTOS = 10;
+/** La actividad por sala se reutiliza este tiempo: la piden todas las VMs cada 2 min. */
+const ACTIVIDAD_CACHE_MS = 60_000;
+
+type Actividad = { porSala: Map<string, number>; ultimaCopart: number; ultimaIaai: number };
 
 export type BroadcastAuction = 'copart' | 'iaai' | 'all';
 
@@ -34,7 +53,58 @@ export interface LiveRooms {
  */
 @Injectable()
 export class BroadcastRoomsService {
+  private actividadCache: { at: number; value: Actividad } | null = null;
+
   constructor(private readonly prisma: PrismaService) {}
+
+  /**
+   * Ultimo evento por sala (codigo de difusion) en las ultimas 10 h, de las
+   * cuatro tablas: Copart e IAAI, con precio y sin el. Cualquier evento cuenta.
+   */
+  private async actividad(ahora: number): Promise<Actividad> {
+    if (this.actividadCache && ahora - this.actividadCache.at < ACTIVIDAD_CACHE_MS) return this.actividadCache.value;
+    const desde = new Date(ahora - 10 * 3_600_000);
+    const filas: Array<{ room: string | null; last: Date | null }> = (await this.prisma.$queryRaw`
+      SELECT room, max("lastSeenAt") AS last FROM bid_no_price WHERE "firstSeenAt" >= ${desde} GROUP BY room
+      UNION ALL
+      SELECT "saleRoom" AS room, max("emittedAt") AS last FROM auction_bid_events
+       WHERE "emittedAt" >= ${desde} AND "saleRoom" IS NOT NULL GROUP BY "saleRoom"
+      UNION ALL
+      SELECT room, max("lastSeenAt") AS last FROM iaai_bid_events WHERE "firstSeenAt" >= ${desde} GROUP BY room
+      UNION ALL
+      SELECT room, max("lastSeenAt") AS last FROM bid_no_price_iaai WHERE "firstSeenAt" >= ${desde} GROUP BY room`) as any;
+    const value: Actividad = { porSala: new Map(), ultimaCopart: 0, ultimaIaai: 0 };
+    for (const f of filas) {
+      const code = roomCodeOf(f.room);
+      if (!code || !f.last) continue;
+      const t = new Date(f.last).getTime();
+      if (t > (value.porSala.get(code) ?? 0)) value.porSala.set(code, t);
+      if (code.startsWith('copart-')) value.ultimaCopart = Math.max(value.ultimaCopart, t);
+      else if (code.startsWith('iaa-')) value.ultimaIaai = Math.max(value.ultimaIaai, t);
+    }
+    this.actividadCache = { at: ahora, value };
+    return value;
+  }
+
+  /**
+   * Quita las candidatas que no se presentaron: pasados CANDIDATE_NO_SHOW_MINUTES
+   * desde el comienzo, sin ningun evento desde (comienzo - 15 min). Solo con la
+   * captura de esa subasta viva y nunca en una abierta a mano.
+   */
+  private sinNoShows(
+    salas: string[],
+    e: { startedAt: Date; manualStatus: string | null },
+    candidatas: boolean,
+    act: Actividad,
+    sana: boolean,
+    ahora: number,
+  ): string[] {
+    if (!candidatas || !sana || e.manualStatus === 'live') return salas;
+    const inicio = e.startedAt.getTime();
+    if (ahora < inicio + CANDIDATE_NO_SHOW_MINUTES * 60_000) return salas;
+    const desde = inicio - 15 * 60_000;
+    return salas.filter((s) => (act.porSala.get(s) ?? 0) >= desde);
+  }
 
   async live(leadMinutes = BROADCAST_LEAD_MINUTES, auction: BroadcastAuction = 'copart'): Promise<LiveRooms> {
     const lead = Math.min(Math.max(Math.round(leadMinutes), 0), 180);
@@ -76,17 +146,27 @@ export class BroadcastRoomsService {
   private async iaai(lead: number, ahora: number): Promise<string[]> {
     const entradas = await this.prisma.iaaiCalendarEntry.findMany({
       where: this.ventana(lead, ahora),
-      select: { laneCodes: true, endedLanes: true },
+      select: { laneCodes: true, endedLanes: true, startedAt: true, manualStatus: true },
     });
-    return entradas.flatMap((e) => e.laneCodes.filter((c) => !e.endedLanes.includes(c)));
+    const act = await this.actividad(ahora);
+    const sana = ahora - act.ultimaIaai < CAPTURA_SANA_MINUTOS * 60_000;
+    // En IAAI todas las lanes son candidatas: la fuente no las trae.
+    return entradas.flatMap((e) =>
+      this.sinNoShows(e.laneCodes.filter((c) => !e.endedLanes.includes(c)), e, true, act, sana, ahora),
+    );
   }
 
   private async copart(lead: number, ahora: number): Promise<string[]> {
     const entradas = await this.prisma.auctionCalendarEntry.findMany({
       where: { AND: [this.ventana(lead, ahora), { OR: [{ manualStatus: 'live' }, { status: { not: 'ended' } }] }] },
-      select: { locationSourceId: true, raw: true, endedLanes: true },
+      select: { locationSourceId: true, raw: true, endedLanes: true, startedAt: true, manualStatus: true },
     });
-    return entradas.flatMap((e) => copartBroadcastRooms(e.locationSourceId, e.raw).filter((c) => !e.endedLanes.includes(c)));
+    const act = await this.actividad(ahora);
+    const sana = ahora - act.ultimaCopart < CAPTURA_SANA_MINUTOS * 60_000;
+    return entradas.flatMap((e) => {
+      const salas = copartBroadcastRooms(e.locationSourceId, e.raw).filter((c) => !e.endedLanes.includes(c));
+      return this.sinNoShows(salas, e, copartKnownLanes(e.raw).length === 0, act, sana, ahora);
+    });
   }
 }
 
@@ -105,11 +185,17 @@ export const COPART_CANDIDATE_LANES = ['a', 'b', 'c', 'd', 'e'];
  * lanes con ENDAUC), y ahi las candidatas no deben contar.
  */
 export function copartBroadcastRooms(locationSourceId: number, raw: unknown): string[] {
+  const conocidas = copartKnownLanes(raw);
+  const lanes = conocidas.length ? conocidas : COPART_CANDIDATE_LANES;
+  return lanes.map((l) => `copart-${locationSourceId}-${l}`);
+}
+
+/** Lanes que trae el calendario (lanes, liveLanes, laterLanes), en minuscula y sin repetir. */
+export function copartKnownLanes(raw: unknown): string[] {
   const r = (raw ?? {}) as Record<string, Array<{ lane?: string }> | undefined>;
-  const conocidas = ['lanes', 'liveLanes', 'laterLanes']
+  const lanes = ['lanes', 'liveLanes', 'laterLanes']
     .flatMap((k) => (Array.isArray(r[k]) ? r[k]! : []))
     .map((l) => String(l?.lane ?? '').trim().toLowerCase())
     .filter((l) => /^[a-z]$/.test(l));
-  const lanes = conocidas.length ? [...new Set(conocidas)] : COPART_CANDIDATE_LANES;
-  return lanes.map((l) => `copart-${locationSourceId}-${l}`);
+  return [...new Set(lanes)];
 }
