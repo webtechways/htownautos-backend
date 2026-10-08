@@ -406,6 +406,10 @@ export class PrismaService implements OnModuleInit, OnModuleDestroy {
     return this.prisma.auctionCalendarSyncLog;
   }
 
+  get iaaiCalendarSyncLog() {
+    return this.prisma.iaaiCalendarSyncLog;
+  }
+
   get scraperAgent() {
     return this.prisma.scraperAgent;
   }

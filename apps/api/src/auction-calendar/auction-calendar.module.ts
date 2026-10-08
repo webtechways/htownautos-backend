@@ -19,5 +19,6 @@ import { CalendarAutoEndService } from './calendar-auto-end.service';
     ProxyService,
     AgentAssignmentService,
   ],
+  exports: [AuctionCalendarService],
 })
 export class AuctionCalendarModule {}

@@ -6346,8 +6346,10 @@ model AuctionListingGroupIaaiItem {
 /// intento (proxy, estado, error) y el resultado. Se guardan las ultimas ~300.
 model AuctionCalendarSyncLog {
   id         String    @id @default(uuid())
-  /// cron | manual | boot
+  /// cron | manual | boot | extension
   trigger    String
+  /// VM que lo mando (trigger = extension).
+  worker     String?
   startedAt  DateTime  @default(now())
   finishedAt DateTime?
   ok         Boolean   @default(false)
@@ -6360,4 +6362,23 @@ model AuctionCalendarSyncLog {
 
   @@index([startedAt])
   @@map("auction_calendar_sync_logs")
+}
+
+/// Lo mismo que AuctionCalendarSyncLog, para el calendario de IAAI
+/// (iaai.com/branchlocations).
+model IaaiCalendarSyncLog {
+  id         String    @id @default(uuid())
+  /// cron | manual | boot | extension
+  trigger    String
+  worker     String?
+  startedAt  DateTime  @default(now())
+  finishedAt DateTime?
+  ok         Boolean   @default(false)
+  count      Int?
+  error      String?
+  durationMs Int?
+  attempts   Json      @default("[]")
+
+  @@index([startedAt])
+  @@map("iaai_calendar_sync_logs")
 }

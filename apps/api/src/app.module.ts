@@ -48,6 +48,7 @@ import { InspectionShareLinksModule } from './inspection-share-links/inspection-
 import { YardsModule } from './yards/yards.module';
 import { AuctionSaleResultsModule } from './auction-sale-results/auction-sale-results.module';
 import { MarketAnalyticsModule } from './market-analytics/market-analytics.module';
+import { CalendarIngestModule } from './calendar-ingest/calendar-ingest.module';
 import { StatsAuthModule } from './stats-auth/stats-auth.module';
 import { EmailModule } from './email/email.module';
 import { TasksModule } from './tasks/tasks.module';
@@ -166,6 +167,7 @@ import { PublicStartModule } from './public-start/public-start.module';
     YardsModule,
     AuctionSaleResultsModule,
     MarketAnalyticsModule,
+    CalendarIngestModule,
     StatsAuthModule,
     EmailModule,
     TasksModule,

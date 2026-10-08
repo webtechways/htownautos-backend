@@ -129,14 +129,48 @@ export class AuctionCalendarService implements OnModuleInit {
     throw new Error(`${max} intento(s) fallidos; ultimo: ${ultimo}`);
   }
 
-  /** Fetch the AutoBidMaster calendar, flatten it, and fully replace the table. */
-  async fetchAndStore(trigger: 'cron' | 'manual' | 'boot' = 'manual'): Promise<{ count: number; logId?: string; skipped?: boolean }> {
+  /** Fetch the AutoBidMaster calendar from the server (proxy pool), flatten it, and fully replace the table. */
+  async fetchAndStore(trigger: 'cron' | 'manual' | 'boot' = 'manual') {
+    return this.runSync(trigger, null, async (attempts) => this.fetchCalendarJson(await this.getConfig(), attempts));
+  }
+
+  /**
+   * El calendario que manda la extension de calendarios (un Chrome de verdad
+   * en una VM). Pasa por lo mismo que el del servidor: validar, guardar y
+   * dejar la sync en el log, con la VM. Si la extension no pudo leerlo, se
+   * registra igualmente como sync fallida.
+   */
+  async ingestFromExtension(input: { worker: string; json?: unknown; status?: number | null; error?: string | null; ms?: number | null }) {
+    return this.runSync('extension', input.worker, async (attempts) => {
+      const intento: SyncAttempt = {
+        n: 1,
+        proxy: `extension:${input.worker}`,
+        status: input.status ?? null,
+        ms: input.ms ?? 0,
+        error: null,
+        at: new Date().toISOString(),
+      };
+      attempts.push(intento);
+      const root: any = Array.isArray(input.json) ? (input.json as any[])[0] : input.json;
+      if (input.error) intento.error = input.error;
+      else if (!root?.auctions || typeof root.auctions !== 'object') intento.error = 'JSON sin "auctions"';
+      if (intento.error) throw new Error(intento.error);
+      return input.json;
+    });
+  }
+
+  /** Una sync de principio a fin: obtener el JSON, guardarlo y dejarla en el log. */
+  private async runSync(
+    trigger: 'cron' | 'manual' | 'boot' | 'extension',
+    worker: string | null,
+    obtener: (attempts: SyncAttempt[]) => Promise<any>,
+  ): Promise<{ count: number; logId?: string; skipped?: boolean }> {
     if (this.fetching) return { count: 0, skipped: true };
     this.fetching = true;
     const t0 = Date.now();
     const attempts: SyncAttempt[] = [];
     const log = await this.prisma.auctionCalendarSyncLog
-      .create({ data: { trigger }, select: { id: true } })
+      .create({ data: { trigger, worker }, select: { id: true } })
       .catch(() => null);
     const cerrarLog = (data: { ok: boolean; count?: number; error?: string }) =>
       log
@@ -148,9 +182,8 @@ export class AuctionCalendarService implements OnModuleInit {
             .catch(() => undefined)
         : Promise.resolve();
     try {
-      this.logger.log(`[Calendar] Fetching AutoBidMaster auction calendar (${trigger})…`);
-      const cfg = await this.getConfig();
-      const json = await this.fetchCalendarJson(cfg, attempts);
+      this.logger.log(`[Calendar] Sync del calendario de AutoBidMaster (${trigger}${worker ? ` · ${worker}` : ''})…`);
+      const json = await obtener(attempts);
       const root = Array.isArray(json) ? json[0] : json;
       const auctions = root?.auctions ?? {};
 

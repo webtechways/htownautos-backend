@@ -41,9 +41,17 @@ export class IaaiCalendarController {
     return this.service.updateConfig(dto);
   }
 
+  /** En segundo plano: el resultado sale en /sync-logs. */
   @Post('refresh')
-  @ApiOperation({ summary: 'Fetch iaai.com/branchlocations now' })
+  @ApiOperation({ summary: 'Start an IAAI calendar sync now (result in /sync-logs)' })
   refresh() {
-    return this.service.fetchAndStore();
+    this.service.fetchAndStore('manual').catch(() => undefined);
+    return { started: true };
+  }
+
+  @Get('sync-logs')
+  @ApiOperation({ summary: 'Recent IAAI calendar syncs (server or extension) with their result' })
+  syncLogs(@Query('limit') limit?: string) {
+    return this.service.syncLogs(Number(limit) || 50);
   }
 }

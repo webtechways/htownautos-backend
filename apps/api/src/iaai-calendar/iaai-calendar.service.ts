@@ -70,6 +70,17 @@ function whenWhere(when: string | undefined, now = Date.now()): Prisma.IaaiCalen
  * Upsert por `auctionId`, no reemplazo: las subastas pasadas se quedan como
  * historial, y la pagina solo muestra la PROXIMA de cada sede.
  */
+/** Un intento de sync, tal como queda en el log. */
+interface SyncAttempt {
+  n: number;
+  /** `direct`, `proxy` o `extension:<vm>`. */
+  proxy: string;
+  status: number | null;
+  ms: number;
+  error: string | null;
+  at: string;
+}
+
 @Injectable()
 export class IaaiCalendarService implements OnModuleInit {
   private readonly logger = new Logger(IaaiCalendarService.name);
@@ -83,7 +94,7 @@ export class IaaiCalendarService implements OnModuleInit {
   async onModuleInit() {
     const cfg = await this.config();
     if (!cfg.lastFetchedAt) {
-      this.fetchAndStore().catch((e) => this.logger.warn(`[IaaiCalendar] Primera carga fallo: ${e.message}`));
+      this.fetchAndStore('boot').catch((e) => this.logger.warn(`[IaaiCalendar] Primera carga fallo: ${e.message}`));
     }
   }
 
@@ -94,7 +105,7 @@ export class IaaiCalendarService implements OnModuleInit {
       const cfg = await this.config();
       if (cfg.refreshHours <= 0) return;
       if (cfg.lastFetchedAt && Date.now() - cfg.lastFetchedAt.getTime() < cfg.refreshHours * 3_600_000) return;
-      await this.fetchAndStore();
+      await this.fetchAndStore('cron');
     } catch (err: any) {
       this.logger.error(`[IaaiCalendar] Auto-refresh fallo: ${err.message}`);
     }
@@ -132,19 +143,72 @@ export class IaaiCalendarService implements OnModuleInit {
     );
   }
 
-  /** Descarga, parsea y guarda. Devuelve cuantas subastas trajo. */
-  async fetchAndStore(): Promise<{ count: number; durationMs: number }> {
-    if (this.fetching) return { count: 0, durationMs: 0 };
-    this.fetching = true;
-    const t0 = Date.now();
-    const cfg = await this.config();
-    try {
-      this.logger.log(`[IaaiCalendar] Descargando branchlocations (${cfg.useProxy ? 'proxy' : 'directo'})…`);
+  /** Descarga desde el servidor, parsea y guarda. Devuelve cuantas subastas trajo. */
+  async fetchAndStore(trigger: 'cron' | 'manual' | 'boot' = 'manual') {
+    return this.runSync(trigger, null, async (attempts) => {
+      const cfg = await this.config();
+      const t = Date.now();
       const res = cfg.useProxy
         ? await this.proxy.fetchViaProxy(SOURCE_URL, { headers: BROWSER_HEADERS, maxAttempts: 4, timeoutMs: 60_000 })
         : await fetch(SOURCE_URL, { headers: BROWSER_HEADERS, signal: AbortSignal.timeout(60_000) });
+      attempts.push({ n: 1, proxy: cfg.useProxy ? 'proxy' : 'direct', status: res.status, ms: Date.now() - t, error: res.ok ? null : `HTTP ${res.status}`, at: new Date().toISOString() });
       if (!res.ok) throw new Error(`iaai.com respondio ${res.status}`);
-      const filas = parseIaaiBranchCalendar(await res.text(), cfg.lanesPerBranch);
+      return res.text();
+    });
+  }
+
+  /**
+   * La pagina que manda la extension de calendarios (un Chrome de verdad en
+   * una VM): basta con el `<script id="locationsListVM">`, que es lo que lee
+   * el parser. Si la extension no pudo leerla, se registra como sync fallida.
+   */
+  async ingestFromExtension(input: { worker: string; html?: string | null; status?: number | null; error?: string | null; ms?: number | null }) {
+    return this.runSync('extension', input.worker, async (attempts) => {
+      attempts.push({
+        n: 1,
+        proxy: `extension:${input.worker}`,
+        status: input.status ?? null,
+        ms: input.ms ?? 0,
+        error: input.error ?? (input.html ? null : 'sin HTML'),
+        at: new Date().toISOString(),
+      });
+      if (input.error) throw new Error(input.error);
+      if (!input.html) throw new Error('la extension no mando HTML');
+      return input.html;
+    });
+  }
+
+  /** Ultimas sincronizaciones, la mas reciente primero. */
+  async syncLogs(limit = 50) {
+    const data = await this.prisma.iaaiCalendarSyncLog.findMany({ orderBy: { startedAt: 'desc' }, take: Math.min(Math.max(limit, 1), 300) });
+    return { running: this.fetching, data };
+  }
+
+  /** Una sync: obtener el HTML, parsear, guardar y dejarla en el log. */
+  private async runSync(
+    trigger: 'cron' | 'manual' | 'boot' | 'extension',
+    worker: string | null,
+    obtener: (attempts: SyncAttempt[]) => Promise<string>,
+  ): Promise<{ count: number; durationMs: number; skipped?: boolean }> {
+    if (this.fetching) return { count: 0, durationMs: 0, skipped: true };
+    this.fetching = true;
+    const t0 = Date.now();
+    const cfg = await this.config();
+    const attempts: SyncAttempt[] = [];
+    const log = await this.prisma.iaaiCalendarSyncLog.create({ data: { trigger, worker }, select: { id: true } }).catch(() => null);
+    const cerrarLog = async (data: { ok: boolean; count?: number; error?: string }) => {
+      if (log) {
+        await this.prisma.iaaiCalendarSyncLog
+          .update({ where: { id: log.id }, data: { ...data, finishedAt: new Date(), durationMs: Date.now() - t0, attempts: attempts as unknown as Prisma.InputJsonValue } })
+          .catch(() => undefined);
+      }
+      // Ultimas 300 (~12 dias a una por hora).
+      const corte = await this.prisma.iaaiCalendarSyncLog.findMany({ orderBy: { startedAt: 'desc' }, skip: 300, take: 1, select: { startedAt: true } }).catch(() => []);
+      if (corte[0]) await this.prisma.iaaiCalendarSyncLog.deleteMany({ where: { startedAt: { lte: corte[0].startedAt } } }).catch(() => undefined);
+    };
+    try {
+      this.logger.log(`[IaaiCalendar] Sync (${trigger}${worker ? ` · ${worker}` : ''})…`);
+      const filas = parseIaaiBranchCalendar(await obtener(attempts), cfg.lanesPerBranch);
       if (!filas.length) throw new Error('branchlocations no trajo ninguna subasta');
 
       const ahora = new Date();
@@ -185,8 +249,10 @@ export class IaaiCalendarService implements OnModuleInit {
         data: { lastFetchedAt: ahora, lastCount: filas.length, lastError: null, lastDurationMs: durationMs },
       });
       this.logger.log(`[IaaiCalendar] ${filas.length} subastas guardadas en ${durationMs} ms`);
+      await cerrarLog({ ok: true, count: filas.length });
       return { count: filas.length, durationMs };
     } catch (err: any) {
+      await cerrarLog({ ok: false, error: String(err?.message ?? err).slice(0, 2000) });
       await this.prisma.iaaiCalendarConfig
         .update({
           where: { id: CONFIG_ID },
