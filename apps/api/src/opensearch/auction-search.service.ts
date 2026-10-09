@@ -1349,13 +1349,72 @@ export class AuctionSearchService {
 
   /** Bypass: fetch directly from Copart API, no cache read/write */
   /** Photos of an IAAI lot: our copies once the image cache has them, IAAI's URLs until then. */
-  async getIaaiGallery(stockOrId: string): Promise<GalleryResponse> {
+  /**
+   * Galeria de un lote de IAAI, con el mismo mecanismo que Copart:
+   *   - cacheada → nuestras URLs (img.htownautos.com);
+   *   - sin cachear → las URLs de IAAI que guardo el scraper, al momento, y
+   *     el cacheo se pide en segundo plano saltandose el turno de la cola.
+   */
+  async getIaaiGallery(stockOrId: string): Promise<GalleryResponse & { cached: boolean }> {
     const stock = stockOrId.replace(/^iaai-/, '');
-    const row = await this.prisma.iaaiListing.findUnique({ where: { stockNumber: stock }, select: { images: true, imageSourceUrls: true } });
+    const row = await this.prisma.iaaiListing.findUnique({
+      where: { stockNumber: stock },
+      select: { images: true, imageSourceUrls: true, imagesStatus: true, imagesClaimedAt: true },
+    });
     if (!row) throw new NotFoundException(`IAAI lot ${stock} not found`);
     const cached = row.images as { images?: { sequence: number; thumbnail: string; fullSize: string }[] } | null;
-    const images = cached?.images?.length ? cached.images : iaaiGalleryImages(row.imageSourceUrls);
-    return { lotNumber: stock, imageCount: images.length, images } as GalleryResponse;
+    if (cached?.images?.length) {
+      return { lotNumber: stock, imageCount: cached.images.length, images: cached.images, cached: true } as GalleryResponse & { cached: boolean };
+    }
+    const images = iaaiGalleryImages(row.imageSourceUrls);
+    if (images.length) {
+      this.requestIaaiGalleryCache(stock, images, row).catch((err) =>
+        this.logger.warn(`[Gallery] IAAI ${stock}: no se pudo pedir el cacheo: ${(err as Error).message}`),
+      );
+    }
+    return { lotNumber: stock, imageCount: images.length, images, cached: false } as GalleryResponse & { cached: boolean };
+  }
+
+  /**
+   * Cacheo bajo demanda de un lote de IAAI (como el CACHE MISS de Copart).
+   * Las URLs ya las tenemos del scraper: no se le pide nada a IAAI, solo se
+   * publica en `gallery.cache`. El reclamo es atomico (updateMany con
+   * condicion): diez visitas al mismo lote lo encolan una vez, y un reclamo
+   * de hace mas de 10 min se considera perdido y se repite.
+   */
+  private async requestIaaiGalleryCache(
+    stock: string,
+    images: { sequence: number; thumbnail: string; fullSize: string }[],
+    row: { imagesStatus: string | null; imagesClaimedAt: Date | null },
+  ): Promise<void> {
+    const hace10 = new Date(Date.now() - 10 * 60_000);
+    if (row.imagesStatus === 'processing' && row.imagesClaimedAt && row.imagesClaimedAt > hace10) return;
+    const reclamo = await this.prisma.iaaiListing.updateMany({
+      where: {
+        stockNumber: stock,
+        images: { equals: Prisma.DbNull },
+        OR: [{ imagesStatus: { not: 'processing' } }, { imagesClaimedAt: null }, { imagesClaimedAt: { lt: hace10 } }],
+      },
+      data: { imagesStatus: 'processing', imagesClaimedAt: new Date() },
+    });
+    if (!reclamo.count) return; // otra peticion se adelanto
+    // El trabajo de la cola deja de estar pendiente: el crawler no lo duplica.
+    await this.prisma.imageCacheJob.updateMany({
+      where: { auction: 'IAAI', lotNumber: BigInt(stock), status: { in: ['pending', 'skipped', 'failed'] } },
+      data: { status: 'processing', attempts: { increment: 1 }, lastAttemptAt: new Date() },
+    });
+    const msg: GalleryCacheMessage = { lotNumber: stock, images, jobId: stock, auction: 'IAAI' };
+    const ok = await this.rabbitMQ.publish(GALLERY_CACHE_QUEUE, msg);
+    if (ok) {
+      this.logger.log(`[Gallery] IAAI ${stock}: cache MISS, cacheo pedido (${images.length} fotos)`);
+      return;
+    }
+    // Sin RabbitMQ: se deja como estaba para que lo recoja el crawler.
+    await this.prisma.iaaiListing.updateMany({ where: { stockNumber: stock, imagesStatus: 'processing' }, data: { imagesStatus: row.imagesStatus ?? 'pending', imagesClaimedAt: null } });
+    await this.prisma.imageCacheJob.updateMany({
+      where: { auction: 'IAAI', lotNumber: BigInt(stock), status: 'processing' },
+      data: { status: 'pending', lastError: 'RabbitMQ unavailable' },
+    });
   }
 
   async getCopartGalleryRaw(lotNumberStr: string): Promise<GalleryResponse> {

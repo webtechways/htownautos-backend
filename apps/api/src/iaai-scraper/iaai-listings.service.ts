@@ -160,14 +160,12 @@ export class IaaiListingsService {
     return this.toListing(row as Row);
   }
 
-  /** Gallery in the image cache's shape; IAAI's own URLs until the photos are copied. */
+  /**
+   * Gallery in the image cache's shape. Same code as /auctions/get-gallery/iaai:
+   * IAAI's own URLs until the photos are copied, and a miss asks for the copy.
+   */
   async gallery(stockOrId: string) {
-    const stock = stockOrId.replace(/^iaai-/, '');
-    const row = await this.prisma.iaaiListing.findUnique({ where: { stockNumber: stock }, select: { images: true, imageSourceUrls: true } });
-    if (!row) throw new NotFoundException(`IAAI lot ${stock} not found`);
-    const cached = row.images as { images?: { sequence: number; thumbnail: string; fullSize: string }[] } | null;
-    const images = cached?.images?.length ? cached.images : iaaiGalleryImages(row.imageSourceUrls);
-    return { lotNumber: stock, imageCount: images.length, images, cached: !!cached?.images?.length };
+    return this.auctionSearch.getIaaiGallery(stockOrId);
   }
 
   /** Facets with counts over the active lots, cascading by make/model like Copart. */
