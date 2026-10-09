@@ -72,6 +72,13 @@ export class VehicleHistoryController {
     return this.history.reportsForVin(vin, REPORT_TYPES.includes(type as ReportType) ? (type as ReportType) : undefined);
   }
 
+  @Get('parsed/:vin')
+  @RequireApiScopes('vehicle-history:read')
+  @ApiOperation({ summary: 'Structured parse of stored reports for a VIN, newest first' })
+  parsed(@Param('vin') vin: string) {
+    return this.history.parsedForVin(vin);
+  }
+
   // ── Admin ───────────────────────────────────────────────────────────────
 
   @Get('providers')

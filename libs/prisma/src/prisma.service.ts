@@ -294,6 +294,26 @@ export class PrismaService implements OnModuleInit, OnModuleDestroy {
     return this.prisma.vehicleHistoryWebhook;
   }
 
+  get vehicleHistoryParsed() {
+    return this.prisma.vehicleHistoryParsed;
+  }
+
+  get vhOdometerReading() {
+    return this.prisma.vhOdometerReading;
+  }
+
+  get vhDamageEvent() {
+    return this.prisma.vhDamageEvent;
+  }
+
+  get vhTitleEvent() {
+    return this.prisma.vhTitleEvent;
+  }
+
+  get vhOwnershipPeriod() {
+    return this.prisma.vhOwnershipPeriod;
+  }
+
   get maxBidRecommendation() {
     return this.prisma.maxBidRecommendation;
   }

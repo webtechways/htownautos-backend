@@ -6032,6 +6032,130 @@ model VehicleHistoryReport {
   @@map("vehicle_history_reports")
 }
 
+/// Structured parse of a stored report (HTML/PDF), one row per s3Key, from
+/// either `carfax_reports` or `vehicle_history_reports` (disjoint keys).
+/// `parserVersion` gates reprocessing: the sweeper re-queues rows parsed by
+/// an older version of the parser.
+model VehicleHistoryParsed {
+  id             String   @id @default(uuid())
+  s3Key          String   @unique
+  /// carfax_reports | vehicle_history_reports
+  source         String
+  sourceId       String
+  vin            String
+  reportType     String
+  providerKey    String?
+  /// carfax-html-cheap | carfax-pdf-globalvin | carfax-pdf-upload | autocheck-html | autocheck-pdf | unknown
+  template       String
+  parserVersion  Int
+  /// ok | partial | unsupported | failed
+  status         String
+  confidence     Decimal  @db.Decimal(3, 2)
+  llmUsed        Boolean  @default(false)
+  llmSections    String[] @default([])
+  reportDate     DateTime?
+
+  accidentCount             Int?
+  damageReportCount          Int?
+  structuralDamage           Boolean?
+  airbagDeployed             Boolean?
+  titleBrands                String[] @default([])
+  brandedTitle                Boolean?
+  totalLoss                   Boolean?
+  salvage                     Boolean?
+  flood                       Boolean?
+  lemon                       Boolean?
+  ownerCount                  Int?
+  lastOdometer                Int?
+  lastOdometerDate             DateTime?
+  odometerRollbackSuspected    Boolean?
+  usageTypes                   String[] @default([])
+  serviceRecordCount           Int?
+  openRecallCount              Int?
+  lastReportedState            String?
+
+  raw       Json
+  error     String?
+  parsedAt  DateTime @default(now())
+  createdAt DateTime @default(now())
+
+  odometerReadings  VhOdometerReading[]
+  damageEvents      VhDamageEvent[]
+  titleEvents       VhTitleEvent[]
+  ownershipPeriods  VhOwnershipPeriod[]
+
+  @@index([vin])
+  @@index([parserVersion])
+  @@map("vehicle_history_parsed")
+}
+
+model VhOdometerReading {
+  id       String               @id @default(uuid())
+  parsedId String
+  parsed   VehicleHistoryParsed @relation(fields: [parsedId], references: [id], onDelete: Cascade)
+  vin      String
+  date     DateTime?
+  miles    Int
+  source   String?
+
+  @@index([vin])
+  @@index([parsedId])
+  @@map("vh_odometer_readings")
+}
+
+model VhDamageEvent {
+  id          String               @id @default(uuid())
+  parsedId    String
+  parsed      VehicleHistoryParsed @relation(fields: [parsedId], references: [id], onDelete: Cascade)
+  vin         String
+  date        DateTime?
+  /// accident | damage | airbag | structural | total_loss | other
+  kind        String
+  severity    String?
+  area        String?
+  airbag      Boolean?
+  description String?
+
+  @@index([vin])
+  @@index([parsedId])
+  @@map("vh_damage_events")
+}
+
+model VhTitleEvent {
+  id       String               @id @default(uuid())
+  parsedId String
+  parsed   VehicleHistoryParsed @relation(fields: [parsedId], references: [id], onDelete: Cascade)
+  vin      String
+  date     DateTime?
+  /// 2-letter US state code only — never a full address.
+  state    String?
+  brand    String?
+  kind     String?
+  odometer Int?
+
+  @@index([vin])
+  @@index([parsedId])
+  @@map("vh_title_events")
+}
+
+model VhOwnershipPeriod {
+  id           String               @id @default(uuid())
+  parsedId     String
+  parsed       VehicleHistoryParsed @relation(fields: [parsedId], references: [id], onDelete: Cascade)
+  vin          String
+  ownerIndex   Int
+  start        DateTime?
+  end          DateTime?
+  usageType    String?
+  /// 2-letter US state code only — never a full address.
+  state        String?
+  milesPerYear Int?
+
+  @@index([vin])
+  @@index([parsedId])
+  @@map("vh_ownership_periods")
+}
+
 /// One order for a report: which providers were tried, and how it ended.
 model VehicleHistoryRequest {
   id               String                  @id @default(uuid())

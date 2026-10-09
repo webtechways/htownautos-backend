@@ -4,6 +4,7 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '@htownautos/prisma';
 import { S3Service } from '@htownautos/common';
 import { decryptSecret, encryptSecret } from '@htownautos/social';
+import { RabbitMQService, VEHICLE_HISTORY_PARSE_QUEUE } from '@htownautos/rabbitmq';
 import { ADAPTERS, ADAPTER_BY_KEY } from './providers';
 import { createContext } from './provider-http';
 import { VehicleHistoryWebhookService } from './vehicle-history-webhooks.service';
@@ -109,6 +110,7 @@ export class VehicleHistoryService implements OnModuleInit {
     private readonly prisma: PrismaService,
     private readonly s3: S3Service,
     private readonly webhooks: VehicleHistoryWebhookService,
+    private readonly rabbitMQ: RabbitMQService,
   ) {}
 
   async onModuleInit() {
@@ -390,7 +392,7 @@ export class VehicleHistoryService implements OnModuleInit {
     const s3Key = `vehicle-history/${type}/${vin}/${Date.now()}-${providerKey}.${ext}`;
     const contentType = report.contentType === 'text/html' ? 'text/html; charset=utf-8' : report.contentType;
     await this.s3.uploadBufferToKey(report.body, s3Key, contentType);
-    return this.prisma.vehicleHistoryReport.create({
+    const stored = await this.prisma.vehicleHistoryReport.create({
       data: {
         vin,
         reportType: type,
@@ -402,6 +404,12 @@ export class VehicleHistoryService implements OnModuleInit {
         sizeBytes: report.body.length,
       },
     });
+    try {
+      await this.rabbitMQ.publish(VEHICLE_HISTORY_PARSE_QUEUE, { s3Key });
+    } catch (err) {
+      this.logger.warn(`Could not queue parse for ${s3Key}: ${(err as Error).message}`);
+    }
+    return stored;
   }
 
   private async saveCalls(providerKey: string, calls: CallEntry[], requestId: string | null, vin: string | null): Promise<void> {
@@ -480,6 +488,24 @@ export class VehicleHistoryService implements OnModuleInit {
         url: await this.s3.getSignedUrl(r.s3Key, 3600, { contentType: r.contentType === 'text/html' ? 'text/html; charset=utf-8' : r.contentType, disposition: 'inline' }),
       })),
     );
+  }
+
+  /** Structured parse of stored reports for a VIN (from either source table), newest first. */
+  async parsedForVin(rawVin: string) {
+    const vin = normalizeVin(rawVin);
+    if (!VIN_RE.test(vin)) throw new BadRequestException('VIN must be 17 characters (no I, O or Q)');
+    const rows = await this.prisma.vehicleHistoryParsed.findMany({
+      where: { vin },
+      orderBy: { parsedAt: 'desc' },
+      take: 20,
+      include: {
+        odometerReadings: true,
+        damageEvents: true,
+        titleEvents: true,
+        ownershipPeriods: true,
+      },
+    });
+    return { items: rows };
   }
 
   // ── Health ──────────────────────────────────────────────────────────────

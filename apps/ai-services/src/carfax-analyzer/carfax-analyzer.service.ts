@@ -10,6 +10,7 @@ import { PrismaService } from '@htownautos/prisma';
 import { S3Service } from '@htownautos/common';
 import { VehicleHistoryService } from '@htownautos/vehicle-history';
 import type { RequestView } from '@htownautos/vehicle-history';
+import { RabbitMQService, VEHICLE_HISTORY_PARSE_QUEUE } from '@htownautos/rabbitmq';
 
 @Injectable()
 export class CarfaxAnalyzerService {
@@ -20,6 +21,7 @@ export class CarfaxAnalyzerService {
     private readonly prisma: PrismaService,
     private readonly s3Service: S3Service,
     private readonly vehicleHistory: VehicleHistoryService,
+    private readonly rabbitMQ: RabbitMQService,
   ) {
     const apiKey = process.env.OPENAI_API_KEY || process.env.TTS_API_KEY;
     if (!apiKey) {
@@ -46,6 +48,11 @@ export class CarfaxAnalyzerService {
     });
 
     this.logger.log(`Carfax PDF saved: report ${report.id} for listing ${auctionListingId}`);
+    try {
+      await this.rabbitMQ.publish(VEHICLE_HISTORY_PARSE_QUEUE, { s3Key });
+    } catch (err) {
+      this.logger.warn(`Could not queue parse for ${s3Key}: ${(err as Error).message}`);
+    }
     return report;
   }
 
@@ -461,6 +468,11 @@ ${truncatedText}`;
         },
       });
       this.logger.log(`CarfaxReport ${report.id} for listing ${auctionListingId} (${view.cacheHit ? 'cache' : view.providerKey})`);
+      try {
+        await this.rabbitMQ.publish(VEHICLE_HISTORY_PARSE_QUEUE, { s3Key: rep.s3Key });
+      } catch (err) {
+        this.logger.warn(`Could not queue parse for ${rep.s3Key}: ${(err as Error).message}`);
+      }
       // PDFs (some providers) get the AI analysis the manual-upload flow uses.
       if (rep.contentType === 'application/pdf') {
         void this.analyzeReport(report.id).catch((err) =>

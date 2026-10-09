@@ -21,3 +21,8 @@ export {
 } from './identity-clerk-events';
 
 export * from './auction-frames';
+
+export {
+  VEHICLE_HISTORY_PARSE_QUEUE,
+  type VehicleHistoryParseMessage,
+} from './vehicle-history-parse';

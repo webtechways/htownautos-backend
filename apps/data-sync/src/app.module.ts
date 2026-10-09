@@ -37,6 +37,8 @@ import { ClerkEventsConsumer } from './identity/clerk-events.consumer';
 import { ClerkEventsSweepService } from './identity/clerk-events-sweep.service';
 import { PortalSignupNotifierService } from './identity/portal-signup-notifier.service';
 import { IaaiScraperService } from './iaai/iaai-scraper.service';
+import { VehicleHistoryParseConsumer } from './vehicle-history-parse.consumer';
+import { VehicleHistoryParseSweeperService } from './vehicle-history-parse.sweeper';
 
 
 @Module({
@@ -80,6 +82,8 @@ import { IaaiScraperService } from './iaai/iaai-scraper.service';
     S3Service,
     CopartImagesService,
     ProxyService,
+    VehicleHistoryParseConsumer,
+    VehicleHistoryParseSweeperService,
   ],
 })
 export class AppModule {}
