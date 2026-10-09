@@ -69,6 +69,6 @@ export class AnalyticsQueryDto {
   step?: number;
 
   @ApiPropertyOptional({ description: 'compare: 2-4 "make:model" entries, comma-separated' })
-  @IsOptional() @csv() @IsArray() @ArrayMaxSize(4) @IsString({ each: true })
+  @IsOptional() @csv() @IsArray() @ArrayMaxSize(20) @IsString({ each: true })
   vehicles?: string[];
 }
