@@ -48,6 +48,33 @@ export class MarketAnalyticsController {
     autorizado(req);
     return this.analytics.kpis(dto);
   }
+
+  @Get('damage')
+  @Public() @OptionalAuth() @TenantOptional()
+  @RequirePermissions(STATS_READ) @RequireApiScopes(STATS_READ)
+  @ApiOperation({ summary: 'Median + p25/p75 final bid per damage description, top N by volume' })
+  damage(@Query() dto: AnalyticsQueryDto, @Req() req: any) {
+    autorizado(req);
+    return this.analytics.damage(dto);
+  }
+
+  @Get('odometer')
+  @Public() @OptionalAuth() @TenantOptional()
+  @RequirePermissions(STATS_READ) @RequireApiScopes(STATS_READ)
+  @ApiOperation({ summary: 'Median + p25/p75 final bid per odometer bucket' })
+  odometer(@Query() dto: AnalyticsQueryDto, @Req() req: any) {
+    autorizado(req);
+    return this.analytics.odometer(dto);
+  }
+
+  @Get('compare')
+  @Public() @OptionalAuth() @TenantOptional()
+  @RequirePermissions(STATS_READ) @RequireApiScopes(STATS_READ)
+  @ApiOperation({ summary: 'Compare 2-4 make:model vehicles under the same filters' })
+  compare(@Query() dto: AnalyticsQueryDto, @Req() req: any) {
+    autorizado(req);
+    return this.analytics.compare(dto);
+  }
 }
 
 function autorizado(req: any) {

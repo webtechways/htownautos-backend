@@ -23,9 +23,19 @@ describe('helpers', () => {
 describe('MarketAnalyticsService', () => {
   const titleMapping = { getOverrides: jest.fn().mockResolvedValue({}) };
   const queryRaw = jest.fn();
-  const svc = new MarketAnalyticsService({ $queryRaw: queryRaw } as any, titleMapping as any);
+  const vocab = {
+    expand: jest.fn(async (_campo: string, vals: string[]) => vals),
+    resolve: jest.fn(async () => []),
+  };
+  const prisma = {
+    $queryRaw: queryRaw,
+    $transaction: jest.fn((fn: any) => fn({ $executeRawUnsafe: jest.fn(), $queryRaw: queryRaw })),
+  };
+  const svc = new MarketAnalyticsService(prisma as any, titleMapping as any, vocab as any);
   beforeEach(() => {
     queryRaw.mockReset();
+    vocab.expand.mockReset().mockImplementation(async (_campo: string, vals: string[]) => vals);
+    vocab.resolve.mockReset().mockImplementation(async () => []);
     svc.clearCache();
   });
 
@@ -71,6 +81,32 @@ describe('MarketAnalyticsService', () => {
     await svc.trend({ make: ['A'] } as any);
     await svc.trend({ make: ['B'] } as any);
     expect(queryRaw).toHaveBeenCalledTimes(2);
+  });
+
+  it('compare: menos de 2 vehiculos es 400', async () => {
+    await expect(svc.compare({ vehicles: ['ford:f-150'] } as any)).rejects.toMatchObject({
+      response: { code: 'compare_vehicles' },
+    });
+  });
+
+  it('compare: mas de 4 vehiculos es 400', async () => {
+    const vehicles = ['ford:f-150', 'toyota:corolla', 'honda:civic', 'ram:1500', 'gmc:sierra'];
+    await expect(svc.compare({ vehicles } as any)).rejects.toMatchObject({
+      response: { code: 'compare_vehicles' },
+    });
+  });
+
+  it('odometer: todos los cubos 0..cap, el ultimo es 250k+', async () => {
+    queryRaw.mockResolvedValueOnce([
+      { b: 0, n: 120n, p25: 8000, p50: 11000, p75: 14000 },
+      { b: 10, n: 3n, p25: 1, p50: 2, p75: 3 },
+    ]);
+    const out = await svc.odometer({ step: 25000 } as any);
+    expect(out.step).toBe(25000);
+    expect(out.buckets).toHaveLength(11);
+    expect(out.buckets[0]).toEqual({ from: 0, to: 25000, n: 120, p25: 8000, p50: 11000, p75: 14000 });
+    expect(out.buckets[10]).toEqual({ from: 250000, to: null, n: 3, p25: null, p50: null, p75: null });
+    expect(out.buckets[1]).toEqual({ from: 25000, to: 50000, n: 0, p25: null, p50: null, p75: null });
   });
 
 });

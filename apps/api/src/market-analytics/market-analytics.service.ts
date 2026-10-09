@@ -1,8 +1,9 @@
-import { Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '@htownautos/prisma';
 import { allKnownCodes, codesForTitleCategories } from '@htownautos/common';
 import { TitleMappingService } from '../title-mapping/title-mapping.service';
+import { VocabularyService } from '../auction-sale-results/vocabulary.service';
 import { AnalyticsQueryDto } from './dto/analytics-query.dto';
 
 /** Por debajo de esto una mediana no dice nada: la grafica lo avisa. */
@@ -60,6 +61,7 @@ export class MarketAnalyticsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly titleMapping: TitleMappingService,
+    private readonly vocab: VocabularyService,
   ) {}
 
   private async cached<T>(widget: string, dto: AnalyticsQueryDto, fn: () => Promise<T>): Promise<T> {
@@ -85,8 +87,13 @@ export class MarketAnalyticsService {
     const inList = (col: string, vals?: string[]) => {
       if (vals?.length) and.push(Prisma.sql`${Prisma.raw(`"${col}"`)} IN (${Prisma.join(vals)})`);
     };
-    inList('make', dto.make);
-    inList('model', dto.model);
+    const inListExpand = async (col: string, campo: 'make' | 'model', vals?: string[]) => {
+      if (!vals?.length) return;
+      const expandidos = [...new Set([...(await this.vocab.expand(campo, vals)), ...vals.map((v) => v.toUpperCase())])];
+      and.push(Prisma.sql`${Prisma.raw(`"${col}"`)} IN (${Prisma.join(expandidos)})`);
+    };
+    await inListExpand('make', 'make', dto.make);
+    await inListExpand('model', 'model', dto.model);
     inList('locationState', dto.locationState);
     inList('damageDescription', dto.damageDescription);
     inList('sellerCategory', dto.sellerCategory);
@@ -116,7 +123,10 @@ export class MarketAnalyticsService {
   }
 
   private async rows<T>(sql: Prisma.Sql): Promise<T[]> {
-    return (await this.prisma.$queryRaw(sql)) as T[];
+    return this.prisma.$transaction(async (tx) => {
+      await tx.$executeRawUnsafe("SET LOCAL statement_timeout = '8s'");
+      return tx.$queryRaw(sql);
+    }) as Promise<T[]>;
   }
 
   /**
@@ -241,6 +251,104 @@ export class MarketAnalyticsService {
         spark: spark.points.map((p) => ({ t: p.t, n: p.n, p50: p.p50 })),
         suficiente: actual.muestra >= MUESTRA_MINIMA,
       };
+    });
+  }
+
+  /** Mediana y banda p25-p75 por tipo de daño, de mas a menos vendido. */
+  damage(dto: AnalyticsQueryDto) {
+    return this.cached('damage', dto, async () => {
+      const limit = dto.limit ?? 10;
+      const where = await this.where(dto, [Prisma.sql`"damageDescription" IS NOT NULL`]);
+      const [tot] = await this.rows<{ n: bigint }>(Prisma.sql`SELECT count(*) AS n FROM ${this.table(dto)} ${where}`);
+      const muestra = Number(tot?.n ?? 0);
+      const filas = await this.rows<{ damage: string; n: bigint; p25: number; p50: number; p75: number }>(Prisma.sql`
+        SELECT "damageDescription" AS damage, count(*) AS n,
+               percentile_cont(0.25) WITHIN GROUP (ORDER BY "finalBid")::float AS p25,
+               percentile_cont(0.50) WITHIN GROUP (ORDER BY "finalBid")::float AS p50,
+               percentile_cont(0.75) WITHIN GROUP (ORDER BY "finalBid")::float AS p75
+          FROM ${this.table(dto)} ${where}
+         GROUP BY 1 HAVING count(*) >= ${MUESTRA_MINIMA} ORDER BY count(*) DESC LIMIT ${limit}`);
+      const groups = filas.map((f) => ({ damage: f.damage, n: Number(f.n), p25: r(f.p25), p50: r(f.p50), p75: r(f.p75) }));
+      const otros = muestra - groups.reduce((s, g) => s + g.n, 0);
+      return { muestra, suficiente: groups.length > 0, otros, groups };
+    });
+  }
+
+  /** Mediana y banda p25-p75 por cubo de kilometraje, con tope en 250k. */
+  odometer(dto: AnalyticsQueryDto) {
+    return this.cached('odometer', dto, async () => {
+      const step = dto.step ?? 25000;
+      const cap = 250000;
+      const top = cap / step;
+      const where = await this.where(dto, [Prisma.sql`"odometer" IS NOT NULL AND "odometer" BETWEEN 0 AND 500000`]);
+      const filas = await this.rows<{ b: number; n: bigint; p25: number; p50: number; p75: number }>(Prisma.sql`
+        SELECT LEAST(floor("odometer" / ${step})::int, ${top}) AS b, count(*) AS n,
+               percentile_cont(0.25) WITHIN GROUP (ORDER BY "finalBid")::float AS p25,
+               percentile_cont(0.50) WITHIN GROUP (ORDER BY "finalBid")::float AS p50,
+               percentile_cont(0.75) WITHIN GROUP (ORDER BY "finalBid")::float AS p75
+          FROM ${this.table(dto)} ${where}
+         GROUP BY 1`);
+      const porCubo = new Map(filas.map((f) => [Number(f.b), f]));
+      const buckets = Array.from({ length: top + 1 }, (_, b) => {
+        const f = porCubo.get(b);
+        const n = f ? Number(f.n) : 0;
+        return {
+          from: b * step,
+          to: b === top ? null : (b + 1) * step,
+          n,
+          p25: n >= MUESTRA_MINIMA ? r(f!.p25) : null,
+          p50: n >= MUESTRA_MINIMA ? r(f!.p50) : null,
+          p75: n >= MUESTRA_MINIMA ? r(f!.p75) : null,
+        };
+      });
+      const muestra = buckets.reduce((s, b) => s + b.n, 0);
+      return { muestra, suficiente: muestra >= MUESTRA_MINIMA, step, buckets };
+    });
+  }
+
+  /** Compara 2-4 vehiculos (make:model) bajo los mismos filtros. */
+  compare(dto: AnalyticsQueryDto) {
+    return this.cached('compare', dto, async () => {
+      const entradas = dto.vehicles ?? [];
+      if (entradas.length < 2 || entradas.length > 4) {
+        throw new BadRequestException({ code: 'compare_vehicles' });
+      }
+      const series: {
+        input: string; make: string | null; model: string | null; found: boolean;
+        n: number; suficiente: boolean; p25: number | null; p50: number | null; p75: number | null;
+        odometerMedian: number | null;
+      }[] = [];
+      for (const input of entradas) {
+        const i = input.indexOf(':');
+        const makeTexto = i === -1 ? input : input.slice(0, i);
+        const modelTexto = i === -1 ? '' : input.slice(i + 1);
+        const [makeRes] = await this.vocab.resolve('make', makeTexto, 1);
+        const [modelRes] = await this.vocab.resolve('model', modelTexto, 1);
+        if (!makeRes || !modelRes) {
+          series.push({ input, make: null, model: null, found: false, n: 0, suficiente: false, p25: null, p50: null, p75: null, odometerMedian: null });
+          continue;
+        }
+        const make = makeRes.valor, model = modelRes.valor;
+        const dtoVehiculo: AnalyticsQueryDto = { ...dto, make: [make], model: [model] };
+        const where = await this.where(dtoVehiculo);
+        const [fila] = await this.rows<{ n: bigint; p25: number; p50: number; p75: number; odo: number }>(Prisma.sql`
+          SELECT count(*) AS n,
+                 percentile_cont(0.25) WITHIN GROUP (ORDER BY "finalBid")::float AS p25,
+                 percentile_cont(0.50) WITHIN GROUP (ORDER BY "finalBid")::float AS p50,
+                 percentile_cont(0.75) WITHIN GROUP (ORDER BY "finalBid")::float AS p75,
+                 percentile_cont(0.50) WITHIN GROUP (ORDER BY "odometer")::float AS odo
+            FROM ${this.table(dtoVehiculo)} ${where}`);
+        const n = Number(fila?.n ?? 0);
+        const suficiente = n >= MUESTRA_MINIMA;
+        series.push({
+          input, make, model, found: true, n, suficiente,
+          p25: suficiente ? r(fila.p25) : null,
+          p50: suficiente ? r(fila.p50) : null,
+          p75: suficiente ? r(fila.p75) : null,
+          odometerMedian: suficiente ? r(fila.odo) : null,
+        });
+      }
+      return { series };
     });
   }
 

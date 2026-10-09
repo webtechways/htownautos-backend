@@ -92,10 +92,17 @@ export class VocabularyService {
     const nuevo = new Map<VocabField, Map<string, Entrada>>();
     for (const [campo, columna] of Object.entries(CAMPOS) as [VocabField, string][]) {
       const filas = (await this.prisma.$queryRawUnsafe(
-        `SELECT "${columna}"::text AS valor, count(*) AS n
-           FROM auction_sale_results
-          WHERE "${columna}" IS NOT NULL AND "${columna}"::text <> ''
-          GROUP BY "${columna}"`,
+        `SELECT valor, sum(n)::bigint AS n FROM (
+           SELECT "${columna}"::text AS valor, count(*) AS n
+             FROM auction_sale_results
+            WHERE "${columna}" IS NOT NULL AND "${columna}"::text <> ''
+            GROUP BY "${columna}"
+           UNION ALL
+           SELECT "${columna}"::text AS valor, count(*) AS n
+             FROM iaai_sale_results
+            WHERE "${columna}" IS NOT NULL AND "${columna}"::text <> ''
+            GROUP BY "${columna}"
+         ) x GROUP BY valor`,
       )) as { valor: string; n: bigint }[];
 
       const grupos = new Map<string, Entrada>();
