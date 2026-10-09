@@ -147,7 +147,7 @@ export class VehicleHistoryParseConsumer implements OnModuleInit {
       confidence: parsed.confidence,
       llmUsed: parsed.llmSections.length > 0,
       llmSections: parsed.llmSections,
-      reportDate: parsed.reportDate ? new Date(parsed.reportDate) : null,
+      reportDate: toDate(parsed.reportDate),
       accidentCount: parsed.summary.accidentCount,
       damageReportCount: parsed.summary.damageReportCount,
       structuralDamage: parsed.summary.structuralDamage,
@@ -160,7 +160,7 @@ export class VehicleHistoryParseConsumer implements OnModuleInit {
       lemon: parsed.summary.lemon,
       ownerCount: parsed.summary.ownerCount,
       lastOdometer: parsed.summary.lastOdometer,
-      lastOdometerDate: parsed.summary.lastOdometerDate ? new Date(parsed.summary.lastOdometerDate) : null,
+      lastOdometerDate: toDate(parsed.summary.lastOdometerDate),
       odometerRollbackSuspected: parsed.summary.odometerRollbackSuspected,
       usageTypes: parsed.summary.usageTypes,
       serviceRecordCount: parsed.summary.serviceRecordCount,
@@ -188,7 +188,7 @@ export class VehicleHistoryParseConsumer implements OnModuleInit {
           data: parsed.odometerReadings.map((r) => ({
             parsedId: row.id,
             vin: parsed.vin,
-            date: r.date ? new Date(r.date) : null,
+            date: toDate(r.date),
             miles: r.miles,
             source: r.source,
           })),
@@ -199,7 +199,7 @@ export class VehicleHistoryParseConsumer implements OnModuleInit {
           data: parsed.damageEvents.map((d) => ({
             parsedId: row.id,
             vin: parsed.vin,
-            date: d.date ? new Date(d.date) : null,
+            date: toDate(d.date),
             kind: d.kind,
             severity: d.severity,
             area: d.area,
@@ -213,7 +213,7 @@ export class VehicleHistoryParseConsumer implements OnModuleInit {
           data: parsed.titleEvents.map((t) => ({
             parsedId: row.id,
             vin: parsed.vin,
-            date: t.date ? new Date(t.date) : null,
+            date: toDate(t.date),
             state: t.state,
             brand: t.brand,
             kind: t.kind,
@@ -227,8 +227,8 @@ export class VehicleHistoryParseConsumer implements OnModuleInit {
             parsedId: row.id,
             vin: parsed.vin,
             ownerIndex: o.ownerIndex,
-            start: o.start ? new Date(o.start) : null,
-            end: o.end ? new Date(o.end) : null,
+            start: toDate(o.start),
+            end: toDate(o.end),
             usageType: o.usageType,
             state: o.state,
             milesPerYear: o.milesPerYear,
@@ -237,4 +237,11 @@ export class VehicleHistoryParseConsumer implements OnModuleInit {
       }
     });
   }
+}
+
+/** Parser dates are best-effort strings; an unparseable one must not abort the whole report. */
+function toDate(v: string | null | undefined): Date | null {
+  if (!v) return null;
+  const d = new Date(v);
+  return Number.isNaN(d.getTime()) ? null : d;
 }
