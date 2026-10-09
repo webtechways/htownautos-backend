@@ -3,7 +3,8 @@ import { ApiBearerAuth, ApiOperation, ApiQuery, ApiTags } from '@nestjs/swagger'
 import { ADMIN_ROLES, RequireApiScopes, RequireRoles, RolesGuard } from '@htownautos/auth';
 import { VehicleHistoryService } from './vehicle-history.service';
 import { VehicleHistoryAdminService } from './vehicle-history-admin.service';
-import { OrderReportDto, ReorderProvidersDto, TestProviderDto, UpdateProviderDto, UpdateSettingsDto } from './dto';
+import { VehicleHistoryLibraryService } from './vehicle-history-library.service';
+import { LibraryQueryDto, OrderReportDto, ReorderProvidersDto, TestProviderDto, UpdateProviderDto, UpdateSettingsDto } from './dto';
 import { REPORT_TYPES, ReportType } from './types';
 import { isAllowedCallbackUrl } from './vehicle-history-webhooks.service';
 
@@ -25,6 +26,7 @@ export class VehicleHistoryController {
   constructor(
     private readonly history: VehicleHistoryService,
     private readonly admin: VehicleHistoryAdminService,
+    private readonly reportsLibrary: VehicleHistoryLibraryService,
   ) {}
 
   // ── Ordering ────────────────────────────────────────────────────────────
@@ -194,5 +196,31 @@ export class VehicleHistoryController {
     @Query('requestId') requestId?: string,
   ) {
     return this.admin.listCalls({ page: Number(page), limit: Number(limit), providerKey, kind, ok, requestId });
+  }
+
+  // ── Reports library (Carfax/AutoCheck, both source tables) ───────────────
+
+  @Get('library')
+  @UseGuards(RolesGuard)
+  @RequireRoles(...ADMIN_ROLES)
+  @ApiOperation({ summary: 'Unified list of stored reports (carfax_reports + vehicle_history_reports) with their parse, newest first' })
+  library(@Query() query: LibraryQueryDto) {
+    return this.reportsLibrary.list(query);
+  }
+
+  @Get('library/:source/:id')
+  @UseGuards(RolesGuard)
+  @RequireRoles(...ADMIN_ROLES)
+  @ApiOperation({ summary: 'One report with its full structured parse and order history' })
+  libraryOne(@Param('source') source: string, @Param('id') id: string) {
+    return this.reportsLibrary.getOne(source, id);
+  }
+
+  @Get('library/:source/:id/file')
+  @UseGuards(RolesGuard)
+  @RequireRoles(...ADMIN_ROLES)
+  @ApiOperation({ summary: 'Short-lived signed URL to the original report file' })
+  libraryFile(@Param('source') source: string, @Param('id') id: string) {
+    return this.reportsLibrary.getFile(source, id);
   }
 }

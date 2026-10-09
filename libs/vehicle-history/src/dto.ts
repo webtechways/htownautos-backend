@@ -76,3 +76,37 @@ export class UpdateSettingsDto {
   @IsOptional() @IsInt() @Min(0) @Max(1440) healthCheckMinutes?: number;
   @IsOptional() @IsInt() @Min(7) @Max(730) logRetentionDays?: number;
 }
+
+export class LibraryQueryDto {
+  @ApiPropertyOptional({ example: 1 })
+  @IsOptional() @IsInt() @Min(1)
+  page?: number;
+
+  @ApiPropertyOptional({ example: 25 })
+  @IsOptional() @IsInt() @Min(1) @Max(100)
+  pageSize?: number;
+
+  @ApiPropertyOptional()
+  @IsOptional() @IsString() @MaxLength(25)
+  vin?: string;
+
+  @ApiPropertyOptional({ enum: ['carfax', 'autocheck'] })
+  @IsOptional() @IsIn(['carfax', 'autocheck'])
+  reportType?: 'carfax' | 'autocheck';
+
+  @ApiPropertyOptional({ enum: ['crm', 'api', 'upload'] })
+  @IsOptional() @IsIn(['crm', 'api', 'upload'])
+  origin?: 'crm' | 'api' | 'upload';
+
+  @ApiPropertyOptional({ enum: ['ok', 'partial', 'unsupported', 'failed', 'none'] })
+  @IsOptional() @IsIn(['ok', 'partial', 'unsupported', 'failed', 'none'])
+  parseStatus?: 'ok' | 'partial' | 'unsupported' | 'failed' | 'none';
+
+  @ApiPropertyOptional({ description: 'ISO date' })
+  @IsOptional() @IsString() @MaxLength(40)
+  from?: string;
+
+  @ApiPropertyOptional({ description: 'ISO date' })
+  @IsOptional() @IsString() @MaxLength(40)
+  to?: string;
+}
