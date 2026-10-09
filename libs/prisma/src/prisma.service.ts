@@ -298,6 +298,14 @@ export class PrismaService implements OnModuleInit, OnModuleDestroy {
     return this.prisma.vehicleHistoryParsed;
   }
 
+  get vehicleHistoryExtraction() {
+    return this.prisma.vehicleHistoryExtraction;
+  }
+
+  get vehicleHistoryExtractionLog() {
+    return this.prisma.vehicleHistoryExtractionLog;
+  }
+
   get vhOdometerReading() {
     return this.prisma.vhOdometerReading;
   }

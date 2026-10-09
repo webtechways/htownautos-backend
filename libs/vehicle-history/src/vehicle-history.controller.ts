@@ -1,10 +1,20 @@
-import { BadRequestException, Body, Controller, Get, Param, Patch, Post, Put, Query, Req, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, HttpCode, NotFoundException, Param, Patch, Post, Put, Query, Req, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiQuery, ApiTags } from '@nestjs/swagger';
 import { ADMIN_ROLES, RequireApiScopes, RequireRoles, RolesGuard } from '@htownautos/auth';
 import { VehicleHistoryService } from './vehicle-history.service';
 import { VehicleHistoryAdminService } from './vehicle-history-admin.service';
 import { VehicleHistoryLibraryService } from './vehicle-history-library.service';
-import { LibraryQueryDto, OrderReportDto, ReorderProvidersDto, TestProviderDto, UpdateProviderDto, UpdateSettingsDto } from './dto';
+import { VehicleHistoryExtractionService } from './vehicle-history-extraction.service';
+import {
+  ExtractionLogsQueryDto,
+  LibraryQueryDto,
+  OrderReportDto,
+  ReorderProvidersDto,
+  ReprocessBulkDto,
+  TestProviderDto,
+  UpdateProviderDto,
+  UpdateSettingsDto,
+} from './dto';
 import { REPORT_TYPES, ReportType } from './types';
 import { isAllowedCallbackUrl } from './vehicle-history-webhooks.service';
 
@@ -27,6 +37,7 @@ export class VehicleHistoryController {
     private readonly history: VehicleHistoryService,
     private readonly admin: VehicleHistoryAdminService,
     private readonly reportsLibrary: VehicleHistoryLibraryService,
+    private readonly extractions: VehicleHistoryExtractionService,
   ) {}
 
   // ── Ordering ────────────────────────────────────────────────────────────
@@ -79,6 +90,15 @@ export class VehicleHistoryController {
   @ApiOperation({ summary: 'Structured parse of stored reports for a VIN, newest first' })
   parsed(@Param('vin') vin: string) {
     return this.history.parsedForVin(vin);
+  }
+
+  @Get('extraction/:vin')
+  @RequireApiScopes('vehicle-history:read')
+  @ApiOperation({ summary: 'Latest OpenAI structured-output extraction (v2) for a VIN' })
+  async extractionForVin(@Param('vin') vin: string) {
+    const result = await this.extractions.getExtractionForVin(vin);
+    if (!result) throw new NotFoundException('No extraction for this VIN');
+    return result;
   }
 
   // ── Admin ───────────────────────────────────────────────────────────────
@@ -222,5 +242,33 @@ export class VehicleHistoryController {
   @ApiOperation({ summary: 'Short-lived signed URL to the original report file' })
   libraryFile(@Param('source') source: string, @Param('id') id: string) {
     return this.reportsLibrary.getFile(source, id);
+  }
+
+  @Post('library/:source/:id/reprocess')
+  @HttpCode(202)
+  @UseGuards(RolesGuard)
+  @RequireRoles(...ADMIN_ROLES)
+  @ApiOperation({ summary: 'Re-queue the OpenAI extraction for this report (forces a re-run even if already ok at the current prompt version)' })
+  reprocessOne(@Param('source') source: string, @Param('id') id: string, @Req() req: AuthedRequest) {
+    return this.extractions.reprocessOne(source, id, req.user?.id ?? null);
+  }
+
+  // ── Extraction (OpenAI structured output, v2) ────────────────────────────
+
+  @Get('extraction-logs')
+  @UseGuards(RolesGuard)
+  @RequireRoles(...ADMIN_ROLES)
+  @ApiOperation({ summary: 'Extraction attempt log with filters, pagination and spend totals (today/month/all-time in America/Chicago)' })
+  extractionLogs(@Query() query: ExtractionLogsQueryDto) {
+    return this.extractions.listLogs(query);
+  }
+
+  @Post('extractions/reprocess-bulk')
+  @HttpCode(202)
+  @UseGuards(RolesGuard)
+  @RequireRoles(...ADMIN_ROLES)
+  @ApiOperation({ summary: 'Re-queue extraction for many reports at once (failed | outdated prompt version | all)' })
+  reprocessBulk(@Body() body: ReprocessBulkDto, @Req() req: AuthedRequest) {
+    return this.extractions.reprocessBulk(body, req.user?.id ?? null);
   }
 }

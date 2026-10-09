@@ -5,3 +5,4 @@ export { ADAPTERS } from './providers';
 export * from './types';
 export { parseVehicleHistory } from './parse/index';
 export * from './parse/parsed-report.types';
+export * from './extract/index';

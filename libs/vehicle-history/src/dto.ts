@@ -110,3 +110,50 @@ export class LibraryQueryDto {
   @IsOptional() @IsString() @MaxLength(40)
   to?: string;
 }
+
+const EXTRACTION_LOG_STATUSES = ['ok', 'invalid_output', 'api_error', 'not_report', 'budget_exceeded', 'skipped'] as const;
+const EXTRACTION_TRIGGERS = ['new_report', 'sweeper', 'manual', 'bulk'] as const;
+
+export class ExtractionLogsQueryDto {
+  @ApiPropertyOptional({ enum: EXTRACTION_LOG_STATUSES })
+  @IsOptional() @IsIn(EXTRACTION_LOG_STATUSES)
+  status?: (typeof EXTRACTION_LOG_STATUSES)[number];
+
+  @ApiPropertyOptional({ enum: EXTRACTION_TRIGGERS })
+  @IsOptional() @IsIn(EXTRACTION_TRIGGERS)
+  trigger?: (typeof EXTRACTION_TRIGGERS)[number];
+
+  @ApiPropertyOptional()
+  @IsOptional() @IsString() @MaxLength(60)
+  model?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional() @IsString() @MaxLength(25)
+  vin?: string;
+
+  @ApiPropertyOptional({ description: 'ISO date' })
+  @IsOptional() @IsString() @MaxLength(40)
+  from?: string;
+
+  @ApiPropertyOptional({ description: 'ISO date' })
+  @IsOptional() @IsString() @MaxLength(40)
+  to?: string;
+
+  @ApiPropertyOptional({ example: 1 })
+  @IsOptional() @IsInt() @Min(1)
+  page?: number;
+
+  @ApiPropertyOptional({ example: 50 })
+  @IsOptional() @IsInt() @Min(1) @Max(100)
+  pageSize?: number;
+}
+
+export class ReprocessBulkDto {
+  @ApiProperty({ enum: ['failed', 'outdated', 'all'] })
+  @IsIn(['failed', 'outdated', 'all'])
+  scope!: 'failed' | 'outdated' | 'all';
+
+  @ApiProperty({ minimum: 1, maximum: 100 })
+  @IsInt() @Min(1) @Max(100)
+  limit!: number;
+}

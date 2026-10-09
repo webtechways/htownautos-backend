@@ -6,11 +6,19 @@ import { VehicleHistoryAdminService } from './vehicle-history-admin.service';
 import { VehicleHistoryController } from './vehicle-history.controller';
 import { VehicleHistoryWebhookService } from './vehicle-history-webhooks.service';
 import { VehicleHistoryLibraryService } from './vehicle-history-library.service';
+import { VehicleHistoryExtractionService } from './vehicle-history-extraction.service';
 
 @Module({
   imports: [PrismaModule],
   controllers: [VehicleHistoryController],
-  providers: [VehicleHistoryService, VehicleHistoryAdminService, VehicleHistoryWebhookService, VehicleHistoryLibraryService, S3Service],
+  providers: [
+    VehicleHistoryService,
+    VehicleHistoryAdminService,
+    VehicleHistoryWebhookService,
+    VehicleHistoryLibraryService,
+    VehicleHistoryExtractionService,
+    S3Service,
+  ],
   exports: [VehicleHistoryService],
 })
 export class VehicleHistoryModule {}

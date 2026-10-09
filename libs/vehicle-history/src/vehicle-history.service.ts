@@ -4,7 +4,7 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '@htownautos/prisma';
 import { S3Service } from '@htownautos/common';
 import { decryptSecret, encryptSecret } from '@htownautos/social';
-import { RabbitMQService, VEHICLE_HISTORY_PARSE_QUEUE } from '@htownautos/rabbitmq';
+import { RabbitMQService, VEHICLE_HISTORY_PARSE_QUEUE, VEHICLE_HISTORY_EXTRACT_QUEUE } from '@htownautos/rabbitmq';
 import { ADAPTERS, ADAPTER_BY_KEY } from './providers';
 import { createContext } from './provider-http';
 import { VehicleHistoryWebhookService } from './vehicle-history-webhooks.service';
@@ -408,6 +408,11 @@ export class VehicleHistoryService implements OnModuleInit {
       await this.rabbitMQ.publish(VEHICLE_HISTORY_PARSE_QUEUE, { s3Key });
     } catch (err) {
       this.logger.warn(`Could not queue parse for ${s3Key}: ${(err as Error).message}`);
+    }
+    try {
+      await this.rabbitMQ.publish(VEHICLE_HISTORY_EXTRACT_QUEUE, { s3Key, trigger: 'new_report' });
+    } catch (err) {
+      this.logger.warn(`Could not queue extraction for ${s3Key}: ${(err as Error).message}`);
     }
     return stored;
   }

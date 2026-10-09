@@ -6089,6 +6089,86 @@ model VehicleHistoryParsed {
   @@map("vehicle_history_parsed")
 }
 
+/// OpenAI structured-output extraction of a stored report (CONTRACT `report`
+/// shape lives in `data`; scalars below are a denormalized projection for
+/// filtering/sorting without parsing JSON). One row per s3Key, upserted by
+/// the consumer; `costUsdTotal` accumulates across retries/reprocess.
+model VehicleHistoryExtraction {
+  id             String   @id @default(uuid())
+  s3Key          String   @unique
+  /// carfax_reports | vehicle_history_reports
+  sourceTable    String
+  sourceId       String
+  vin            String
+  /// ok | failed | not_report
+  status         String
+  model          String
+  promptVersion  Int
+  data           Json?
+  mileage               Int?
+  accident              Boolean?
+  title                 String?
+  value                 Int?
+  serviceHistoryRecords Int?
+  openRecalls           Int?
+  lastOwnerState        String?
+  ownerCount            Int?
+  anyFlood        Boolean @default(false)
+  anyBurn         Boolean @default(false)
+  anyVandalism    Boolean @default(false)
+  anyTheft        Boolean @default(false)
+  anyTotalLoss    Boolean @default(false)
+  anySalvageIssue Boolean @default(false)
+  costUsdTotal    Decimal @default(0) @db.Decimal(10, 6)
+  error           String?
+  extractedAt     DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  logs VehicleHistoryExtractionLog[]
+
+  @@index([vin])
+  @@index([title])
+  @@map("vehicle_history_extractions")
+}
+
+/// One row per extraction attempt (consumer retry, sweeper, manual, bulk) —
+/// the audit trail behind `costUsdTotal` and the "Procesamiento" tab.
+model VehicleHistoryExtractionLog {
+  id              String   @id @default(uuid())
+  createdAt       DateTime @default(now())
+  s3Key           String
+  vin             String
+  sourceTable     String
+  sourceId        String
+  /// new_report | sweeper | manual | bulk
+  trigger         String
+  triggeredByUserId String?
+  model           String
+  promptVersion   Int
+  /// text | pdf_file
+  inputMode       String
+  inputChars      Int?
+  promptTokens    Int?
+  cachedTokens    Int?
+  completionTokens Int?
+  costUsd         Decimal? @db.Decimal(10, 6)
+  latencyMs       Int?
+  attempt         Int
+  /// ok | invalid_output | api_error | not_report | budget_exceeded | skipped
+  status          String
+  error           String?
+  openaiRequestId String?
+  truncated       Boolean @default(false)
+  rawUsage        Json?
+
+  extractionId String?
+  extraction   VehicleHistoryExtraction? @relation(fields: [extractionId], references: [id], onDelete: SetNull)
+
+  @@index([createdAt])
+  @@index([s3Key, createdAt])
+  @@map("vehicle_history_extraction_logs")
+}
+
 model VhOdometerReading {
   id       String               @id @default(uuid())
   parsedId String

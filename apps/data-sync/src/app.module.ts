@@ -39,6 +39,8 @@ import { PortalSignupNotifierService } from './identity/portal-signup-notifier.s
 import { IaaiScraperService } from './iaai/iaai-scraper.service';
 import { VehicleHistoryParseConsumer } from './vehicle-history-parse.consumer';
 import { VehicleHistoryParseSweeperService } from './vehicle-history-parse.sweeper';
+import { VehicleHistoryExtractConsumer } from './vehicle-history-extract.consumer';
+import { VehicleHistoryExtractSweeperService } from './vehicle-history-extract.sweeper';
 
 
 @Module({
@@ -84,6 +86,8 @@ import { VehicleHistoryParseSweeperService } from './vehicle-history-parse.sweep
     ProxyService,
     VehicleHistoryParseConsumer,
     VehicleHistoryParseSweeperService,
+    VehicleHistoryExtractConsumer,
+    VehicleHistoryExtractSweeperService,
   ],
 })
 export class AppModule {}

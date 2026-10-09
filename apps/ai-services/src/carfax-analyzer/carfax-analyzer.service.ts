@@ -10,7 +10,7 @@ import { PrismaService } from '@htownautos/prisma';
 import { S3Service } from '@htownautos/common';
 import { VehicleHistoryService } from '@htownautos/vehicle-history';
 import type { RequestView } from '@htownautos/vehicle-history';
-import { RabbitMQService, VEHICLE_HISTORY_PARSE_QUEUE } from '@htownautos/rabbitmq';
+import { RabbitMQService, VEHICLE_HISTORY_PARSE_QUEUE, VEHICLE_HISTORY_EXTRACT_QUEUE } from '@htownautos/rabbitmq';
 
 @Injectable()
 export class CarfaxAnalyzerService {
@@ -52,6 +52,11 @@ export class CarfaxAnalyzerService {
       await this.rabbitMQ.publish(VEHICLE_HISTORY_PARSE_QUEUE, { s3Key });
     } catch (err) {
       this.logger.warn(`Could not queue parse for ${s3Key}: ${(err as Error).message}`);
+    }
+    try {
+      await this.rabbitMQ.publish(VEHICLE_HISTORY_EXTRACT_QUEUE, { s3Key, trigger: 'new_report' });
+    } catch (err) {
+      this.logger.warn(`Could not queue extraction for ${s3Key}: ${(err as Error).message}`);
     }
     return report;
   }
@@ -472,6 +477,11 @@ ${truncatedText}`;
         await this.rabbitMQ.publish(VEHICLE_HISTORY_PARSE_QUEUE, { s3Key: rep.s3Key });
       } catch (err) {
         this.logger.warn(`Could not queue parse for ${rep.s3Key}: ${(err as Error).message}`);
+      }
+      try {
+        await this.rabbitMQ.publish(VEHICLE_HISTORY_EXTRACT_QUEUE, { s3Key: rep.s3Key, trigger: 'new_report' });
+      } catch (err) {
+        this.logger.warn(`Could not queue extraction for ${rep.s3Key}: ${(err as Error).message}`);
       }
       // PDFs (some providers) get the AI analysis the manual-upload flow uses.
       if (rep.contentType === 'application/pdf') {

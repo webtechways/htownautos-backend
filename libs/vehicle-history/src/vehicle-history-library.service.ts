@@ -2,6 +2,7 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '@htownautos/prisma';
 import { S3Service } from '@htownautos/common';
+import { VehicleHistoryExtractionService } from './vehicle-history-extraction.service';
 
 export type LibrarySource = 'carfax_reports' | 'vehicle_history_reports';
 
@@ -66,6 +67,7 @@ export class VehicleHistoryLibraryService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly s3: S3Service,
+    private readonly extractions: VehicleHistoryExtractionService,
   ) {}
 
   private buildCte() {
@@ -242,6 +244,8 @@ export class VehicleHistoryLibraryService {
       }));
     }
 
+    const { extraction, extractionLogs } = await this.extractions.getForSource(source, id);
+
     return {
       report,
       parsed: parsed
@@ -260,6 +264,8 @@ export class VehicleHistoryLibraryService {
           }
         : null,
       requests,
+      extraction,
+      extractionLogs,
     };
   }
 
@@ -300,6 +306,7 @@ export class VehicleHistoryLibraryService {
 
   private async hydrate(rows: LibraryRow[]) {
     const resolver = await this.buildRequestedByResolver(rows);
+    const extractionMap = await this.extractions.getForSources(rows.map((r) => ({ sourceTable: r.source, sourceId: r.id })));
     return rows.map((r) => ({
       source: r.source,
       id: r.id,
@@ -333,6 +340,7 @@ export class VehicleHistoryLibraryService {
             },
           }
         : null,
+      extraction: extractionMap.get(`${r.source}:${r.id}`) ?? null,
     }));
   }
 

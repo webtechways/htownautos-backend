@@ -26,3 +26,8 @@ export {
   VEHICLE_HISTORY_PARSE_QUEUE,
   type VehicleHistoryParseMessage,
 } from './vehicle-history-parse';
+
+export {
+  VEHICLE_HISTORY_EXTRACT_QUEUE,
+  type VehicleHistoryExtractMessage,
+} from './vehicle-history-extract';
