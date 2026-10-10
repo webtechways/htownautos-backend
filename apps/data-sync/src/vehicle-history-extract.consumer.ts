@@ -14,10 +14,17 @@ import {
   getExtractFallbackModel,
   validateReport,
   computeCostUsd,
+  scrapeReport,
   PROMPT_VERSION,
   type ExtractResult,
   type VehicleHistoryReportExtract,
 } from '@htownautos/vehicle-history';
+
+/** 'scrape' (default) runs the deterministic cheerio parser with no OpenAI call/cost; 'openai' keeps the old LLM extraction path. */
+const SCRAPER_MODEL_NAME = 'scraper-v1';
+function getExtractMethod(): 'scrape' | 'openai' {
+  return process.env.VH_EXTRACT_METHOD === 'openai' ? 'openai' : 'scrape';
+}
 
 const MAX_ATTEMPTS = 3;
 const BACKOFFS_MS = [2000, 8000];
@@ -83,16 +90,21 @@ export class VehicleHistoryExtractConsumer implements OnModuleInit {
       return;
     }
 
-    if (!isExtractEnabled()) {
-      await this.writeLog({ s3Key, found, trigger, msg, model: getExtractModel(), attempt: 1, status: 'skipped', error: 'VH_EXTRACT_ENABLED=false or no API key' });
-      return;
-    }
-
     let body: Buffer;
     try {
       body = await this.s3.downloadBuffer(s3Key);
     } catch (err) {
       this.logger.error(`[VhExtract] could not download ${s3Key}: ${(err as Error).message}`);
+      return;
+    }
+
+    if (getExtractMethod() === 'scrape') {
+      await this.handleScrape({ s3Key, found, trigger, msg, body });
+      return;
+    }
+
+    if (!isExtractEnabled()) {
+      await this.writeLog({ s3Key, found, trigger, msg, model: getExtractModel(), attempt: 1, status: 'skipped', error: 'VH_EXTRACT_ENABLED=false or no API key' });
       return;
     }
 
@@ -155,6 +167,70 @@ export class VehicleHistoryExtractConsumer implements OnModuleInit {
     }
 
     await this.upsertExtraction(s3Key, found, finalModel, result, costUsdThisRun);
+  }
+
+  /**
+   * Deterministic path (default, see VH_EXTRACT_METHOD): no network call, no
+   * budget check, no retries (the scraper is pure — retrying the same bytes
+   * can't change the result). PDFs are explicitly unsupported here (the
+   * scraper only understands HTML templates) and get a terminal `skipped`
+   * log so the sweeper's retry cap (see vehicle-history-extract.sweeper.ts)
+   * never re-queues them.
+   */
+  private async handleScrape(params: {
+    s3Key: string;
+    found: SourceFound;
+    trigger: string;
+    msg: VehicleHistoryExtractMessage;
+    body: Buffer;
+  }): Promise<void> {
+    const { s3Key, found, trigger, msg, body } = params;
+
+    if (found.contentType === 'application/pdf') {
+      await this.writeLog({ s3Key, found, trigger, msg, model: SCRAPER_MODEL_NAME, attempt: 1, status: 'skipped', error: 'pdf_not_supported' });
+      await this.upsertFailed(s3Key, found, SCRAPER_MODEL_NAME, 0, 'pdf_not_supported');
+      return;
+    }
+
+    const startedAt = Date.now();
+    const scraped = scrapeReport({ body, contentType: found.contentType, vin: found.vin });
+    const latencyMs = Date.now() - startedAt;
+
+    const result: ExtractResult = {
+      report: scraped.report,
+      isReport: scraped.isReport,
+      usage: { promptTokens: 0, cachedTokens: 0, completionTokens: 0 },
+      model: SCRAPER_MODEL_NAME,
+      latencyMs,
+      inputMode: 'text',
+      inputChars: body.length,
+      truncated: false,
+      requestId: null,
+    };
+
+    if (result.report) {
+      const errors = validateReport(result.report);
+      if (errors.length > 0) {
+        const error = `invalid_output: ${errors.join('; ')}`;
+        await this.writeLog({ s3Key, found, trigger, msg, model: SCRAPER_MODEL_NAME, attempt: 1, status: 'invalid_output', error, result, cost: 0 });
+        await this.upsertFailed(s3Key, found, SCRAPER_MODEL_NAME, 0, error);
+        return;
+      }
+    }
+
+    await this.writeLog({
+      s3Key,
+      found,
+      trigger,
+      msg,
+      model: SCRAPER_MODEL_NAME,
+      attempt: 1,
+      status: result.isReport ? 'ok' : 'not_report',
+      error: null,
+      result,
+      cost: 0,
+    });
+    await this.upsertExtraction(s3Key, found, SCRAPER_MODEL_NAME, result, 0);
   }
 
   /** One OpenAI call + validation + its log row. Budget is checked immediately before this call, not once per message. */

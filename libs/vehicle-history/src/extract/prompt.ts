@@ -1,9 +1,12 @@
 /**
  * Bumped whenever SYSTEM_PROMPT or EXTRACTION_SCHEMA change meaning (not for
- * typo fixes). The sweeper re-queues any extraction whose `promptVersion` is
- * below this, and the consumer skips re-work when it's already current.
+ * typo fixes), or — as of v2 — whenever the extraction *method* changes
+ * (the deterministic scraper replaces OpenAI as the default, see
+ * VH_EXTRACT_METHOD in vehicle-history-extract.consumer.ts): the sweeper
+ * re-queues any extraction whose `promptVersion` is below this, and the
+ * consumer skips re-work when it's already current.
  */
-export const PROMPT_VERSION = 1;
+export const PROMPT_VERSION = 2;
 
 /**
  * Static (never interpolated) system prompt so OpenAI can cache its tokens

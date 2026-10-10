@@ -53,6 +53,13 @@ export class VehicleHistoryExtractSweeperService {
              SELECT COUNT(*) FROM "vehicle_history_extraction_logs" l
              WHERE l."s3Key" = s."s3Key" AND l.status IN ('api_error', 'invalid_output') AND l."promptVersion" = ${PROMPT_VERSION}
            ) < 3
+           -- 'skipped' (e.g. a PDF under the scraper, which never supports PDFs) is
+           -- terminal — unlike api_error/invalid_output, retrying can't help, so it
+           -- must not count towards (or be bypassed by) the retry cap above.
+           AND NOT EXISTS (
+             SELECT 1 FROM "vehicle_history_extraction_logs" l2
+             WHERE l2."s3Key" = s."s3Key" AND l2.status = 'skipped' AND l2."promptVersion" = ${PROMPT_VERSION}
+           )
          )
       LIMIT 10
     `)) as { s3Key: string }[];

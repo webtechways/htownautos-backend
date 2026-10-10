@@ -8,4 +8,6 @@ export { computeCostUsd, DEFAULT_PRICING } from './pricing';
 export type { ModelPricing, TokenUsage } from './pricing';
 export { validateReport } from './validate';
 export { normalizeDateString, normalizeReportDates } from './normalize-dates';
+export { scrapeReport } from './scrape/index';
+export type { ScrapeInput, ScrapeResult } from './scrape/index';
 export * from './types';
