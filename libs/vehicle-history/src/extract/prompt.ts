@@ -6,7 +6,7 @@
  * re-queues any extraction whose `promptVersion` is below this, and the
  * consumer skips re-work when it's already current.
  */
-export const PROMPT_VERSION = 2;
+export const PROMPT_VERSION = 3;
 
 /**
  * Static (never interpolated) system prompt so OpenAI can cache its tokens

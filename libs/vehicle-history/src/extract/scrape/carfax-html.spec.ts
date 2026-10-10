@@ -115,6 +115,64 @@ describe('scrapeCarfaxHtml', () => {
     expect(report.owners_history[0].history_table[0].damage_type).toBeNull(); // no severity text/panel — still counts as an accident.
   });
 
+  it('reads type_of_owner from .ownership-right (a sibling of the label/purchase-year, not a descendant of it)', () => {
+    const html = `<html><body>
+      <div>carfax value$1,000 1 Service History Records No open recalls reported to CARFAX.</div>
+      <div class="owner-tab">
+        <div class="ownership-left"><div class="ownership-text">
+          <h3 class="ownership-label">Owner 1</h3>
+          <div class="purchase-year"><span>Purchased:</span> 2022</div>
+        </div></div>
+        <div class="ownership-right"><div class="owner-type"><span>Commercial Vehicle</span></div></div>
+      </div>
+      <table></table>
+    </body></html>`;
+    const report = scrapeCarfaxHtml(html);
+    expect(report.owners_history[0].type_of_owner).toBe('Commercial Vehicle');
+    expect(report.owners_history[0].purchased).toBe('2022-01-01');
+  });
+
+  it('reads the visible (aria-hidden=true) source span, not the duplicated visually-hidden one, and drops phone/URL/Title# noise', () => {
+    const html = `<html><body>
+      <div>carfax value$1,000 1 Service History Records No open recalls reported to CARFAX.</div>
+      <div class="owner-tab"><div class="ownership-text"><h3 class="ownership-label">Owner 1</h3></div></div>
+      <table>
+      <tr class="detailed-history-row detailed-history-row-main">
+        <td class="record-normal-first-column">08/31/2022</td>
+        <td class="record-odometer-reading">158</td>
+        <td class="record-source">
+          <p class="detail-record-source-line"><span class="visually-hidden do-not-print">Stockton, Georgia</span><span aria-hidden="true">Georgia</span></p>
+          <p class="detail-record-source-line"><span class="visually-hidden do-not-print">Stockton, Georgia</span><span aria-hidden="true">Motor Vehicle Dept.</span></p>
+          <p class="detail-record-source-line"><span class="visually-hidden do-not-print">Stockton, Georgia</span><span aria-hidden="true">Stockton, GA</span></p>
+          <p class="detail-record-source-line"><span class="visually-hidden do-not-print">Title Number 123</span><span class="visually-hidden do-not-print">Stockton, Georgia</span><span aria-hidden="true">Title #123</span></p>
+        </td>
+        <td class="record-icon"></td>
+        <td class="record-comments"></td>
+      </tr>
+      <tr class="detailed-history-row detailed-history-row-main">
+        <td class="record-normal-first-column">06/22/2023</td>
+        <td class="record-odometer-reading">12,599</td>
+        <td class="record-source">
+          <p class="detail-record-source-line">Quality Tire Pros</p>
+          <p class="detail-record-source-line"><span class="visually-hidden do-not-print">Chattanooga, Tennessee</span><span aria-hidden="true">Chattanooga, TN</span></p>
+          <p class="detail-record-source-line"><span class="visually-hidden do-not-print">Chattanooga, Tennessee</span><span aria-hidden="true">423-267-9715</span></p>
+          <p class="detail-record-source-line">qualitytirepros.com/</p>
+        </td>
+        <td class="record-icon"></td>
+        <td class="record-comments"></td>
+      </tr>
+      </table>
+    </body></html>`;
+    const report = scrapeCarfaxHtml(html);
+    const [row1, row2] = report.owners_history[0].history_table;
+
+    expect(row1.source).toBe('Georgia, Motor Vehicle Dept., Stockton, GA');
+    expect(row1.millage).toBe(158);
+
+    expect(row2.source).toBe('Quality Tire Pros, Chattanooga, TN');
+    expect(row2.millage).toBe(12599);
+  });
+
   it('picks the most recent *dated* title-brand event over fixed priority (salvage then rebuilt => Rebuilt Title)', () => {
     const html = `<html><body>
       <div>carfax value$1,000 1 Service History Records No open recalls reported to CARFAX.</div>

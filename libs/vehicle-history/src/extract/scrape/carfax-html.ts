@@ -33,10 +33,13 @@ export function scrapeCarfaxHtml(html: string): VehicleHistoryReportExtract {
       const label = $el.text().trim(); // "Owner N" or "Owners N-M" — use the first number either way.
       const numMatch = label.match(/(\d+)/);
       const ownerNo = numMatch ? parseInt(numMatch[1], 10) : owners.length + 1;
-      const $wrapper = $el.closest('div').parent();
-      const purchaseYear = $wrapper.find('.purchase-year').first().text().replace(/Purchased:/i, '').trim();
+      // `.owner-type` lives in `.ownership-right`, a *sibling* of `.ownership-left`
+      // (which holds the label/purchase-year) under the shared `.owner-tab` —
+      // scoping to `.ownership-left`'s parent alone misses it.
+      const $ownerTab = $el.closest('.owner-tab');
+      const purchaseYear = $ownerTab.find('.purchase-year').first().text().replace(/Purchased:/i, '').trim();
       const purchased = purchaseYear ? normalizeYearToDate(purchaseYear) : null;
-      const ownerTypeText = $wrapper.find('.owner-type').first().text().trim();
+      const ownerTypeText = $ownerTab.find('.owner-type').first().text().trim();
       currentOwner = {
         owner_no: ownerNo,
         purchased,
@@ -73,11 +76,7 @@ export function scrapeCarfaxHtml(html: string): VehicleHistoryReportExtract {
     const date = normalizeDate(dateText);
     const odoText = $el.find('td.record-odometer-reading').first().text().trim();
     const miles = parseOdometer(odoText);
-    const sourceLines = $el
-      .find('td.record-source p.detail-record-source-line')
-      .map((__, p) => $(p).text().trim())
-      .get()
-      .filter(Boolean);
+    const sourceLines = extractSourceLines($, $el);
     const commentGroups = $el
       .find('td.record-comments li.record-comments-group')
       .map((__, group) => {
@@ -94,7 +93,7 @@ export function scrapeCarfaxHtml(html: string): VehicleHistoryReportExtract {
       .filter(Boolean);
     const comment = insertConcatenatedPhraseSpaces(cleanComment(commentGroups.join('\n')));
     const state = extractStateAbbr(sourceLines.join(' '));
-    const source = sourceLines[0] ?? (state ? state : null);
+    const source = sourceLines.length > 0 ? sourceLines.join(', ') : null;
 
     // Only treat this as a damage/accident record when the comment actually
     // says so — "front brake pads replaced" (a service row) must not get a
@@ -171,6 +170,41 @@ export function scrapeCarfaxHtml(html: string): VehicleHistoryReportExtract {
  * into a Title-Case word) — the only two concatenation shapes seen in this
  * corpus.
  */
+/**
+ * Each `<p class="detail-record-source-line">` usually holds TWO spans: a
+ * `.visually-hidden` one repeating the city/state for screen readers, and
+ * the actual visible text in `[aria-hidden="true"]` — a plain `.text()` on
+ * the `<p>` concatenates both ("Signal Mountain, TennesseeTennessee").
+ * Lines also include noise we don't want in `source`: phone numbers, bare
+ * URLs, "Title #..." records, and (defensively) the "Customer Favorites"
+ * rating widget text.
+ */
+function extractSourceLines($: cheerio.CheerioAPI, $row: cheerio.Cheerio<any>): string[] {
+  const raw = $row
+    .find('td.record-source p.detail-record-source-line')
+    .map((_, p) => {
+      const $p = $(p);
+      const visible = $p.find('[aria-hidden="true"]').first();
+      const text = visible.length > 0 ? visible.text() : $p.clone().find('.visually-hidden').remove().end().text();
+      return text.replace(/\s+/g, ' ').trim();
+    })
+    .get()
+    .filter(Boolean);
+
+  const isPhoneNumber = (l: string) => /^\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}$/.test(l);
+  const isUrl = (l: string) => /^(https?:\/\/|www\.)/i.test(l) || /\.[a-z]{2,4}\/?$/i.test(l);
+  const isTitleNumber = /^title\s*#|^title number/i;
+  const isNoise = (l: string) => isPhoneNumber(l) || isUrl(l) || isTitleNumber.test(l) || /customer favorites/i.test(l);
+
+  const lines: string[] = [];
+  for (const l of raw) {
+    if (isNoise(l)) continue;
+    if (lines[lines.length - 1] === l) continue; // drop immediate duplicates (same label repeated per line).
+    lines.push(l);
+  }
+  return lines;
+}
+
 function insertConcatenatedPhraseSpaces(text: string): string {
   return text.replace(/([a-z0-9])([A-Z])/g, '$1 $2').replace(/([A-Z])([A-Z][a-z])/g, '$1 $2');
 }
