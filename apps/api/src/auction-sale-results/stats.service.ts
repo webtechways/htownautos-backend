@@ -647,6 +647,15 @@ export class StatsService {
       and.push({ saleDate: { ...(dto.saleDateFrom ? { gte: dto.saleDateFrom } : {}), ...(dto.saleDateTo ? { lte: dto.saleDateTo } : {}) } });
     }
 
+    // Mirrors rule 2 of deriveRunOutcomes(): sold = approved || reserveMet. Rule 1 (later rerun of the same lot) is not replicated in SQL.
+    const sc = dto.saleConfirmed;
+    if (sc && sc.length === 1) {
+      const confirmed: Where = { OR: [{ approved: true }, { reserveMet: true }] };
+      and.push(sc[0] === 'confirmed' ? confirmed : {
+        AND: [{ OR: [{ approved: false }, { approved: null }] }, { OR: [{ reserveMet: false }, { reserveMet: null }] }],
+      });
+    }
+
     // titleCategory → raw saleTitleType codes (base + learned overrides).
     // El bloque "Vehicle Title Type" filtra por titleCategory pero sus cuentas
     // salen de los buckets de saleTitleType, asi que omitir uno tiene que omitir

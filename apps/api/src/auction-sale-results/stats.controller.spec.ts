@@ -1,4 +1,7 @@
+import { plainToInstance } from 'class-transformer';
+import { validate } from 'class-validator';
 import { StatsController } from './stats.controller';
+import { QueryStatsDto } from './dto/query-stats.dto';
 
 function makeStatsMock() {
   return {
@@ -85,5 +88,20 @@ describe('StatsController — price masking (auction-stats:read)', () => {
   it('breakdown: logged-in caller keeps the real medianaPrecio', async () => {
     const result = await controller.breakdown({} as any, 'year', undefined, { user: { id: 'u1' } } as any);
     expect(result[0]).toMatchObject({ medianaPrecio: 5000 });
+  });
+});
+
+describe('QueryStatsDto — saleConfirmed', () => {
+  it('accepts "confirmed,unconfirmed" as a CSV string', async () => {
+    const dto = plainToInstance(QueryStatsDto, { saleConfirmed: 'confirmed,unconfirmed' });
+    expect(dto.saleConfirmed).toEqual(['confirmed', 'unconfirmed']);
+    const errors = await validate(dto);
+    expect(errors).toHaveLength(0);
+  });
+
+  it('rejects an invalid value', async () => {
+    const dto = plainToInstance(QueryStatsDto, { saleConfirmed: 'foo' });
+    const errors = await validate(dto);
+    expect(errors.some((e) => e.property === 'saleConfirmed')).toBe(true);
   });
 });

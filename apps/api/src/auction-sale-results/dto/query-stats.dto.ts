@@ -35,6 +35,14 @@ export class QueryStatsDto {
   @IsOptional() @csv() @IsArray() @IsIn(['copart', 'iaai'], { each: true })
   source?: ('copart' | 'iaai')[];
 
+  @ApiPropertyOptional({
+    description:
+      'Sale confirmation, CSV: confirmed (approved or reserve met), unconfirmed (everything else). None or both = no filter.',
+    example: 'confirmed',
+  })
+  @IsOptional() @csv() @IsArray() @IsIn(['confirmed', 'unconfirmed'], { each: true })
+  saleConfirmed?: ('confirmed' | 'unconfirmed')[];
+
   @ApiPropertyOptional({ default: 1 })
   @IsOptional() @Type(() => Number) @IsInt() @Min(1)
   page?: number = 1;
