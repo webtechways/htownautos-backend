@@ -5,6 +5,9 @@ import { Public, OptionalAuth, TenantOptional, RequirePermissions, RequireApiSco
 import { BREAKDOWN_FIELDS, BreakdownField, StatsService } from './stats.service';
 import { QueryStatsDto } from './dto/query-stats.dto';
 
+/** Sort fields derived from a price column — anonymous callers get `saleDate` instead. */
+const PRICE_SORT_FIELDS = new Set(['finalBid', 'askingPrice']);
+
 const STATS_READ_PERMISSION = 'auction-stats:read';
 /** API-key scope (Settings → Integrations): server-to-server callers get unmasked data. */
 const STATS_READ_SCOPE = 'auction-stats:read';
@@ -45,7 +48,7 @@ export class StatsController {
   @ApiOperation({ summary: 'Search stored sale results (Stats Listing)' })
   @ApiResponse({ status: 200, description: 'Paginated results + optional aggregations' })
   async search(@Query() dto: QueryStatsDto, @Req() req: any) {
-    const result = await this.stats.search(dto);
+    const result = await this.stats.search(sanitizeForViewer(dto, req));
     if (canSeePrices(req)) return result;
     return { ...result, data: result.data.map(maskFinalBidAndRuns) };
   }
@@ -110,8 +113,8 @@ export class StatsController {
   @RequireApiScopes(STATS_READ_SCOPE)
   @ApiOperation({ summary: 'Facet counts for the Stats Listing sidebar' })
   @ApiResponse({ status: 200, description: 'Aggregations' })
-  getFilters(@Query() dto: QueryStatsDto) {
-    return this.stats.getFilters(dto);
+  getFilters(@Query() dto: QueryStatsDto, @Req() req: any) {
+    return this.stats.getFilters(sanitizeForViewer(dto, req));
   }
 
   /**
@@ -129,7 +132,7 @@ export class StatsController {
   @ApiOperation({ summary: 'Price distribution (p25/median/p75) for the current filters' })
   @ApiResponse({ status: 200, description: 'Percentiles + sample size' })
   async priceStats(@Query() dto: QueryStatsDto, @Req() req: any) {
-    const result = await this.stats.priceStats(dto);
+    const result = await this.stats.priceStats(sanitizeForViewer(dto, req));
     if (canSeePrices(req)) return result;
     return { ...result, precio: null, priceHidden: true };
   }
@@ -165,7 +168,7 @@ export class StatsController {
     }
     const n = Number(limite);
     const groups = await this.stats.breakdown(
-      dto,
+      sanitizeForViewer(dto, req),
       por as BreakdownField,
       Number.isFinite(n) ? Math.min(Math.max(Math.trunc(n), 1), 100) : 25,
     );
@@ -184,6 +187,25 @@ export class StatsController {
  */
 function canSeePrices(req: any): boolean {
   return !!req.user;
+}
+
+/**
+ * Strips the price-range filters (`finalBidMin`/`finalBidMax`) and forces
+ * a non-price `sortBy` for anonymous callers, BEFORE the query reaches the
+ * service — otherwise an anonymous caller could learn the exact price via
+ * binary search on `meta.total` even though the response rows are masked
+ * (the "oracle" leak). Mutates a shallow copy; the original `dto` instance
+ * (from `@Query()`) is left untouched.
+ */
+function sanitizeForViewer(dto: QueryStatsDto, req: any): QueryStatsDto {
+  if (canSeePrices(req)) return dto;
+  const sanitized: QueryStatsDto = { ...dto };
+  delete sanitized.finalBidMin;
+  delete sanitized.finalBidMax;
+  if (sanitized.sortBy && PRICE_SORT_FIELDS.has(sanitized.sortBy)) {
+    sanitized.sortBy = 'saleDate';
+  }
+  return sanitized;
 }
 
 /**

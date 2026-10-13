@@ -15,6 +15,18 @@ const csv = () =>
             .filter(Boolean),
   );
 
+/** Whitelisted sort fields — mirrors the `enum` on `sortBy`'s @ApiPropertyOptional below. */
+export const SALE_SORT_FIELDS = [
+  'saleDate',
+  'finalBid',
+  'askingPrice',
+  'year',
+  'make',
+  'odometer',
+  'receivedAt',
+  'createdAt',
+] as const;
+
 /** "true"/"false"/bool → boolean. */
 const bool = () =>
   Transform(({ value }) =>
@@ -56,11 +68,11 @@ export class QueryStatsDto {
     enum: ['saleDate', 'finalBid', 'askingPrice', 'year', 'make', 'odometer', 'receivedAt', 'createdAt'],
     default: 'saleDate',
   })
-  @IsOptional() @IsString()
+  @IsOptional() @IsString() @IsIn(SALE_SORT_FIELDS)
   sortBy?: string = 'saleDate';
 
   @ApiPropertyOptional({ enum: ['asc', 'desc'], default: 'desc' })
-  @IsOptional() @IsString()
+  @IsOptional() @IsString() @IsIn(['asc', 'desc'])
   sortOrder?: 'asc' | 'desc' = 'desc';
 
   @ApiPropertyOptional({ description: 'Full-text search (VIN, make, model, lot)' })

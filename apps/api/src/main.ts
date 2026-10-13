@@ -2,6 +2,7 @@ import 'dotenv/config';
 // Enable JSON.stringify for BigInt (Prisma returns BigInt for Int8 columns)
 (BigInt.prototype as any).toJSON = function () { return this.toString(); };
 import { NestFactory } from '@nestjs/core';
+import { NestExpressApplication } from '@nestjs/platform-express';
 import { BadRequestException, ValidationPipe, Logger } from '@nestjs/common';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import helmet from 'helmet';
@@ -20,7 +21,7 @@ async function bootstrap() {
     'https://www.htownautos.com',
     'https://web.htownautos.com',
   ];
-  const app = await NestFactory.create(AppModule, {
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, {
     logger: ['error', 'warn', 'log', 'debug'], // Logging completo para auditoría
     cors: {
       origin: allowedOrigins,
@@ -96,6 +97,13 @@ async function bootstrap() {
     }
     next();
   });
+
+  // ===========================================
+  // TRUST PROXY — req.ip = the peer Traefik saw, not the Traefik container
+  // IP, so AppThrottlerGuard can bucket by real caller instead of lumping
+  // everyone into one shared bucket (that was the DoS).
+  // ===========================================
+  app.set('trust proxy', 'loopback, linklocal, uniquelocal');
 
   // ===========================================
   // GLOBAL PREFIX
@@ -194,22 +202,27 @@ async function bootstrap() {
     // .addBearerAuth()
     .build();
 
-  const document = SwaggerModule.createDocument(app, config);
-  SwaggerModule.setup('api/docs', app, document, {
-    customSiteTitle: 'HTown Autos API - RouteOne/DealerTrack Certified',
-    customfavIcon: 'https://nestjs.com/img/logo-small.svg',
-    customCss: `
-      .swagger-ui .topbar { display: none }
-      .swagger-ui .info .title { color: #2c5f2d; }
-      .swagger-ui .scheme-container { background: #e8f5e9; }
-    `,
-    swaggerOptions: {
-      persistAuthorization: true,
-      displayRequestDuration: true,
-      filter: true,
-      tryItOutEnabled: true,
-    },
-  });
+  // Swagger exposes the full API surface (incl. internal/ingest routes) —
+  // off by default in production unless explicitly re-enabled.
+  const swaggerEnabled = process.env.NODE_ENV !== 'production' || process.env.SWAGGER_ENABLED === 'true';
+  if (swaggerEnabled) {
+    const document = SwaggerModule.createDocument(app, config);
+    SwaggerModule.setup('api/docs', app, document, {
+      customSiteTitle: 'HTown Autos API - RouteOne/DealerTrack Certified',
+      customfavIcon: 'https://nestjs.com/img/logo-small.svg',
+      customCss: `
+        .swagger-ui .topbar { display: none }
+        .swagger-ui .info .title { color: #2c5f2d; }
+        .swagger-ui .scheme-container { background: #e8f5e9; }
+      `,
+      swaggerOptions: {
+        persistAuthorization: true,
+        displayRequestDuration: true,
+        filter: true,
+        tryItOutEnabled: true,
+      },
+    });
+  }
 
   // ===========================================
   // WEBSOCKET ADAPTER - Redis for scalability
@@ -228,7 +241,9 @@ async function bootstrap() {
   // LOGGING
   // ===========================================
   logger.log(`🚀 Application is running on: http://localhost:${port}`);
-  logger.log(`📚 Swagger documentation: http://localhost:${port}/api/docs`);
+  if (swaggerEnabled) {
+    logger.log(`📚 Swagger documentation: http://localhost:${port}/api/docs`);
+  }
   logger.log(`🔌 WebSocket: Socket.io with Redis adapter enabled`);
   logger.log(`🔒 Security: Helmet enabled, CORS configured, Rate limiting active`);
   logger.log(`✅ Compliance: RouteOne, DealerTrack, GLBA, OFAC`);
