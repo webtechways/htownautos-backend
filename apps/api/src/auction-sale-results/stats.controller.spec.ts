@@ -38,6 +38,24 @@ describe('StatsController — price masking (auction-stats:read)', () => {
     expect(result.data[0].priceHidden).toBeUndefined();
   });
 
+  it('search: anonymous caller also gets runs[].price masked when withRuns was used', async () => {
+    stats.search.mockResolvedValueOnce({
+      data: [
+        {
+          id: '1',
+          lot: '123',
+          finalBid: 5000,
+          outcome: 'sold',
+          runCount: 2,
+          runs: [{ id: '1', auction: 'copart', lot: '123', saleDate: 20261001, price: 5000, outcome: 'sold' }],
+        },
+      ],
+      meta: { page: 1, limit: 25, total: 1, totalPages: 1, hasNextPage: false, hasPreviousPage: false },
+    });
+    const result = await controller.search({} as any, { user: undefined } as any);
+    expect(result.data[0].runs[0]).toMatchObject({ price: null, priceHidden: true });
+  });
+
   it('findByLot: anonymous gets finalBid masked', async () => {
     const result = await controller.findByLot('123', undefined, { user: undefined } as any);
     expect(result).toMatchObject({ finalBid: null, priceHidden: true });

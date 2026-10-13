@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '@htownautos/prisma';
 import {
@@ -62,6 +62,7 @@ export interface SitemapPage {
 
 @Injectable()
 export class StatsService {
+  private readonly logger = new Logger(StatsService.name);
   private readonly sitemapCache = new Map<string, { at: number; value: SitemapPage }>();
 
   constructor(
@@ -138,8 +139,12 @@ export class StatsService {
     ]);
 
     const totalPages = Math.ceil(total / limit) || 1;
+    let data = rows.map((r: any) => this.serialize(r, dto.source));
+    if (dto.withRuns) {
+      data = await this.withRunHistory(data);
+    }
     const result: any = {
-      data: rows.map((r: any) => this.serialize(r, dto.source)),
+      data,
       meta: {
         page,
         limit,
@@ -153,6 +158,81 @@ export class StatsService {
       result.aggregations = await this.getFilters(dto);
     }
     return result;
+  }
+
+  /**
+   * Enriquece una pagina de filas (ya serializadas) con el historial de
+   * corridas de su VIN — ver CONTRATO en el plan "Sold Lots grouping" (T2).
+   * El agrupamiento es SOLO dentro de la pagina: no es un dedup real contra
+   * las ~421k filas (requeriria un anti-join costoso); dos corridas del
+   * mismo VIN en paginas distintas aparecen cada una con su propio badge.
+   */
+  private async withRunHistory(rows: any[]): Promise<any[]> {
+    try {
+      const vins = [...new Set(rows.map((r) => r.vin).filter((v): v is string => !!v))];
+      if (vins.length === 0) {
+        return rows.map((r) => {
+          const [withOutcome] = deriveRunOutcomes([{ ...r, lot: r.id }]);
+          return { ...r, outcome: withOutcome.outcome, runCount: 1, runs: null };
+        });
+      }
+
+      const all = await this.prisma.saleResultAll.findMany({
+        where: { vin: { in: vins } },
+        orderBy: [{ saleDate: 'asc' }, { id: 'asc' }],
+        take: 2000,
+      });
+      const serializedAll = all.map((r: any) => this.serialize(r, ['copart', 'iaai']));
+
+      const byVin = new Map<string, any[]>();
+      for (const row of serializedAll) {
+        const k = row.vin as string;
+        if (!byVin.has(k)) byVin.set(k, []);
+        byVin.get(k)!.push(row);
+      }
+
+      // id -> runs/outcome/runCount computed from its VIN group.
+      const byId = new Map<string, { outcome: string; runCount: number; runs: any[] | null }>();
+      for (const [, groupRows] of byVin) {
+        // Disambiguate Copart lot vs IAAI stock number so they're never
+        // treated as re-runs of "the same lot" by deriveRunOutcomes.
+        const forOutcome = groupRows.map((r) => ({ ...r, lot: `${r.auction}:${r.lot}` }));
+        const withOutcomes = deriveRunOutcomes(forOutcome).map((r, i) => ({
+          ...r,
+          lot: groupRows[i].lot, // restore the original lot
+        }));
+        const last20 = withOutcomes.slice(-20);
+        const runsDesc = [...last20].reverse().map((r) => ({
+          id: r.id,
+          auction: r.auction,
+          lot: r.lot,
+          saleDate: r.saleDate,
+          price: r.price,
+          outcome: r.outcome,
+        }));
+        const runCount = withOutcomes.length;
+        for (const r of withOutcomes) {
+          byId.set(r.id, {
+            outcome: r.outcome,
+            runCount,
+            runs: runCount >= 2 ? runsDesc : null,
+          });
+        }
+      }
+
+      return rows.map((r) => {
+        if (!r.vin) {
+          const [withOutcome] = deriveRunOutcomes([{ ...r, lot: r.id }]);
+          return { ...r, outcome: withOutcome.outcome, runCount: 1, runs: null };
+        }
+        const info = byId.get(r.id);
+        if (!info) return { ...r, outcome: 'unknown', runCount: 1, runs: null };
+        return { ...r, outcome: info.outcome, runCount: info.runCount, runs: info.runs };
+      });
+    } catch (err) {
+      this.logger.warn(`withRunHistory failed, returning rows without run data: ${(err as Error)?.message}`);
+      return rows;
+    }
   }
 
   /** Facet counts in the same shape the auction sidebar consumes. */

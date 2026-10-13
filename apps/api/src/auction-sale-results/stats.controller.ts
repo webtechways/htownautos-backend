@@ -47,7 +47,7 @@ export class StatsController {
   async search(@Query() dto: QueryStatsDto, @Req() req: any) {
     const result = await this.stats.search(dto);
     if (canSeePrices(req)) return result;
-    return { ...result, data: result.data.map(maskFinalBid) };
+    return { ...result, data: result.data.map(maskFinalBidAndRuns) };
   }
 
   @Get('sitemap')
@@ -194,6 +194,16 @@ function canSeePrices(req: any): boolean {
  */
 function maskFinalBid(row: any): any {
   return { ...row, finalBid: null, highBidAtSync: null, askingPrice: null, buyerNo: null, buyerState: null, buyerCountry: null, priceHidden: true };
+}
+
+/**
+ * Same as `maskFinalBid`, plus hides the price on every entry of `runs[]`
+ * (added by `withRuns=true` — see CONTRACT in the Sold Lots grouping plan).
+ */
+function maskFinalBidAndRuns(row: any): any {
+  const masked = maskFinalBid(row);
+  if (!Array.isArray(masked.runs)) return masked;
+  return { ...masked, runs: masked.runs.map((r: any) => ({ ...r, price: null, priceHidden: true })) };
 }
 
 // Excludes I, O, Q (never used in real VINs) per the standard VIN charset.

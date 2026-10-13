@@ -2295,6 +2295,7 @@ model AuctionSaleResult {
   @@index([yardNumber])
   @@index([saleTitleType])
   @@index([sellerCategory])
+  @@index([vin, saleDate])
   @@map("auction_sale_results")
 }
 
@@ -2582,6 +2583,7 @@ model IaaiSaleResult {
   @@index([yardNumber])
   @@index([saleTitleType])
   @@index([sellerCategory])
+  @@index([vin, saleDate])
   @@map("iaai_sale_results")
 }
 

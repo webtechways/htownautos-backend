@@ -131,4 +131,8 @@ export class QueryStatsDto {
   @ApiPropertyOptional({ description: 'Include facet aggregations in the response' })
   @IsOptional() @bool() @IsBoolean()
   includeAggregations?: boolean;
+
+  @ApiPropertyOptional({ description: 'Enrich each row with VIN run history (outcome, runCount, runs)' })
+  @IsOptional() @bool() @IsBoolean()
+  withRuns?: boolean;
 }
