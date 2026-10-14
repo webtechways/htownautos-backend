@@ -40,7 +40,7 @@ export { TenantOptional } from './decorators/tenant-optional.decorator';
 export { CurrentBuyer } from './decorators/current-buyer.decorator';
 export { CustomerAuth } from './decorators/customer-auth.decorator';
 export { AllowCustomer, ALLOW_CUSTOMER_KEY } from './decorators/allow-customer.decorator';
-export { RequireRoles, ROLES_KEY, ADMIN_ROLES, OWNER_ONLY } from './decorators/roles.decorator';
+export { RequireRoles, ROLES_KEY, ADMIN_ROLES, OWNER_ONLY, AllowApiKey, ALLOW_API_KEY_KEY } from './decorators/roles.decorator';
 export { RequirePermissions, PERMISSIONS_KEY } from './decorators/permissions.decorator';
 export { RequireApiScopes, API_SCOPES_KEY } from './decorators/api-scopes.decorator';
 

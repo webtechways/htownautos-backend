@@ -1,6 +1,6 @@
 import { Body, Controller, Get, HttpCode, HttpStatus, Param, ParseUUIDPipe, Patch, Post, Query, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
-import { ADMIN_ROLES, CurrentTenant, CurrentUser, RequireApiScopes, RequireRoles, RolesGuard, type AuthenticatedUser } from '@htownautos/auth';
+import { ADMIN_ROLES, AllowApiKey, CurrentTenant, CurrentUser, RequireApiScopes, RequireRoles, RolesGuard, type AuthenticatedUser } from '@htownautos/auth';
 import { InboxService } from './inbox.service';
 import { ConversationListQueryDto, MessagePageQueryDto, SendMessageDto, StartConversationDto, UpdateConversationDto } from './dto';
 
@@ -41,6 +41,7 @@ export class InboxController {
   @Post('twilio/sync-webhooks')
   @UseGuards(RolesGuard)
   @RequireRoles(...ADMIN_ROLES)
+  @AllowApiKey()
   @RequireApiScopes('inbox:write')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: "Point every tenant Twilio number's SMS URL + status callback at our webhook" })

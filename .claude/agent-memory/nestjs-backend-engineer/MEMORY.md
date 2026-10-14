@@ -18,3 +18,6 @@
 - [Identity sync B2](identity-sync-b2.md) — CRM→Clerk push: ensureUserForBuyer/syncUserOnBuyerRemoved, identity.clerk.push queue, data-sync consumer, sweep, Clerk SDK call shapes
 - [Identity sync B3](identity-sync-b3.md) — Clerk→CRM webhooks: clerk_webhook_events idempotent store, ClerkEventsConsumer, User.email NOT NULL gap for SMS-only signup, STAFF-ban safety fix in B2's push consumer
 - [Identity sync B5](identity-sync-b5.md) — backfill/reprocess scripts, PrismaService-outside-DI pattern, synthetic-email-never-pushed-to-Clerk guard, placeholder masking in BuyerEntity/portal mapper
+- [Stats derived price masking](stats-derived-price-masking.md) — new StatsController routes must null derived price fields too, not just source columns like finalBid
+- [Title category 4th bucket](title-category-4th-bucket.md) — added 'rebuilt'; hardcoded categoryCounts seeds in 3 services + ai-chat enum were the hidden consumers; @Public() works fine under a local @UseGuards(ClerkJwtGuard)
+- [AllowApiKey RolesGuard bypass](allow-api-key-roles-bypass.md) — opt-in decorator lets a scoped API key pass @RequireRoles routes safely; global-guard DI verification without a reachable DB

@@ -2,6 +2,7 @@ import { Body, Controller, Get, Patch, UseGuards } from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import {
   ADMIN_ROLES,
+  AllowApiKey,
   CurrentTenant,
   CurrentUser,
   RequireApiScopes,
@@ -27,6 +28,7 @@ export class SocialSettingsController {
   @Patch()
   @UseGuards(RolesGuard)
   @RequireRoles(...ADMIN_ROLES)
+  @AllowApiKey()
   @RequireApiScopes('social:write')
   @ApiOperation({ summary: 'Update the tenant Social Suite settings (admin only)' })
   update(

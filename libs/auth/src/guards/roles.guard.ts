@@ -7,7 +7,7 @@ import {
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { PrismaService } from '@htownautos/prisma';
-import { ROLES_KEY } from '../decorators/roles.decorator';
+import { ROLES_KEY, ALLOW_API_KEY_KEY } from '../decorators/roles.decorator';
 
 @Injectable()
 export class RolesGuard implements CanActivate {
@@ -37,6 +37,21 @@ export class RolesGuard implements CanActivate {
 
     if (!tenantId) {
       throw new ForbiddenException('Tenant context required (X-Tenant-ID header missing)');
+    }
+
+    // API key caller (set by ApiKeyGuard): no TenantUser/role exists for
+    // "api-key:<id>", so only let it through on routes that explicitly opt in
+    // via @AllowApiKey() — scope + tenant are already enforced upstream (see
+    // the decorator's doc comment).
+    if (request.apiKey) {
+      const allowApiKey = this.reflector.getAllAndOverride<boolean>(ALLOW_API_KEY_KEY, [
+        context.getHandler(),
+        context.getClass(),
+      ]);
+      if (allowApiKey) {
+        return true;
+      }
+      throw new ForbiddenException('This route requires a staff login, not an API key');
     }
 
     // Fetch TenantUser with Role
