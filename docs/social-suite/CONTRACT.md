@@ -282,22 +282,6 @@ Existing names are kept: `FACEBOOK_APP_ID/SECRET`, `INSTAGRAM_APP_ID/SECRET`,
 disable that platform with a clear 400 ("X no está configurado"), never crash.
 Add every name to `.env.example` with a one-line comment.
 
-`SOCIAL_OAUTH_REDIRECT_ALLOWLIST` (optional, CSV of origins, e.g.
-`https://preciotope.com`): `redirectUri` passed to `GET /social-accounts/oauth-url`,
-`POST /social-accounts/connect`, and `POST /social-accounts/connect/mastodon/start`
-must resolve to either `FRONTEND_URL`'s origin or one of these — anything else is a
-400. Lets a trusted tenant site (e.g. PrecioTope) run its own OAuth connect flow
-without routing through the CRM frontend.
-
-A scoped API key may call a small set of otherwise `@RequireRoles(ADMIN_ROLES)`
-routes — `POST /social/posts/:id/approve|reject`, `POST
-/social-accounts/connect/whatsapp/manual`, `POST /inbox/twilio/sync-webhooks`,
-`PATCH /social/settings` — when the route is explicitly marked `@AllowApiKey()`.
-It still needs the route's normal `@RequireApiScopes` write scope and only ever
-acts on its own tenant (both already enforced by `ApiKeyGuard`); the human/Clerk
-path (TenantUser + role) is unchanged. `approvedById`/`createdById` end up `null`
-when an API key is the actor (those columns are nullable).
-
 ## 6. Ownership (who may edit what)
 
 Backend (`htownautos-backend`):

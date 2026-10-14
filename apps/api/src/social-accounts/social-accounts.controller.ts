@@ -15,7 +15,6 @@ import {
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
 import {
   ADMIN_ROLES,
-  AllowApiKey,
   CurrentTenant,
   CurrentUser,
   RequireApiScopes,
@@ -108,7 +107,6 @@ export class SocialAccountsController {
   @Post('connect/whatsapp/manual')
   @UseGuards(RolesGuard)
   @RequireRoles(...ADMIN_ROLES)
-  @AllowApiKey()
   @RequireApiScopes('social-accounts:write')
   @ApiOperation({ summary: 'Admin-only fallback: connect WhatsApp with a manually issued token' })
   connectWhatsAppManual(@CurrentTenant() tenantId: string, @Body() dto: WhatsAppManualConnectDto) {

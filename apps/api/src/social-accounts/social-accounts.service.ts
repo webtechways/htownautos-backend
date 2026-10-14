@@ -88,38 +88,6 @@ export class SocialAccountsService {
     private readonly tokenService: SocialTokenService,
   ) {}
 
-  // ─── OAuth redirect allowlist ───────────────────────────────────────────
-  // `redirectUri` is caller-supplied (any tenant/app can ask for any OAuth URL),
-  // so it must resolve to either the CRM's own frontend or an origin explicitly
-  // added to SOCIAL_OAUTH_REDIRECT_ALLOWLIST (e.g. a trusted tenant site like
-  // PrecioTope). Anything else is a 400 — never silently redirect elsewhere.
-
-  private allowedRedirectOrigins(): Set<string> {
-    const origins = new Set<string>();
-    for (const raw of [process.env.FRONTEND_URL, ...(process.env.SOCIAL_OAUTH_REDIRECT_ALLOWLIST ?? '').split(',')]) {
-      const trimmed = raw?.trim();
-      if (!trimmed) continue;
-      try {
-        origins.add(new URL(trimmed).origin);
-      } catch {
-        // ignore malformed env entries
-      }
-    }
-    return origins;
-  }
-
-  private assertRedirectUriAllowed(redirectUri: string): void {
-    let origin: string;
-    try {
-      origin = new URL(redirectUri).origin;
-    } catch {
-      throw new BadRequestException('redirectUri invalido');
-    }
-    if (!this.allowedRedirectOrigins().has(origin)) {
-      throw new BadRequestException('redirectUri no esta en la lista blanca (SOCIAL_OAUTH_REDIRECT_ALLOWLIST)');
-    }
-  }
-
   // ─── OAuth URL ───────────────────────────────────────────────────────────
 
   async getOAuthUrl(
@@ -129,7 +97,6 @@ export class SocialAccountsService {
     redirectUri: string,
     accountType?: AccountType,
   ): Promise<{ url: string }> {
-    this.assertRedirectUriAllowed(redirectUri);
     const state = signOAuthState({ platform, tenantId, userId, accountType });
 
     switch (platform) {
@@ -185,7 +152,6 @@ export class SocialAccountsService {
   }
 
   async mastodonStart(tenantId: string, userId: string, dto: MastodonStartDto): Promise<{ url: string }> {
-    this.assertRedirectUriAllowed(dto.redirectUri);
     const { clientId, clientSecret } = await registerMastodonApp(dto.instance, dto.redirectUri);
     const state = signOAuthState({ platform: 'mastodon', tenantId, userId, instance: dto.instance });
     await this.stashFlowData(
@@ -198,7 +164,6 @@ export class SocialAccountsService {
   // ─── OAuth code exchange ────────────────────────────────────────────────
 
   async connect(tenantId: string, userId: string, dto: ConnectSocialAccountDto): Promise<SocialAccountView[]> {
-    this.assertRedirectUriAllowed(dto.redirectUri);
     const statePayload = this.verifyState(dto.state, tenantId, userId);
     const platform = statePayload.platform;
 

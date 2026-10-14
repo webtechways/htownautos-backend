@@ -1,6 +1,6 @@
 import { Body, Controller, Delete, Get, Param, ParseUUIDPipe, Patch, Post, Query, UseGuards } from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
-import { ADMIN_ROLES, AllowApiKey, CurrentTenant, CurrentUser, RequireApiScopes, RequireRoles, RolesGuard, type AuthenticatedUser } from '@htownautos/auth';
+import { ADMIN_ROLES, CurrentTenant, CurrentUser, RequireApiScopes, RequireRoles, RolesGuard, type AuthenticatedUser } from '@htownautos/auth';
 import { CreatePostDto, MarkPublishedDto, PostListQueryDto, RejectDto, RescheduleDto, UpdatePostDto } from './dto';
 import { SocialPostsService } from './posts.service';
 
@@ -75,7 +75,6 @@ export class SocialPostsController {
   @Post(':id/approve')
   @UseGuards(RolesGuard)
   @RequireRoles(...ADMIN_ROLES)
-  @AllowApiKey()
   @RequireApiScopes('social:write')
   @ApiOperation({ summary: 'Approve a pending post (admin only) — computes slots and publishes anything already due' })
   approve(@CurrentTenant() tenantId: string, @CurrentUser() user: AuthenticatedUser, @Param('id', ParseUUIDPipe) id: string) {
@@ -85,7 +84,6 @@ export class SocialPostsController {
   @Post(':id/reject')
   @UseGuards(RolesGuard)
   @RequireRoles(...ADMIN_ROLES)
-  @AllowApiKey()
   @RequireApiScopes('social:write')
   @ApiOperation({ summary: 'Reject a pending post back to draft (admin only)' })
   reject(@CurrentTenant() tenantId: string, @CurrentUser() user: AuthenticatedUser, @Param('id', ParseUUIDPipe) id: string, @Body() dto: RejectDto) {
